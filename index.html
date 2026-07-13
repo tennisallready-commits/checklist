@@ -176,9 +176,22 @@
                 <div class="form-group">
                     <label for="task-recurring">Recorrência</label>
                     <select id="task-recurring" required>
-                        <option value="true">Diária (Reinicia todo dia)</option>
-                        <option value="false">Única (Acumula para o próximo dia se não feita)</option>
+                        <option value="daily">Diária (Todo dia)</option>
+                        <option value="once">Única (Apenas na data)</option>
+                        <option value="repeat">Repetir (Dias específicos)</option>
                     </select>
+                </div>
+                <div class="form-group repeat-days-group" id="repeat-days-group" style="display: none;">
+                    <label>Dias da semana</label>
+                    <div class="repeat-days-selector">
+                        <button type="button" class="day-toggle" data-day="0">D</button>
+                        <button type="button" class="day-toggle" data-day="1">S</button>
+                        <button type="button" class="day-toggle" data-day="2">T</button>
+                        <button type="button" class="day-toggle" data-day="3">Q</button>
+                        <button type="button" class="day-toggle" data-day="4">Q</button>
+                        <button type="button" class="day-toggle" data-day="5">S</button>
+                        <button type="button" class="day-toggle" data-day="6">S</button>
+                    </div>
                 </div>
                 <div class="form-group" style="margin-top: 16px; margin-bottom: 24px;">
                     <label for="task-date">Data da Tarefa</label>
@@ -275,6 +288,48 @@
                     <!-- Javascript will inject days buttons here -->
                 </div>
             </div>
+        </div>
+    </div>
+    <!-- Modal: Edit Task -->
+    <div id="modal-edit-task" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Editar Tarefa</h3>
+                <button id="btn-close-edit-modal" class="icon-button" style="padding: 6px;"><i data-lucide="x"></i></button>
+            </div>
+            <form id="form-edit-task">
+                <input type="hidden" id="edit-task-id">
+                <div class="form-group">
+                    <label for="edit-task-title">Descrição</label>
+                    <input type="text" id="edit-task-title" required autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label for="edit-task-recurring">Recorrência</label>
+                    <select id="edit-task-recurring" required>
+                        <option value="daily">Diária (Todo dia)</option>
+                        <option value="once">Única (Apenas na data)</option>
+                        <option value="repeat">Repetir (Dias específicos)</option>
+                    </select>
+                </div>
+                <div class="form-group" id="edit-repeat-days-group" style="display: none;">
+                    <label>Dias da semana</label>
+                    <div class="repeat-days-selector" id="edit-repeat-days-selector">
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="0">D</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="1">S</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="2">T</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="3">Q</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="4">Q</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="5">S</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="6">S</button>
+                    </div>
+                </div>
+                <div class="form-group" style="margin-top: 16px; margin-bottom: 24px;">
+                    <label for="edit-task-date">Data da Tarefa</label>
+                    <input type="date" id="edit-task-date" required>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">Salvar Alterações</button>
+            </form>
         </div>
     </div>
 

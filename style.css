@@ -1349,6 +1349,48 @@ body.theme-girly .auth-container input[type="email"]:focus {
     background: rgba(219, 39, 119, 0.04) !important;
 }
 
+/* Repeat Days Selector */
+.repeat-days-selector {
+    display: flex;
+    gap: 6px;
+    justify-content: space-between;
+}
+
+.day-toggle {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 1.5px solid var(--border-color);
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.day-toggle:active {
+    transform: scale(0.9);
+}
+
+.day-toggle.active {
+    background: var(--primary-gradient);
+    color: #ffffff;
+    border-color: transparent;
+    box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+}
+
+body.theme-light .day-toggle.active {
+    box-shadow: 0 2px 8px rgba(29, 78, 216, 0.3);
+}
+
+body.theme-girly .day-toggle.active {
+    box-shadow: 0 2px 8px rgba(219, 39, 119, 0.3);
+}
+
 /* Swipe to Reveal Action Panel (iOS/WhatsApp style) */
 .task-item {
     position: relative;

@@ -272,6 +272,23 @@ function setupEventListeners() {
     btnCloseAddModal.addEventListener("click", () => closeModal(modalAddTask));
 
     // Form Add Task Submit
+    // Toggle repeat days visibility
+    selectTaskRecurring.addEventListener("change", () => {
+        const repeatGroup = document.getElementById("repeat-days-group");
+        if (selectTaskRecurring.value === "repeat") {
+            repeatGroup.style.display = "block";
+        } else {
+            repeatGroup.style.display = "none";
+        }
+    });
+
+    // Day toggle buttons
+    document.querySelectorAll(".day-toggle").forEach(btn => {
+        btn.addEventListener("click", () => {
+            btn.classList.toggle("active");
+        });
+    });
+
     formAddTask.addEventListener("submit", async (e) => {
         e.preventDefault();
         const btnSubmit = formAddTask.querySelector("button[type='submit']");
@@ -284,14 +301,86 @@ function setupEventListeners() {
         const taskDateInput = document.getElementById("task-date");
         const taskDate = taskDateInput ? taskDateInput.value : null;
 
+        // Collect repeat days
+        let repeatDays = null;
+        if (selectTaskRecurring.value === "repeat") {
+            const selectedDays = Array.from(document.querySelectorAll("#repeat-days-group .day-toggle.active")).map(b => parseInt(b.dataset.day));
+            if (selectedDays.length === 0) {
+                alert("Selecione pelo menos um dia da semana para repetir.");
+                btnSubmit.disabled = false;
+                btnSubmit.innerHTML = originalText;
+                return;
+            }
+            repeatDays = selectedDays;
+        }
+
         try {
-            await addTask(inputTaskTitle.value.trim(), selectTaskCategory.value, selectTaskRecurring.value, taskDate);
+            await addTask(inputTaskTitle.value.trim(), selectTaskCategory.value, selectTaskRecurring.value, taskDate, repeatDays);
             inputTaskTitle.value = "";
+            // Reset day toggles
+            document.querySelectorAll("#repeat-days-group .day-toggle").forEach(b => b.classList.remove("active"));
+            document.getElementById("repeat-days-group").style.display = "none";
+            selectTaskRecurring.value = "daily";
             closeModal(modalAddTask);
         } finally {
             btnSubmit.disabled = false;
             btnSubmit.innerHTML = originalText;
         }
+    });
+
+    // Edit Task Modal listeners
+    const modalEditTask = document.getElementById("modal-edit-task");
+    const btnCloseEditModal = document.getElementById("btn-close-edit-modal");
+    const formEditTask = document.getElementById("form-edit-task");
+    const editRecurringSelect = document.getElementById("edit-task-recurring");
+
+    btnCloseEditModal.addEventListener("click", () => closeModal(modalEditTask));
+
+    editRecurringSelect.addEventListener("change", () => {
+        const group = document.getElementById("edit-repeat-days-group");
+        group.style.display = editRecurringSelect.value === "repeat" ? "block" : "none";
+    });
+
+    document.querySelectorAll(".edit-day-toggle").forEach(btn => {
+        btn.addEventListener("click", () => {
+            btn.classList.toggle("active");
+        });
+    });
+
+    formEditTask.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const taskId = document.getElementById("edit-task-id").value;
+        const newTitle = document.getElementById("edit-task-title").value.trim();
+        const recMode = editRecurringSelect.value;
+        const newDate = document.getElementById("edit-task-date").value;
+
+        if (!newTitle) return;
+
+        const isRecurring = recMode !== "once";
+        let repeatDays = null;
+
+        if (recMode === "repeat") {
+            const selectedDays = Array.from(document.querySelectorAll(".edit-day-toggle.active")).map(b => parseInt(b.dataset.day));
+            if (selectedDays.length === 0) {
+                alert("Selecione pelo menos um dia da semana.");
+                return;
+            }
+            repeatDays = selectedDays;
+        }
+
+        const createdAt = newDate ? new Date(newDate + "T12:00:00").toISOString() : undefined;
+
+        const updates = {
+            title: newTitle,
+            is_recurring: isRecurring,
+            repeat_days: repeatDays
+        };
+        if (createdAt) updates.created_at = createdAt;
+
+        // Parse ID (handle uuid string or int)
+        const parsedId = parseInt(taskId) || taskId;
+        await updateTask(parsedId, updates);
+        closeModal(modalEditTask);
     });
 
     // Reset Today's Checklist Progress
@@ -546,7 +635,13 @@ async function loadData() {
                 const taskCreatedDate = task.created_at.split('T')[0];
                 
                 if (task.is_recurring) {
-                    // Tarefas recorrentes aparecem a partir da data de criação
+                    if (task.repeat_days && task.repeat_days.length > 0) {
+                        // Tarefas com dias específicos de repetição
+                        const viewDate = new Date(selectedDate + 'T12:00:00');
+                        const dayOfWeek = viewDate.getDay(); // 0=Dom, 1=Seg...
+                        return taskCreatedDate <= selectedDate && task.repeat_days.includes(dayOfWeek);
+                    }
+                    // Tarefas diárias aparecem a partir da data de criação
                     return taskCreatedDate <= selectedDate;
                 } else {
                     // Tarefas únicas aparecem estritamente no dia para o qual foram programadas
@@ -557,6 +652,7 @@ async function loadData() {
                 title: task.title,
                 category: task.category,
                 is_recurring: task.is_recurring,
+                repeat_days: task.repeat_days || null,
                 completed: completedTodayIds.has(task.id)
             }));
 
@@ -614,10 +710,13 @@ function loadDataOffline() {
         const taskCreatedDate = task.created_at.split('T')[0];
         
         if (task.is_recurring) {
-            // Tarefas recorrentes aparecem a partir da data de criação
+            if (task.repeat_days && task.repeat_days.length > 0) {
+                const viewDate = new Date(selectedDate + 'T12:00:00');
+                const dayOfWeek = viewDate.getDay();
+                return taskCreatedDate <= selectedDate && task.repeat_days.includes(dayOfWeek);
+            }
             return taskCreatedDate <= selectedDate;
         } else {
-            // Tarefas únicas aparecem estritamente no dia para o qual foram programadas
             return taskCreatedDate === selectedDate;
         }
     }).map(task => ({
@@ -625,6 +724,7 @@ function loadDataOffline() {
         title: task.title,
         category: task.category,
         is_recurring: task.is_recurring,
+        repeat_days: task.repeat_days || null,
         completed: completedTodayIds.has(task.id)
     }));
 }
@@ -807,7 +907,7 @@ function renderChecklist() {
                         <span class="task-title">${escapeHTML(task.title)}</span>
                         <div class="task-meta">
                             <span class="task-tag" style="${tagStyle}">${escapeHTML(task.category)}</span>
-                            <span class="task-tag" style="background: rgba(255,255,255,0.02);">${task.is_recurring ? 'Diária' : 'Única'}</span>
+                            <span class="task-tag" style="background: rgba(255,255,255,0.02);">${getRecurrenceLabel(task)}</span>
                         </div>
                     </div>
                     <!-- Global edit mode actions -->
@@ -835,10 +935,7 @@ function renderChecklist() {
             const btnRename = taskEl.querySelector(".task-edit-actions .btn-task-action.rename");
             btnRename.addEventListener("click", (e) => {
                 e.stopPropagation();
-                const newTitle = prompt("Editar descrição da tarefa:", task.title);
-                if (newTitle && newTitle.trim()) {
-                    renameTask(task.id, newTitle.trim());
-                }
+                openEditTaskModal(task);
             });
 
             // Setup swipe actions buttons (visible on swipe underneath)
@@ -854,10 +951,6 @@ function renderChecklist() {
             const btnSwipeRename = taskEl.querySelector(".task-swipe-actions .rename-btn");
             btnSwipeRename.addEventListener("click", (e) => {
                 e.stopPropagation();
-                const newTitle = prompt("Editar descrição da tarefa:", task.title);
-                if (newTitle && newTitle.trim()) {
-                    renameTask(task.id, newTitle.trim());
-                }
                 // Close swipe panel
                 const fg = taskEl.querySelector(".task-item-foreground");
                 if (fg) {
@@ -865,6 +958,7 @@ function renderChecklist() {
                     fg.style.transform = "translateX(0px)";
                 }
                 taskEl.classList.remove("swiped");
+                openEditTaskModal(task);
             });
 
             // Attach swipe-to-reveal gestures
@@ -1018,9 +1112,9 @@ function saveCompletionOffline(taskId, date, completed) {
     localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
 }
 
-async function addTask(title, category, isRecurringString, customDate) {
+async function addTask(title, category, recurrenceMode, customDate, repeatDays) {
     if (!title) return;
-    const isRecurring = isRecurringString === "true";
+    const isRecurring = recurrenceMode !== "once";
     const tempId = Date.now();
     
     // Evita problemas de fuso horário definindo a data ao meio-dia
@@ -1034,6 +1128,9 @@ async function addTask(title, category, isRecurringString, customDate) {
         is_active: true,
         created_at: createdAt
     };
+    if (repeatDays) {
+        newTask.repeat_days = repeatDays;
+    }
     if (currentUser) {
         newTask.user_id = currentUser.id;
     }
@@ -1048,23 +1145,27 @@ async function addTask(title, category, isRecurringString, customDate) {
             await loadChecklistAndProgress();
         } catch (error) {
             console.error("Erro ao inserir no Supabase. Salvando offline.", error);
-            addTaskOffline(title, category, isRecurring, tempId, createdAt);
+            addTaskOffline(title, category, isRecurring, tempId, createdAt, repeatDays);
         }
     } else {
-        addTaskOffline(title, category, isRecurring, tempId, createdAt);
+        addTaskOffline(title, category, isRecurring, tempId, createdAt, repeatDays);
     }
 }
 
-function addTaskOffline(title, category, isRecurring, id, createdAt) {
+function addTaskOffline(title, category, isRecurring, id, createdAt, repeatDays) {
     let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
-    localTasks.push({
+    const task = {
         id: id,
         title: title,
         category: category,
         is_recurring: isRecurring,
         is_active: true,
         created_at: createdAt
-    });
+    };
+    if (repeatDays) {
+        task.repeat_days = repeatDays;
+    }
+    localTasks.push(task);
     localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
     
     loadDataOffline();
@@ -1110,6 +1211,107 @@ function renameTaskOffline(id, newTitle) {
     
     loadDataOffline();
     renderChecklist();
+}
+
+// Full task update (title, date, recurrence, repeat_days)
+async function updateTask(id, updates) {
+    // Otimista local
+    tasks = tasks.map(t => {
+        if (String(t.id) === String(id)) return { ...t, ...updates };
+        return t;
+    });
+    renderChecklist();
+    updateProgress();
+
+    if (supabaseClient) {
+        try {
+            const dbUpdates = {};
+            if (updates.title !== undefined) dbUpdates.title = updates.title;
+            if (updates.is_recurring !== undefined) dbUpdates.is_recurring = updates.is_recurring;
+            if (updates.repeat_days !== undefined) dbUpdates.repeat_days = updates.repeat_days;
+            if (updates.created_at !== undefined) dbUpdates.created_at = updates.created_at;
+
+            const { error } = await supabaseClient
+                .from('tasks')
+                .update(dbUpdates)
+                .eq('id', id);
+            if (error) throw error;
+            
+            await loadChecklistAndProgress();
+        } catch (error) {
+            console.error("Erro ao atualizar tarefa no Supabase.", error);
+            // Fallback offline
+            let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+            localTasks = localTasks.map(t => {
+                if (String(t.id) === String(id)) return { ...t, ...updates };
+                return t;
+            });
+            localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+        }
+    } else {
+        let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+        localTasks = localTasks.map(t => {
+            if (String(t.id) === String(id)) return { ...t, ...updates };
+            return t;
+        });
+        localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+        loadDataOffline();
+        renderChecklist();
+        updateProgress();
+    }
+}
+
+// Recurrence label helper
+function getRecurrenceLabel(task) {
+    if (!task.is_recurring) return 'Única';
+    if (task.repeat_days && task.repeat_days.length > 0) {
+        const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+        if (task.repeat_days.length === 7) return 'Diária';
+        return task.repeat_days.map(d => dayNames[d]).join(', ');
+    }
+    return 'Diária';
+}
+
+// Edit Task Modal
+function openEditTaskModal(task) {
+    const modalEditTask = document.getElementById("modal-edit-task");
+    
+    document.getElementById("edit-task-id").value = task.id;
+    document.getElementById("edit-task-title").value = task.title;
+    
+    // Determine recurrence mode
+    const editRecurring = document.getElementById("edit-task-recurring");
+    const editRepeatGroup = document.getElementById("edit-repeat-days-group");
+    
+    if (!task.is_recurring) {
+        editRecurring.value = "once";
+        editRepeatGroup.style.display = "none";
+    } else if (task.repeat_days && task.repeat_days.length > 0 && task.repeat_days.length < 7) {
+        editRecurring.value = "repeat";
+        editRepeatGroup.style.display = "block";
+    } else {
+        editRecurring.value = "daily";
+        editRepeatGroup.style.display = "none";
+    }
+    
+    // Set day toggles
+    document.querySelectorAll(".edit-day-toggle").forEach(btn => {
+        const day = parseInt(btn.dataset.day);
+        if (task.repeat_days && task.repeat_days.includes(day)) {
+            btn.classList.add("active");
+        } else {
+            btn.classList.remove("active");
+        }
+    });
+    
+    // Set date from created_at
+    const editDate = document.getElementById("edit-task-date");
+    // We need the original created_at; find from the full task data if available
+    // For now use selectedDate as fallback
+    editDate.value = selectedDate;
+    
+    openModal(modalEditTask);
+    lucide.createIcons();
 }
 
 async function deleteTask(id) {
