@@ -85,6 +85,13 @@ const calendarDaysGrid = document.getElementById("calendar-days-grid");
 document.addEventListener("DOMContentLoaded", () => {
     initApp();
     setupEventListeners();
+    
+    // Register Service Worker for PWA compatibility on Android
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./sw.js')
+            .then(reg => console.log('Service Worker registrado com sucesso:', reg))
+            .catch(err => console.error('Erro ao registrar Service Worker:', err));
+    }
 });
 
 async function initApp() {
@@ -146,11 +153,25 @@ function setupEventListeners() {
 
     // Toggle Task Complete (using event delegation)
     tasksListEl.addEventListener("click", (e) => {
-        if (isEditMode || isHistoryMode) return;
-        if (e.target.closest(".btn-task-action")) return;
+        if (e.target.closest(".btn-task-action") || e.target.closest(".swipe-action-btn")) return;
 
         const item = e.target.closest(".task-item");
         if (!item) return;
+
+        // Se o card de tarefa estiver deslizado/aberto (swiped), fecha o swipe em vez de marcar concluída
+        if (item.classList.contains("swiped")) {
+            e.preventDefault();
+            e.stopPropagation();
+            const fg = item.querySelector(".task-item-foreground");
+            if (fg) {
+                fg.style.transition = "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)";
+                fg.style.transform = "translateX(0px)";
+            }
+            item.classList.remove("swiped");
+            return;
+        }
+
+        if (isEditMode || isHistoryMode) return;
         
         const isCompleting = !item.classList.contains("completed");
         if (isCompleting) {
@@ -167,24 +188,17 @@ function setupEventListeners() {
         toggleTask(taskId);
     });
 
-    // Toggle Edit Mode
-    btnToggleEdit.addEventListener("click", () => {
-        isEditMode = !isEditMode;
-        btnToggleEdit.classList.toggle("active", isEditMode);
+    // Exit edit mode on click outside categories bar
+    document.addEventListener("click", (e) => {
+        if (!isEditMode) return;
         
-        if (isEditMode) {
-            btnToggleEdit.innerHTML = '<i data-lucide="check"></i>';
-            btnToggleEdit.title = "Finalizar Edição";
-            appContainer.classList.add("edit-mode-active");
-        } else {
-            btnToggleEdit.innerHTML = '<i data-lucide="edit-3"></i>';
-            btnToggleEdit.title = "Editar Checklist";
-            appContainer.classList.remove("edit-mode-active");
+        // Se o clique for fora da barra de categorias e fora de qualquer modal/diálogo
+        const clickedInsideBar = e.target.closest(".categories-bar");
+        const clickedInsideModal = e.target.closest(".modal");
+        
+        if (!clickedInsideBar && !clickedInsideModal) {
+            toggleEditMode(false);
         }
-        
-        renderCategories();
-        renderChecklist();
-        lucide.createIcons();
     });
 
     // Edit Organization Name Inline
@@ -459,21 +473,44 @@ async function loadChecklistAndProgress() {
 }
 
 async function loadData() {
-    if (supabaseClient) {
+    if (supabaseClient && currentUser) {
         try {
-            // 1. Fetch categories
-            let { data: dbCats, error: errCats } = await supabaseClient
-                .from('categories')
-                .select('*')
-                .eq('is_active', true);
+            // Executa as consultas ao banco de dados em paralelo usando Promise.all para máxima velocidade de carregamento
+            const [
+                catsResult,
+                countResult,
+                tasksResult,
+                compTodayResult,
+                compBeforeResult
+            ] = await Promise.all([
+                supabaseClient.from('categories').select('*').eq('is_active', true),
+                supabaseClient.from('categories').select('*', { count: 'exact', head: true }),
+                supabaseClient.from('tasks').select('*').eq('is_active', true),
+                supabaseClient.from('completions').select('*').eq('date', selectedDate),
+                supabaseClient.from('completions').select('task_id').lt('date', selectedDate)
+            ]);
+
+            let dbCats = catsResult.data;
+            const errCats = catsResult.error;
             
+            const count = countResult.count;
+            const errCount = countResult.error;
+            
+            const dbTasks = tasksResult.data;
+            const errTasks = tasksResult.error;
+            
+            const dbCompletionsToday = compTodayResult.data;
+            const errCompToday = compTodayResult.error;
+            
+            const dbCompletionsBefore = compBeforeResult.data;
+            const errCompBefore = compBeforeResult.error;
+
             if (errCats) throw errCats;
+            if (errTasks) throw errTasks;
+            if (errCompToday) throw errCompToday;
+            if (errCompBefore) throw errCompBefore;
             
             // Seed default categories ONLY if the user has absolutely ZERO categories in their account (active or inactive)
-            const { count, error: errCount } = await supabaseClient
-                .from('categories')
-                .select('*', { count: 'exact', head: true });
-
             if (!errCount && count === 0) {
                 const seedCats = DEFAULT_CATEGORIES.map(name => ({ 
                     name, 
@@ -500,30 +537,6 @@ async function loadData() {
                 }
             }
             categories = dbCats;
-
-            // 2. Fetch active tasks
-            const { data: dbTasks, error: errTasks } = await supabaseClient
-                .from('tasks')
-                .select('*')
-                .eq('is_active', true);
-            
-            if (errTasks) throw errTasks;
-
-            // Fetch completions for today
-            const { data: dbCompletionsToday, error: errCompToday } = await supabaseClient
-                .from('completions')
-                .select('*')
-                .eq('date', selectedDate);
-                
-            if (errCompToday) throw errCompToday;
-
-            // Fetch completions before today
-            const { data: dbCompletionsBefore, error: errCompBefore } = await supabaseClient
-                .from('completions')
-                .select('task_id')
-                .lt('date', selectedDate);
-                
-            if (errCompBefore) throw errCompBefore;
 
             const completedBeforeIds = new Set(dbCompletionsBefore.map(c => c.task_id));
             const completedTodayIds = new Set(dbCompletionsToday.filter(c => c.completed).map(c => c.task_id));
@@ -634,6 +647,9 @@ function renderCategories() {
     `;
     
     allChip.addEventListener("click", () => {
+        if (isEditMode) {
+            toggleEditMode(false);
+        }
         document.querySelectorAll(".category-chip").forEach(c => c.classList.remove("active"));
         allChip.classList.add("active");
         currentFilter = "all";
@@ -655,8 +671,30 @@ function renderCategories() {
             setupDragAndDrop(chip, cat);
         }
         
+        // Detecta gesto de segurar (Long-press de 800ms) para ativar a reordenação das guias
+        let pressTimer;
+        const startPress = () => {
+            if (isEditMode) return;
+            pressTimer = setTimeout(() => {
+                toggleEditMode(true);
+            }, 800);
+        };
+        const cancelPress = () => {
+            if (pressTimer) clearTimeout(pressTimer);
+        };
+
+        chip.addEventListener("mousedown", startPress);
+        chip.addEventListener("mouseup", cancelPress);
+        chip.addEventListener("mouseleave", cancelPress);
+        chip.addEventListener("touchstart", startPress, { passive: true });
+        chip.addEventListener("touchend", cancelPress, { passive: true });
+        chip.addEventListener("touchmove", cancelPress, { passive: true });
+        
         chip.addEventListener("click", () => {
-            if (isEditMode) return; // Disable filtering click in edit mode
+            if (isEditMode) {
+                // Clicar em qualquer guia durante a edição conclui e filtra
+                toggleEditMode(false);
+            }
             document.querySelectorAll(".category-chip").forEach(c => c.classList.remove("active"));
             chip.classList.add("active");
             currentFilter = cat.name;
@@ -749,40 +787,52 @@ function renderChecklist() {
             const tagStyle = `color: ${colorStyle.color}; background: ${colorStyle.bg}; border: 1px solid rgba(255,255,255,0.03);`;
 
             taskEl.innerHTML = `
-                <div class="task-checkbox-wrapper">
-                    <div class="task-checkbox">
-                        <i data-lucide="check"></i>
-                    </div>
-                </div>
-                <div class="task-content">
-                    <span class="task-title">${escapeHTML(task.title)}</span>
-                    <div class="task-meta">
-                        <span class="task-tag" style="${tagStyle}">${escapeHTML(task.category)}</span>
-                        <span class="task-tag" style="background: rgba(255,255,255,0.02);">${task.is_recurring ? 'Diária' : 'Única'}</span>
-                    </div>
-                </div>
-                <div class="task-edit-actions">
-                    <button class="btn-task-action rename" title="Renomear">
+                <!-- Actions revealed on swipe (underneath) -->
+                <div class="task-swipe-actions">
+                    <button class="swipe-action-btn rename-btn" title="Renomear">
                         <i data-lucide="pencil"></i>
                     </button>
-                    <button class="btn-task-action delete" title="Excluir">
+                    <button class="swipe-action-btn delete-btn" title="Excluir">
                         <i data-lucide="trash-2"></i>
                     </button>
                 </div>
+                <!-- Main content of the task (on top) -->
+                <div class="task-item-foreground">
+                    <div class="task-checkbox-wrapper">
+                        <div class="task-checkbox">
+                            <i data-lucide="check"></i>
+                        </div>
+                    </div>
+                    <div class="task-content">
+                        <span class="task-title">${escapeHTML(task.title)}</span>
+                        <div class="task-meta">
+                            <span class="task-tag" style="${tagStyle}">${escapeHTML(task.category)}</span>
+                            <span class="task-tag" style="background: rgba(255,255,255,0.02);">${task.is_recurring ? 'Diária' : 'Única'}</span>
+                        </div>
+                    </div>
+                    <!-- Global edit mode actions -->
+                    <div class="task-edit-actions">
+                        <button class="btn-task-action rename" title="Renomear">
+                            <i data-lucide="pencil"></i>
+                        </button>
+                        <button class="btn-task-action delete" title="Excluir">
+                            <i data-lucide="trash-2"></i>
+                        </button>
+                    </div>
+                </div>
             `;
 
-            // Setup button event listeners
-            const btnDelete = taskEl.querySelector(".btn-task-action.delete");
+            // Setup static button event listeners (visible in global edit mode)
+            const btnDelete = taskEl.querySelector(".task-edit-actions .btn-task-action.delete");
             btnDelete.addEventListener("click", (e) => {
                 e.stopPropagation();
-                // Play smooth deletion animation first
                 taskEl.classList.add("deleting");
                 setTimeout(() => {
                     deleteTask(task.id);
                 }, 400);
             });
 
-            const btnRename = taskEl.querySelector(".btn-task-action.rename");
+            const btnRename = taskEl.querySelector(".task-edit-actions .btn-task-action.rename");
             btnRename.addEventListener("click", (e) => {
                 e.stopPropagation();
                 const newTitle = prompt("Editar descrição da tarefa:", task.title);
@@ -790,6 +840,35 @@ function renderChecklist() {
                     renameTask(task.id, newTitle.trim());
                 }
             });
+
+            // Setup swipe actions buttons (visible on swipe underneath)
+            const btnSwipeDelete = taskEl.querySelector(".task-swipe-actions .delete-btn");
+            btnSwipeDelete.addEventListener("click", (e) => {
+                e.stopPropagation();
+                taskEl.classList.add("deleting");
+                setTimeout(() => {
+                    deleteTask(task.id);
+                }, 400);
+            });
+
+            const btnSwipeRename = taskEl.querySelector(".task-swipe-actions .rename-btn");
+            btnSwipeRename.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const newTitle = prompt("Editar descrição da tarefa:", task.title);
+                if (newTitle && newTitle.trim()) {
+                    renameTask(task.id, newTitle.trim());
+                }
+                // Close swipe panel
+                const fg = taskEl.querySelector(".task-item-foreground");
+                if (fg) {
+                    fg.style.transition = "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)";
+                    fg.style.transform = "translateX(0px)";
+                }
+                taskEl.classList.remove("swiped");
+            });
+
+            // Attach swipe-to-reveal gestures
+            setupSwipeToReveal(taskEl);
 
             tasksListEl.appendChild(taskEl);
         });
@@ -1443,6 +1522,32 @@ function applyTheme(themeName) {
     saveUserThemeCloud(themeName);
 }
 
+// Helper para gerenciar o estado global de edição das categorias
+function toggleEditMode(forceState) {
+    isEditMode = forceState !== undefined ? forceState : !isEditMode;
+    
+    const btnToggleEdit = document.getElementById("btn-toggle-edit");
+    if (isEditMode) {
+        appContainer.classList.add("edit-mode-active");
+        if (btnToggleEdit) {
+            btnToggleEdit.classList.add("active");
+            btnToggleEdit.innerHTML = '<i data-lucide="check"></i>';
+            btnToggleEdit.title = "Finalizar Edição";
+        }
+    } else {
+        appContainer.classList.remove("edit-mode-active");
+        if (btnToggleEdit) {
+            btnToggleEdit.classList.remove("active");
+            btnToggleEdit.innerHTML = '<i data-lucide="edit-3"></i>';
+            btnToggleEdit.title = "Editar Checklist";
+        }
+    }
+    
+    renderCategories();
+    renderChecklist();
+    lucide.createIcons();
+}
+
 async function saveUserThemeCloud(themeName) {
     if (!supabaseClient || !currentUser) return;
     try {
@@ -1650,10 +1755,7 @@ function renderCalendarGrid() {
             
             if (isHistoryMode) {
                 appContainer.classList.add("history-mode");
-                isEditMode = false; // Turn off editing when viewing history
-                btnToggleEdit.classList.remove("active");
-                btnToggleEdit.innerHTML = '<i data-lucide="edit-3"></i>';
-                btnToggleEdit.title = "Editar Checklist";
+                toggleEditMode(false); // Turn off editing when viewing history
             } else {
                 appContainer.classList.remove("history-mode");
             }
@@ -1807,4 +1909,124 @@ async function saveCategoryOrder() {
             console.warn("Dica: Adicione a coluna 'sort_order' na tabela 'categories' para salvar a ordem online!");
         }
     }
+}
+
+// Swipe to Reveal actions (WhatsApp iOS style gesture handler)
+function setupSwipeToReveal(taskEl) {
+    const foreground = taskEl.querySelector(".task-item-foreground");
+    if (!foreground) return;
+
+    let startX = 0;
+    let currentX = 0;
+    let isDragging = false;
+    const maxSwipe = 120; // Width of revealed action buttons (rename + delete)
+
+    function setTranslate(x, animate = false) {
+        if (animate) {
+            foreground.style.transition = "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)";
+        } else {
+            foreground.style.transition = "none";
+        }
+        foreground.style.transform = `translateX(${x}px)`;
+    }
+
+    function closeAllOtherSwipes() {
+        document.querySelectorAll(".task-item").forEach(item => {
+            if (item !== taskEl && item.classList.contains("swiped")) {
+                item.classList.remove("swiped");
+                const fg = item.querySelector(".task-item-foreground");
+                if (fg) {
+                    fg.style.transition = "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)";
+                    fg.style.transform = "translateX(0px)";
+                }
+            }
+        });
+    }
+
+    // Touch events (Mobile)
+    foreground.addEventListener("touchstart", (e) => {
+        if (isEditMode) return;
+        closeAllOtherSwipes();
+        startX = e.touches[0].clientX;
+        isDragging = true;
+        if (taskEl.classList.contains("swiped")) {
+            startX += maxSwipe;
+        }
+    }, { passive: true });
+
+    foreground.addEventListener("touchmove", (e) => {
+        if (!isDragging) return;
+        currentX = e.touches[0].clientX;
+        let diffX = currentX - startX;
+
+        // Swiping only to the left
+        if (diffX > 0) diffX = 0;
+        if (diffX < -maxSwipe - 20) {
+            // Elastic resistance effect
+            diffX = -maxSwipe - 20 + (diffX + maxSwipe + 20) * 0.25;
+        }
+
+        setTranslate(diffX, false);
+    }, { passive: true });
+
+    foreground.addEventListener("touchend", () => {
+        if (!isDragging) return;
+        isDragging = false;
+        
+        // Extract matrix value
+        const style = window.getComputedStyle(foreground);
+        const matrix = new WebKitCSSMatrix(style.transform);
+        const currentTransform = matrix.m41;
+
+        if (currentTransform < -maxSwipe / 2) {
+            setTranslate(-maxSwipe, true);
+            taskEl.classList.add("swiped");
+        } else {
+            setTranslate(0, true);
+            taskEl.classList.remove("swiped");
+        }
+    });
+
+    // Mouse events (Desktop testing support)
+    foreground.addEventListener("mousedown", (e) => {
+        if (isEditMode) return;
+        closeAllOtherSwipes();
+        startX = e.clientX;
+        isDragging = true;
+        if (taskEl.classList.contains("swiped")) {
+            startX += maxSwipe;
+        }
+        document.body.style.userSelect = "none";
+    });
+
+    window.addEventListener("mousemove", (e) => {
+        if (!isDragging) return;
+        currentX = e.clientX;
+        let diffX = currentX - startX;
+
+        if (diffX > 0) diffX = 0;
+        if (diffX < -maxSwipe - 20) {
+            diffX = -maxSwipe - 20 + (diffX + maxSwipe + 20) * 0.25;
+        }
+
+        setTranslate(diffX, false);
+    });
+
+    window.addEventListener("mouseup", () => {
+        if (!isDragging) return;
+        isDragging = false;
+        document.body.style.userSelect = "";
+
+        const style = window.getComputedStyle(foreground);
+        const matrix = new WebKitCSSMatrix(style.transform);
+        const currentTransform = matrix.m41;
+
+        if (currentTransform < -maxSwipe / 2) {
+            setTranslate(-maxSwipe, true);
+            taskEl.classList.add("swiped");
+        } else {
+            setTranslate(0, true);
+            taskEl.classList.remove("swiped");
+        }
+    });
 }

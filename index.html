@@ -6,6 +6,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Checklist Diário Organizacional</title>
     <link rel="stylesheet" href="style.css">
+    
+    <!-- iOS / PWA Support -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Checklist">
+    <link rel="apple-touch-icon" href="https://img.icons8.com/fluency/180/000000/todo-list.png">
+    <link rel="manifest" href="manifest.json">
+
     <!-- Google Fonts: Plus Jakarta Sans for premium typography -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -69,9 +77,6 @@
             <div class="header-actions">
                 <button id="btn-reset-checklist" class="icon-button" title="Reiniciar Checklist">
                     <i data-lucide="rotate-ccw"></i>
-                </button>
-                <button id="btn-toggle-edit" class="icon-button" title="Editar Checklist">
-                    <i data-lucide="edit-3"></i>
                 </button>
                 <button id="btn-manage-tasks" class="icon-button" title="Configurações">
                     <i data-lucide="settings"></i>

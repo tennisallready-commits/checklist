@@ -327,6 +327,10 @@ body {
     padding-top: 8px;
     margin-top: -8px;
     padding-bottom: 8px;
+    padding-left: 8px;
+    padding-right: 8px;
+    margin-left: -8px;
+    margin-right: -8px;
     margin-bottom: 20px;
     scrollbar-width: none; /* Hide scrollbar Firefox */
     position: relative;
@@ -1351,4 +1355,111 @@ body.theme-light .auth-container input[type="email"]:focus {
 body.theme-girly .auth-container input[type="email"]:focus {
     border-color: var(--primary) !important;
     background: rgba(219, 39, 119, 0.04) !important;
+}
+
+/* Swipe to Reveal Action Panel (iOS/WhatsApp style) */
+.task-item {
+    position: relative;
+    overflow: hidden;
+    border-radius: var(--radius-md);
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+.task-item-foreground {
+    display: flex;
+    align-items: center;
+    padding: 16px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    position: relative;
+    z-index: 2;
+    width: 100%;
+    touch-action: pan-y;
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.25s ease;
+}
+
+.task-item.completed .task-item-foreground {
+    background: rgba(22, 30, 49, 0.2);
+    border-color: rgba(255, 255, 255, 0.03);
+}
+body.theme-light .task-item.completed .task-item-foreground {
+    background: rgba(255, 255, 255, 0.4);
+    border-color: rgba(0, 0, 0, 0.03);
+}
+body.theme-girly .task-item.completed .task-item-foreground {
+    background: rgba(255, 255, 255, 0.45);
+    border-color: rgba(219, 39, 119, 0.05);
+}
+
+.task-swipe-actions {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 120px;
+    display: flex;
+    z-index: 1;
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.task-item.swiped .task-swipe-actions {
+    opacity: 1;
+}
+
+.swipe-action-btn {
+    flex: 1;
+    height: 100%;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: #ffffff;
+    transform: translateX(45px); /* Start shifted to the right */
+    transition: background-color 0.2s ease, transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.task-item.swiped .swipe-action-btn {
+    transform: translateX(0); /* Slide in smoothly when swiped */
+}
+
+.task-item.swiped .swipe-action-btn.delete-btn {
+    transition-delay: 0.04s; /* Staggered delays for premium iOS liquid feel */
+}
+
+.swipe-action-btn.rename-btn {
+    background: #2563eb;
+}
+.swipe-action-btn.rename-btn:active {
+    background: #1d4ed8;
+}
+
+.swipe-action-btn.delete-btn {
+    background: #ef4444;
+}
+.swipe-action-btn.delete-btn:active {
+    background: #dc2626;
+}
+
+.swipe-action-btn i {
+    width: 18px;
+    height: 18px;
+}
+
+/* In global edit mode, hide swipe actions and show static edit actions */
+.task-item-foreground .task-edit-actions {
+    display: none;
+}
+
+.edit-mode-active .task-item-foreground .task-edit-actions {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
 }
