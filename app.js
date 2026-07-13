@@ -1438,6 +1438,60 @@ function applyTheme(themeName) {
             btn.style.borderColor = "var(--border-color)";
         }
     });
+
+    // Salva o tema na nuvem se o usuário estiver logado
+    saveUserThemeCloud(themeName);
+}
+
+async function saveUserThemeCloud(themeName) {
+    if (!supabaseClient || !currentUser) return;
+    try {
+        await supabaseClient
+            .from('profiles')
+            .upsert({ 
+                id: currentUser.id, 
+                theme: themeName, 
+                updated_at: new Date().toISOString() 
+            });
+    } catch (e) {
+        console.error("Erro ao salvar tema no Supabase:", e);
+    }
+}
+
+async function loadUserProfile() {
+    if (!supabaseClient || !currentUser) return;
+    try {
+        const { data, error } = await supabaseClient
+            .from('profiles')
+            .select('theme')
+            .eq('id', currentUser.id)
+            .maybeSingle();
+            
+        if (!error && data && data.theme) {
+            // Aplica o tema sem chamar o saveUserThemeCloud para evitar requisição em loop
+            currentTheme = data.theme;
+            localStorage.setItem("checklist_theme", data.theme);
+            
+            document.body.classList.remove("theme-light", "theme-girly");
+            if (data.theme === "light") {
+                document.body.classList.add("theme-light");
+            } else if (data.theme === "girly") {
+                document.body.classList.add("theme-girly");
+            }
+
+            document.querySelectorAll(".theme-selector-btn").forEach(btn => {
+                if (btn.dataset.theme === data.theme) {
+                    btn.classList.add("active");
+                    btn.style.borderColor = "var(--primary)";
+                } else {
+                    btn.classList.remove("active");
+                    btn.style.borderColor = "var(--border-color)";
+                }
+            });
+        }
+    } catch (e) {
+        console.error("Erro ao carregar perfil do Supabase:", e);
+    }
 }
 
 // Supabase Auth and Sync helpers
@@ -1458,6 +1512,9 @@ function setupSupabaseAuth() {
             
             // Sync local data to cloud
             await syncOfflineDataToCloud();
+            
+            // Carrega as configurações de perfil (como o tema do usuário)
+            await loadUserProfile();
             
             await loadChecklistAndProgress();
             lucide.createIcons();
