@@ -1919,7 +1919,7 @@ function setupSwipeToReveal(taskEl) {
     let startX = 0;
     let currentX = 0;
     let isDragging = false;
-    const maxSwipe = 120; // Width of revealed action buttons (rename + delete)
+    const maxSwipe = 106; // Width of revealed action buttons (rename + delete) + offsets
 
     function setTranslate(x, animate = false) {
         if (animate) {

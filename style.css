@@ -1397,13 +1397,13 @@ body.theme-girly .task-item.completed .task-item-foreground {
 
 .task-swipe-actions {
     position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 120px;
+    top: 8px;
+    bottom: 8px;
+    right: 8px;
+    width: 90px;
     display: flex;
+    gap: 6px;
     z-index: 1;
-    border-radius: 0 var(--radius-md) var(--radius-md) 0;
     overflow: hidden;
     opacity: 0;
     transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1);
@@ -1417,12 +1417,13 @@ body.theme-girly .task-item.completed .task-item-foreground {
     flex: 1;
     height: 100%;
     border: none;
+    border-radius: var(--radius-sm);
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     color: #ffffff;
-    transform: translateX(45px); /* Start shifted to the right */
+    transform: translateX(35px); /* Start shifted slightly to the right */
     transition: background-color 0.2s ease, transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
