@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
+
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Checklist Diário Organizacional</title>
@@ -15,6 +16,42 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
+    <!-- Auth Container (Login / Register Screen) -->
+    <div id="auth-container" class="auth-container" style="display: none;">
+        <div class="auth-card">
+            <div class="auth-header">
+                <div class="auth-logo-bg">
+                    <i data-lucide="shield-check" class="auth-logo-icon"></i>
+                </div>
+                <h1 id="auth-title">Checklist Nuvem</h1>
+                <p id="auth-subtitle">Entre com seus dados para sincronizar suas tarefas e locais com segurança.</p>
+            </div>
+            
+            <form id="form-auth" autocomplete="on">
+                <div class="form-group">
+                    <label for="auth-email">E-mail</label>
+                    <input type="email" id="auth-email" placeholder="nome@exemplo.com" required autocomplete="email">
+                </div>
+                
+                <div class="form-group" style="margin-top: 16px;">
+                    <label for="auth-password">Senha</label>
+                    <input type="password" id="auth-password" placeholder="Sua senha" required autocomplete="current-password">
+                </div>
+
+                <div id="auth-error-msg" class="auth-error-msg" style="display: none;"></div>
+                
+                <button type="submit" id="btn-auth-submit" class="btn btn-primary" style="width: 100%; margin-top: 24px; padding: 14px; font-weight: 700;">
+                    Entrar
+                </button>
+            </form>
+            
+            <div class="auth-toggle">
+                <span id="auth-toggle-text">Não tem uma conta?</span>
+                <button id="btn-auth-toggle" class="btn-link" style="background: transparent; border: none; font-weight: 700; color: var(--primary); cursor: pointer; text-decoration: underline; margin-left: 4px; font-size: 0.88rem;">Cadastre-se</button>
+            </div>
+        </div>
+    </div>
+
     <div class="app-container">
         <!-- Header -->
         <header class="app-header">
@@ -24,8 +61,7 @@
                     <span class="history-badge" id="history-badge">Histórico</span>
                 </div>
                 <h1 id="app-title">Checklist Diário</h1>
-                <div class="date-picker-wrapper">
-                    <input type="date" id="checklist-date" class="date-select-input">
+                <div class="date-picker-wrapper" id="btn-open-calendar" style="cursor: pointer;">
                     <span id="current-date" class="current-date">Carregando data...</span>
                     <i data-lucide="chevron-down" class="date-chevron"></i>
                 </div>
@@ -76,26 +112,10 @@
         </section>
 
         <!-- Categories Filters (Horizontal scroll on mobile) -->
-        <section class="categories-bar">
+        <section class="categories-bar" id="categories-bar">
             <button class="category-chip active" data-category="all">
                 <i data-lucide="layers" class="chip-icon"></i>
                 <span>Todos</span>
-            </button>
-            <button class="category-chip" data-category="abertura">
-                <i data-lucide="sun" class="chip-icon"></i>
-                <span>Abertura</span>
-            </button>
-            <button class="category-chip" data-category="operacao">
-                <i data-lucide="play-circle" class="chip-icon"></i>
-                <span>Operação</span>
-            </button>
-            <button class="category-chip" data-category="limpeza">
-                <i data-lucide="sparkles" class="chip-icon"></i>
-                <span>Limpeza</span>
-            </button>
-            <button class="category-chip" data-category="fechamento">
-                <i data-lucide="moon" class="chip-icon"></i>
-                <span>Fechamento</span>
             </button>
         </section>
 
@@ -155,6 +175,10 @@
                         <option value="false">Única (Acumula para o próximo dia se não feita)</option>
                     </select>
                 </div>
+                <div class="form-group" style="margin-top: 16px; margin-bottom: 24px;">
+                    <label for="task-date">Data da Tarefa</label>
+                    <input type="date" id="task-date" required>
+                </div>
                 <button type="submit" class="btn btn-primary btn-block">Adicionar Tarefa</button>
             </form>
         </div>
@@ -163,7 +187,7 @@
     <!-- Modal: Settings -->
     <div id="modal-manage-tasks" class="modal">
         <div class="modal-overlay"></div>
-        <div class="modal-content">
+        <div class="modal-content manage-modal-content">
             <div class="modal-header">
                 <h2>Configurações</h2>
                 <button class="modal-close" id="btn-close-manage-modal"><i data-lucide="x"></i></button>
@@ -174,23 +198,76 @@
                     <input type="text" id="input-org-name" placeholder="Ex: Minha Empresa" autocomplete="off">
                 </div>
                 
-                <div class="form-group" style="margin-bottom: 16px;">
-                    <label for="input-supabase-url">Supabase URL</label>
-                    <input type="text" id="input-supabase-url" placeholder="https://xxxx.supabase.co" autocomplete="off">
+                <!-- Themes Section -->
+                <div style="margin-bottom: 24px;">
+                    <label style="display:block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); margin-bottom:8px;">Tema do Aplicativo</label>
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
+                        <button class="btn theme-selector-btn active" data-theme="default" style="padding: 10px; font-size: 0.75rem; font-weight: 700; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-surface-solid); color: #fff;">
+                            💜 Escuro
+                        </button>
+                        <button class="btn theme-selector-btn" data-theme="light" style="padding: 10px; font-size: 0.75rem; font-weight: 700; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: #ffffff; color: #000;">
+                            ☀️ Claro
+                        </button>
+                        <button class="btn theme-selector-btn" data-theme="girly" style="padding: 10px; font-size: 0.75rem; font-weight: 700; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: #ffe4e6; color: #ec4899;">
+                            🌸 Feminino
+                        </button>
+                    </div>
                 </div>
                 
-                <div class="form-group" style="margin-bottom: 24px;">
-                    <label for="input-supabase-key">Supabase Anon Key</label>
-                    <input type="password" id="input-supabase-key" placeholder="Senha/Key" autocomplete="off">
+                <!-- Manage Categories Section -->
+                <div style="margin-bottom: 24px;">
+                    <label style="display:block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); margin-bottom:8px;">Gerenciar Locais / Categorias</label>
+                    
+                    <!-- Quick Add Form -->
+                    <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                        <input type="text" id="input-new-category" placeholder="Novo Local (ex: Filial Centro)" autocomplete="off" style="flex: 1; padding: 12px 14px;">
+                        <button id="btn-add-category" class="btn btn-primary" style="padding: 10px 16px; font-weight: 700;">+ Add</button>
+                    </div>
+                    
+                    <!-- List of current categories -->
+                    <div class="manage-list" id="manage-categories-list" style="max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 4px; scrollbar-width: thin;">
+                        <!-- Javascript will inject categories list here -->
+                    </div>
                 </div>
+                <!-- Supabase credentials are kept fixed in code -->
                 
                 <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
                     <button id="btn-reset-default" class="btn btn-secondary btn-block" style="border: 1px solid var(--border-color);">
-                        <i data-lucide="rotate-ccw"></i> Restaurar Checklist Padrão
+                        <i data-lucide="rotate-ccw"></i> Restaurar Padrões do App
                     </button>
                     <button id="btn-clear-all" class="btn btn-danger-outline btn-block">
                         <i data-lucide="trash-2"></i> Limpar Todas as Tarefas
                     </button>
+                    <button id="btn-logout" class="btn btn-danger btn-block" style="background: var(--danger); color: #fff; border: none; font-weight: 700;">
+                        <i data-lucide="log-out"></i> Sair da Conta
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Calendar -->
+    <div id="modal-calendar" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content calendar-modal-content" style="max-width: 380px;">
+            <div class="modal-header" style="margin-bottom: 16px;">
+                <h2>Selecionar Data</h2>
+                <button class="modal-close" id="btn-close-calendar"><i data-lucide="x"></i></button>
+            </div>
+            <div class="calendar-body">
+                <!-- Navigation -->
+                <div class="calendar-nav" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; background: rgba(255,255,255,0.02); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+                    <button id="btn-prev-month" class="icon-button" style="padding: 6px; background: transparent; border: none; color: var(--text-primary); cursor: pointer;"><i data-lucide="chevron-left" style="width: 18px; height: 18px;"></i></button>
+                    <span id="calendar-month-year" style="font-weight: 700; font-size: 0.95rem; color: var(--text-primary);">Carregando...</span>
+                    <button id="btn-next-month" class="icon-button" style="padding: 6px; background: transparent; border: none; color: var(--text-primary); cursor: pointer;"><i data-lucide="chevron-right" style="width: 18px; height: 18px;"></i></button>
+                </div>
+                <!-- Weekdays -->
+                <div class="calendar-weekdays" style="display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 10px; letter-spacing: 0.05em;">
+                    <span>Dom</span><span>Seg</span><span>Ter</span><span>Qua</span><span>Qui</span><span>Sex</span><span>Sáb</span>
+                </div>
+                <!-- Days grid -->
+                <div class="calendar-days-grid" id="calendar-days-grid" style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; text-align: center;">
+                    <!-- Javascript will inject days buttons here -->
                 </div>
             </div>
         </div>

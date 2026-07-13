@@ -1,4 +1,6 @@
 /* Style Reset & Premium Design System */
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Lora:ital,wght@0,400..700;1,400..700&display=swap');
+
 :root {
     --bg-dark: #090d16;
     --bg-surface: rgba(22, 30, 49, 0.45);
@@ -13,10 +15,10 @@
     --danger: #ef4444;
     --danger-light: rgba(239, 68, 68, 0.1);
     --text-primary: #f8fafc;
-    --text-secondary: #94a3b8;
-    --text-muted: #64748b;
-    --border-color: rgba(255, 255, 255, 0.08);
-    --border-color-active: rgba(139, 92, 246, 0.4);
+    --text-secondary: #cbd5e1; /* Increased contrast (Slate 300) */
+    --text-muted: #94a3b8; /* Increased contrast (Slate 400) */
+    --border-color: rgba(255, 255, 255, 0.1); /* Slightly crisper border */
+    --border-color-active: rgba(139, 92, 246, 0.5);
     
     --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.15);
     --shadow-md: 0 8px 30px rgba(0, 0, 0, 0.3);
@@ -25,6 +27,69 @@
     --radius-md: 16px;
     --radius-lg: 24px;
     --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --calendar-indicator-invert: 1;
+}
+
+/* Theme 2: Clean Light (Fundo Branco) */
+body.theme-light {
+    --bg-dark: #f1f5f9; /* Darker slate background to make white cards pop */
+    --bg-surface: rgba(255, 255, 255, 0.8); /* Higher opacity for better readability */
+    --bg-surface-solid: #ffffff;
+    --bg-surface-hover: rgba(241, 245, 249, 0.95);
+    --primary: #1d4ed8; /* Stronger blue */
+    --primary-gradient: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+    --primary-light: rgba(29, 78, 216, 0.08);
+    --text-primary: #0f172a; /* Deep Slate 900 */
+    --text-secondary: #334155; /* High contrast Slate 700 */
+    --text-muted: #57606f; /* Clear Slate 600 for completed tasks */
+    --border-color: rgba(15, 23, 42, 0.12); /* Crisp border outline */
+    --border-color-active: rgba(29, 78, 216, 0.4);
+    --shadow-md: 0 10px 30px rgba(15, 23, 42, 0.08);
+    --calendar-indicator-invert: 0;
+}
+body.theme-light .progress-ring-circle {
+    stroke: #1d4ed8;
+}
+
+/* Theme 3: Girly Pink (Feminino / Namorada) */
+body.theme-girly {
+    --bg-dark: #fff1f2; /* Rose 50 background for card contrast */
+    --bg-surface: rgba(255, 255, 255, 0.85);
+    --bg-surface-solid: #ffffff;
+    --bg-surface-hover: rgba(255, 241, 242, 0.95);
+    --primary: #db2777; /* Deep Pink */
+    --primary-gradient: linear-gradient(135deg, #f472b6 0%, #db2777 100%);
+    --primary-light: rgba(219, 39, 119, 0.08);
+    --text-primary: #4c0519; /* Deep Crimson/Rose 950 */
+    --text-secondary: #881337; /* Rose 900 */
+    --text-muted: #9f1239; /* Rose 800 for completed tasks visibility */
+    --border-color: rgba(219, 39, 119, 0.15); /* Crisper pink border */
+    --border-color-active: rgba(219, 39, 119, 0.45);
+    --shadow-md: 0 10px 30px rgba(219, 39, 119, 0.08);
+    --calendar-indicator-invert: 0;
+}
+body.theme-girly .progress-ring-circle {
+    stroke: #db2777;
+}
+
+/* Adjustments for progress ring bg and empty states across themes */
+.progress-ring-bg {
+    stroke: var(--border-color) !important;
+}
+.empty-state-icon {
+    color: var(--border-color) !important;
+}
+.category-chip {
+    background: rgba(128, 128, 128, 0.06) !important;
+}
+
+@media (min-width: 481px) {
+    body.theme-light {
+        background-color: #e2e8f0 !important;
+    }
+    body.theme-girly {
+        background-color: #ffe4e6 !important;
+    }
 }
 
 * {
@@ -81,6 +146,12 @@ body {
     background: var(--primary-gradient);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
+    cursor: pointer;
+    transition: opacity 0.2s ease;
+}
+
+.organization-tag:hover {
+    opacity: 0.8;
 }
 
 .app-header h1 {
@@ -250,9 +321,13 @@ body {
     display: flex;
     gap: 8px;
     overflow-x: auto;
+    padding-top: 8px;
+    margin-top: -8px;
     padding-bottom: 8px;
     margin-bottom: 20px;
     scrollbar-width: none; /* Hide scrollbar Firefox */
+    position: relative;
+    z-index: 10;
 }
 
 .categories-bar::-webkit-scrollbar {
@@ -273,6 +348,8 @@ body {
     font-weight: 600;
     cursor: pointer;
     transition: var(--transition-smooth);
+    position: relative;
+    z-index: 1;
 }
 
 .category-chip:active {
@@ -464,8 +541,8 @@ body {
 
 /* Completed State */
 .task-item.completed {
-    border-color: rgba(16, 185, 129, 0.2);
-    background: rgba(16, 185, 129, 0.03);
+    border-color: rgba(16, 185, 129, 0.2) !important;
+    background: var(--success-light) !important;
 }
 
 .task-item.completed .task-checkbox {
@@ -844,13 +921,17 @@ body {
     cursor: default;
 }
 
+.app-container.history-mode.edit-mode-active .task-item {
+    opacity: 1;
+    cursor: initial;
+}
+
 .app-container.history-mode .task-item:active {
     transform: none;
     background: var(--bg-surface);
 }
 
-.app-container.history-mode .btn-secondary,
-.app-container.history-mode #btn-toggle-edit {
+.app-container.history-mode .btn-secondary {
     opacity: 0.5;
     pointer-events: none;
 }
@@ -884,4 +965,387 @@ body {
         border: 1px solid var(--border-color);
         max-width: 420px;
     }
+}
+
+#input-new-category:focus {
+    border-color: var(--primary);
+    background: rgba(139, 92, 246, 0.05);
+    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
+}
+
+.btn-delete-cat:hover {
+    color: var(--danger) !important;
+    background: var(--danger-light) !important;
+}
+
+/* Custom Calendar Picker Styles */
+.calendar-day {
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 0.88rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition-smooth);
+    position: relative;
+    user-select: none;
+}
+
+.calendar-day:hover:not(.selected) {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.calendar-day:active:not(.selected) {
+    transform: scale(0.95);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.calendar-day.today {
+    border: 1px solid var(--primary);
+    color: var(--primary);
+}
+
+.calendar-day.selected {
+    background: var(--primary-gradient) !important;
+    color: #ffffff !important;
+    font-weight: 700;
+    box-shadow: 0 4px 14px rgba(139, 92, 246, 0.4);
+}
+
+.calendar-day.other-month {
+    color: var(--text-muted);
+    opacity: 0.25;
+}
+
+/* Deletion & Confetti Animations */
+.task-item.deleting {
+    transform: translateX(100%) scale(0.85) !important;
+    opacity: 0 !important;
+    filter: blur(8px) !important;
+    height: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    border-width: 0 !important;
+    pointer-events: none !important;
+    overflow: hidden;
+}
+
+.confetti-particle {
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 1000;
+    animation: confetti-burst 0.7s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+@keyframes confetti-burst {
+    0% {
+        transform: translate(0, 0) scale(1);
+        opacity: 1;
+    }
+    100% {
+        transform: translate(var(--tx), var(--ty)) scale(0);
+        opacity: 0;
+    }
+}
+
+.task-item.completed .task-checkbox {
+    animation: checkbox-pop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes checkbox-pop {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.35); }
+    100% { transform: scale(1); }
+}
+
+/* Custom chevron for select inputs */
+select, .form-group select {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%2394a3b8' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3E%3C/svg%3E") !important;
+    background-position: right 14px center !important;
+    background-repeat: no-repeat !important;
+    background-size: 1.25rem !important;
+    padding-right: 40px !important;
+}
+
+/* Hover/active micro-animations for all buttons, chips and triggers */
+button, 
+.btn, 
+.icon-button, 
+.category-chip, 
+.modal-close, 
+.date-picker-wrapper,
+.btn-task-action,
+.calendar-day {
+    transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.2s, box-shadow 0.2s, opacity 0.2s !important;
+}
+
+button:hover:not(:disabled), 
+.btn:hover:not(:disabled), 
+.icon-button:hover, 
+.category-chip:hover:not(.active), 
+.modal-close:hover, 
+.date-picker-wrapper:hover,
+.btn-task-action:hover,
+.calendar-day:hover:not(.selected):not(.other-month) {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2) !important;
+}
+
+button:active:not(:disabled), 
+.btn:active:not(:disabled), 
+.icon-button:active, 
+.category-chip:active, 
+.modal-close:active, 
+.date-picker-wrapper:active,
+.btn-task-action:active,
+.calendar-day:active:not(.selected) {
+    transform: translateY(1px) scale(0.96) !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+}
+
+/* Input Fields Visual Identity and Glow */
+input[type="text"], 
+input[type="password"], 
+input[type="date"], 
+select,
+.form-group input,
+.form-group select {
+    font-family: 'Plus Jakarta Sans', sans-serif !important;
+    background: rgba(255, 255, 255, 0.03) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--text-primary) !important;
+    outline: none !important;
+    transition: border-color 0.25s ease, box-shadow 0.25s ease, background-color 0.25s ease !important;
+}
+
+input[type="text"]:focus, 
+input[type="password"]:focus, 
+input[type="date"]:focus, 
+select:focus,
+.form-group input:focus,
+.form-group select:focus {
+    border-color: var(--primary) !important;
+    background: rgba(139, 92, 246, 0.05) !important;
+    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.2), 0 4px 12px rgba(139, 92, 246, 0.1) !important;
+}
+
+/* Calendar Date Picker Native Icon color matching theme */
+input[type="date"]::-webkit-calendar-picker-indicator {
+    filter: invert(var(--calendar-indicator-invert, 1)) !important;
+    cursor: pointer;
+}
+
+/* Light Theme Inputs contrast enhancement */
+body.theme-light input[type="text"], 
+body.theme-light input[type="password"], 
+body.theme-light input[type="date"], 
+body.theme-light select,
+body.theme-light .form-group input,
+body.theme-light .form-group select {
+    background: rgba(15, 23, 42, 0.03) !important;
+    border: 1px solid rgba(15, 23, 42, 0.15) !important;
+    color: #0f172a !important;
+}
+
+body.theme-light input[type="text"]:focus, 
+body.theme-light input[type="password"]:focus, 
+body.theme-light input[type="date"]:focus, 
+body.theme-light select:focus {
+    background: rgba(29, 78, 216, 0.04) !important;
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.15) !important;
+}
+
+/* Girly Theme Inputs contrast enhancement (Feminine) */
+body.theme-girly input[type="text"], 
+body.theme-girly input[type="password"], 
+body.theme-girly input[type="date"], 
+body.theme-girly select,
+body.theme-girly .form-group input,
+body.theme-girly .form-group select {
+    background: rgba(219, 39, 119, 0.03) !important;
+    border: 1px solid rgba(219, 39, 119, 0.22) !important;
+    color: #4c0519 !important;
+}
+
+body.theme-girly input[type="text"]:focus, 
+body.theme-girly input[type="password"]:focus, 
+body.theme-girly input[type="date"]:focus, 
+body.theme-girly select:focus {
+    background: rgba(219, 39, 119, 0.06) !important;
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 3px rgba(219, 39, 119, 0.18) !important;
+}
+
+/* Category Drag & Drop Style indicator */
+.app-container.edit-mode-active .category-chip:not([data-category="all"]) {
+    border: 1px dashed rgba(139, 92, 246, 0.5) !important;
+    cursor: grab !important;
+    animation: chip-wiggle 0.25s ease infinite alternate;
+}
+
+.app-container.edit-mode-active .category-chip:not([data-category="all"]):active {
+    cursor: grabbing !important;
+}
+
+.category-chip.dragging {
+    opacity: 0.4 !important;
+    transform: scale(0.95) !important;
+    border: 2px dashed var(--primary) !important;
+    z-index: 100 !important;
+}
+
+.category-chip:hover {
+    z-index: 5 !important;
+}
+
+@keyframes chip-wiggle {
+    0% { transform: rotate(-0.5deg); }
+    100% { transform: rotate(0.5deg); }
+}
+
+/* Loading Spinner for buttons */
+.loading-spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: #ffffff;
+    animation: spin 0.8s ease-in-out infinite;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Auth Screen Styling */
+.auth-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background-color: var(--bg-dark);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    z-index: 9999;
+}
+
+.auth-card {
+    width: 100%;
+    max-width: 400px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 32px;
+    box-shadow: var(--shadow-md);
+    backdrop-filter: var(--blur-glass);
+    -webkit-backdrop-filter: var(--blur-glass);
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.auth-header {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+
+.auth-logo-bg {
+    width: 60px;
+    height: 60px;
+    border-radius: var(--radius-md);
+    background: var(--primary-light);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 8px;
+    border: 1px solid var(--border-color-active);
+}
+
+.auth-logo-icon {
+    width: 32px;
+    height: 32px;
+    color: var(--primary);
+}
+
+.auth-header h1 {
+    font-size: 1.6rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+}
+
+.auth-header p {
+    font-size: 0.88rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.auth-error-msg {
+    margin-top: 12px;
+    background: var(--danger-light);
+    border: 1px solid var(--danger);
+    color: #ef4444;
+    padding: 12px;
+    border-radius: var(--radius-sm);
+    font-size: 0.82rem;
+    line-height: 1.4;
+    text-align: center;
+}
+
+.auth-toggle {
+    text-align: center;
+    font-size: 0.88rem;
+    color: var(--text-secondary);
+    margin-top: 8px;
+}
+
+.btn-block {
+    width: 100%;
+}
+
+/* Auth responsive styles for inputs in theme-light / theme-girly */
+body.theme-light .auth-container input[type="email"] {
+    background: rgba(0, 0, 0, 0.02) !important;
+    border: 1px solid rgba(0, 0, 0, 0.08) !important;
+    color: #000000 !important;
+}
+
+body.theme-girly .auth-container input[type="email"] {
+    background: rgba(236, 72, 153, 0.02) !important;
+    border: 1px solid rgba(236, 72, 153, 0.12) !important;
+    color: #4c0519 !important;
+}
+
+body.theme-light .auth-container input[type="email"]:focus {
+    border-color: var(--primary) !important;
+    background: rgba(37, 99, 235, 0.04) !important;
+}
+
+body.theme-girly .auth-container input[type="email"]:focus {
+    border-color: var(--primary) !important;
+    background: rgba(219, 39, 119, 0.04) !important;
 }
