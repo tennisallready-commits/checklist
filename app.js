@@ -1325,13 +1325,18 @@ async function loadData() {
                 const [taskIdStr, dateStr] = key.split('_');
                 if (dateStr === selectedDate) {
                     const completed = queue[key];
-                    const existing = dbCompletionsToday.find(c => String(c.task_id) === taskIdStr);
-                    if (existing) {
-                        existing.completed = completed;
-                    } else if (completed) {
-                        dbCompletionsToday.push({ task_id: taskIdStr, date: selectedDate, completed: true });
+                    const existingIndex = dbCompletionsToday.findIndex(c => String(c.task_id) === taskIdStr);
+                    if (completed) {
+                        if (existingIndex !== -1) {
+                            dbCompletionsToday[existingIndex].completed = true;
+                        } else {
+                            dbCompletionsToday.push({ task_id: taskIdStr, date: selectedDate, completed: true });
+                        }
                     } else {
-                        dbCompletionsToday.push({ task_id: taskIdStr, date: selectedDate, completed: false });
+                        // Uncheck action: remove from completions if it exists
+                        if (existingIndex !== -1 && dbCompletionsToday[existingIndex].completed === true) {
+                            dbCompletionsToday.splice(existingIndex, 1);
+                        }
                     }
                 }
             });
