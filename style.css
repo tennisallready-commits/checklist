@@ -103,14 +103,18 @@ body.theme-girly .progress-ring-circle {
     font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
+html, body {
+    min-height: 100%;
+    width: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
 body {
     background-color: var(--bg-dark);
     color: var(--text-primary);
-    min-height: 100vh;
-    min-height: 100dvh;
     display: flex;
     justify-content: center;
-    overflow-x: hidden;
 }
 
 /* App Container (Centered phone-like container on desktop, full screen on mobile) */
@@ -120,19 +124,26 @@ body {
     background-color: var(--bg-dark);
     display: flex;
     flex-direction: column;
-    padding: 24px 20px 0 20px;
+    padding: 24px 20px 24px 20px;
     position: relative;
-    height: 100vh;
-    height: 100dvh;
-    overflow: hidden;
+    min-height: 100vh;
+    min-height: 100dvh;
+    height: auto;
+    overflow: visible;
 }
 
-/* Header Styles */
+/* Header Styles (Sticky header on scroll) */
 .app-header {
+    position: sticky;
+    top: 0;
+    background-color: var(--bg-dark);
+    padding-top: 4px;
+    padding-bottom: 12px;
+    margin-bottom: 24px;
+    z-index: 100;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 24px;
 }
 
 .header-info {
@@ -319,8 +330,11 @@ body {
     transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Categories Filter Bar */
+/* Categories Filter Bar (Sticky below the sticky header) */
 .categories-bar {
+    position: sticky;
+    top: 76px; /* Abaixo do cabeçalho */
+    background-color: var(--bg-dark);
     display: flex;
     gap: 8px;
     overflow-x: auto;
@@ -333,8 +347,7 @@ body {
     margin-right: -8px;
     margin-bottom: 20px;
     scrollbar-width: none; /* Hide scrollbar Firefox */
-    position: relative;
-    z-index: 10;
+    z-index: 99;
 }
 
 .categories-bar::-webkit-scrollbar {
@@ -380,9 +393,8 @@ body {
     display: flex;
     flex-direction: column;
     flex: 1;
-    overflow-y: auto;
-    padding-bottom: 100px; /* Espaço para o rodapé absoluto não cobrir itens */
-    scrollbar-width: none; /* Esconder barra de rolagem no Firefox */
+    overflow-y: visible; /* A rolagem agora é tratada nativamente no nível do document/body */
+    padding-bottom: 30px; /* Espaço normal para distanciamento do rodapé relativo */
 }
 .tasks-section::-webkit-scrollbar {
     display: none; /* Esconder barra de rolagem no Chrome/Safari */
@@ -532,6 +544,26 @@ body {
     background: rgba(255, 255, 255, 0.05);
 }
 
+.task-assignee-avatar {
+    font-size: 0.65rem;
+    font-weight: 800;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    background: linear-gradient(135deg, #8b5cf6 0%, #3b82f6 100%);
+    border: 1.5px solid var(--bg-surface-solid);
+    text-transform: uppercase;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.task-assignee-avatar.partner {
+    background: linear-gradient(135deg, #10b981 0%, #06b6d4 100%);
+}
+
 /* Category Specific Colors for Tags */
 .tag-abertura { color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
 .tag-operacao { color: #3b82f6; background: rgba(59, 130, 246, 0.1); }
@@ -597,18 +629,17 @@ body {
     max-width: 260px;
 }
 
-/* Bottom Footer (Absolute at the bottom of container) */
+/* Bottom Footer (Static at the bottom of container) */
 .app-footer {
-    position: absolute;
-    bottom: 0;
-    left: 0;
+    position: relative;
     width: 100%;
-    padding: 20px 20px 24px 20px;
-    background: linear-gradient(to top, var(--bg-dark) 75%, var(--bg-dark) 45%, transparent 100%);
+    padding: 20px 0 24px 0;
+    background: transparent;
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 12px;
     z-index: 10;
+    margin-top: auto;
 }
 
 /* Buttons System */
@@ -709,6 +740,28 @@ body {
     transform: translateY(100%);
     transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
     box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* Modal Top Drag Handle Indicator for Swipe-Down-To-Close */
+.modal-content::before {
+    content: '';
+    display: block;
+    width: 36px;
+    height: 5px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+    margin: -12px auto 16px auto;
+    transition: background-color 0.2s ease;
+}
+body.theme-light .modal-content::before {
+    background: rgba(0, 0, 0, 0.1);
+}
+body.theme-girly .modal-content::before {
+    background: rgba(219, 39, 119, 0.2);
+}
+
+.modal-content.modal-large {
+    max-width: 600px;
 }
 
 .modal.active .modal-content {
@@ -1022,11 +1075,16 @@ body {
 }
 
 /* Deletion & Confetti Animations */
+.task-item {
+    transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1), max-height 0.45s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.35s ease, margin 0.45s ease;
+    max-height: 200px;
+}
+
 .task-item.deleting {
-    transform: translateX(100%) scale(0.85) !important;
+    transform: translateX(100vw) rotate(8deg) scale(0.8) !important;
     opacity: 0 !important;
-    filter: blur(8px) !important;
-    height: 0 !important;
+    filter: blur(12px) !important;
+    max-height: 0 !important;
     padding-top: 0 !important;
     padding-bottom: 0 !important;
     margin-top: 0 !important;
@@ -1034,6 +1092,7 @@ body {
     border-width: 0 !important;
     pointer-events: none !important;
     overflow: hidden;
+    transition: transform 0.45s cubic-bezier(0.76, 0, 0.24, 1), max-height 0.4s cubic-bezier(0.76, 0, 0.24, 1) !important;
 }
 
 .confetti-particle {
@@ -1357,13 +1416,14 @@ body.theme-girly .auth-container input[type="email"]:focus {
 }
 
 .day-toggle {
-    width: 36px;
+    min-width: 38px;
     height: 36px;
-    border-radius: 50%;
+    padding: 0 6px;
+    border-radius: 18px;
     border: 1.5px solid var(--border-color);
     background: var(--bg-surface);
     color: var(--text-secondary);
-    font-size: 0.75rem;
+    font-size: 0.65rem;
     font-weight: 700;
     cursor: pointer;
     transition: all 0.2s ease;
@@ -1460,16 +1520,18 @@ body.theme-girly .task-item.completed .task-item-foreground {
     justify-content: center;
     cursor: pointer;
     color: #ffffff;
-    transform: translateX(55px); /* Start shifted slightly to the right */
-    transition: background-color 0.2s ease, transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+    transform: translateX(30px) scale(0.7); /* Reduzido e deslocado para o lado inicialmente */
+    opacity: 0;
+    transition: background-color 0.2s ease, transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.25s ease;
 }
 
 .task-item.swiped .swipe-action-btn {
-    transform: translateX(0); /* Slide in smoothly when swiped */
+    transform: translateX(0) scale(1); /* Efeito elástico (bounce) e zoom ao abrir */
+    opacity: 1;
 }
 
 .task-item.swiped .swipe-action-btn.delete-btn {
-    transition-delay: 0.04s; /* Staggered delays for premium iOS liquid feel */
+    transition-delay: 0.06s; /* Efeito líquido e escalonado (staggered) */
 }
 
 .swipe-action-btn.rename-btn {
@@ -1500,4 +1562,38 @@ body.theme-girly .task-item.completed .task-item-foreground {
     display: flex;
     gap: 8px;
     margin-left: auto;
+}
+
+/* Date Navigator Buttons Tactile Feedback */
+.date-navigator-section .icon-button:active {
+    transform: scale(0.9) !important;
+    background: rgba(255, 255, 255, 0.1) !important;
+}
+body.theme-light .date-navigator-section .icon-button:active {
+    background: rgba(0, 0, 0, 0.05) !important;
+}
+
+/* Swipe Action Buttons Active Tap Feedback */
+}
+
+/* Transições de Deslize de Dia (Checklist Navigation Animations) */
+.slide-out-left {
+    transform: translateX(-40px);
+    opacity: 0;
+}
+.slide-out-right {
+    transform: translateX(40px);
+    opacity: 0;
+}
+.slide-in-left {
+    transform: translateX(-40px);
+    opacity: 0;
+}
+.slide-in-right {
+    transform: translateX(40px);
+    opacity: 0;
+}
+.slide-in-active {
+    transform: translateX(0);
+    opacity: 1;
 }

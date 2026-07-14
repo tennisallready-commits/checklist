@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Checklist Diário Organizacional</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=3.2">
     
     <!-- iOS / PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -69,20 +69,34 @@
                     <span class="history-badge" id="history-badge">Histórico</span>
                 </div>
                 <h1 id="app-title">Checklist Diário</h1>
-                <div class="date-picker-wrapper" id="btn-open-calendar" style="cursor: pointer;">
-                    <span id="current-date" class="current-date">Carregando data...</span>
-                    <i data-lucide="chevron-down" class="date-chevron"></i>
-                </div>
             </div>
             <div class="header-actions">
-                <button id="btn-reset-checklist" class="icon-button" title="Reiniciar Checklist">
-                    <i data-lucide="rotate-ccw"></i>
+                <button id="btn-smart-report" class="icon-button" title="Relatório Inteligente" style="background: rgba(139, 92, 246, 0.1); color: var(--primary);">
+                    <i data-lucide="brain-circuit"></i>
+                </button>
+                <button id="btn-notifications" class="icon-button" title="Notificações" style="position: relative;">
+                    <i data-lucide="bell"></i>
+                    <span id="notifications-badge" style="position: absolute; top: 5px; right: 5px; width: 8px; height: 8px; background: #ef4444; border-radius: 50%; border: 1.5px solid var(--bg-surface-solid);"></span>
                 </button>
                 <button id="btn-manage-tasks" class="icon-button" title="Configurações">
                     <i data-lucide="settings"></i>
                 </button>
             </div>
         </header>
+
+        <!-- Date Navigator (Arrows + Date Centered & Abbreviated) -->
+        <section class="date-navigator-section" style="display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 20px; width: 100%;">
+            <button id="btn-prev-day" class="icon-button" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); color: var(--text-primary); cursor: pointer; border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; transition: var(--transition-smooth);" title="Dia Anterior">
+                <i data-lucide="chevron-left" style="width: 20px; height: 20px;"></i>
+            </button>
+            <div class="date-picker-wrapper" id="btn-open-calendar" style="cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 16px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 20px; transition: var(--transition-smooth);">
+                <span id="current-date" style="font-size: 1rem; font-weight: 800; color: var(--text-primary);">Carregando data...</span>
+                <i data-lucide="calendar" style="width: 14px; height: 14px; color: var(--text-secondary);"></i>
+            </div>
+            <button id="btn-next-day" class="icon-button" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); color: var(--text-primary); cursor: pointer; border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; transition: var(--transition-smooth);" title="Próximo Dia">
+                <i data-lucide="chevron-right" style="width: 20px; height: 20px;"></i>
+            </button>
+        </section>
 
         <!-- Progress Card -->
         <section class="progress-card-container">
@@ -184,14 +198,20 @@
                 <div class="form-group repeat-days-group" id="repeat-days-group" style="display: none;">
                     <label>Dias da semana</label>
                     <div class="repeat-days-selector">
-                        <button type="button" class="day-toggle" data-day="0">D</button>
-                        <button type="button" class="day-toggle" data-day="1">S</button>
-                        <button type="button" class="day-toggle" data-day="2">T</button>
-                        <button type="button" class="day-toggle" data-day="3">Q</button>
-                        <button type="button" class="day-toggle" data-day="4">Q</button>
-                        <button type="button" class="day-toggle" data-day="5">S</button>
-                        <button type="button" class="day-toggle" data-day="6">S</button>
+                        <button type="button" class="day-toggle" data-day="0">Dom</button>
+                        <button type="button" class="day-toggle" data-day="1">Seg</button>
+                        <button type="button" class="day-toggle" data-day="2">Ter</button>
+                        <button type="button" class="day-toggle" data-day="3">Qua</button>
+                        <button type="button" class="day-toggle" data-day="4">Qui</button>
+                        <button type="button" class="day-toggle" data-day="5">Sex</button>
+                        <button type="button" class="day-toggle" data-day="6">Sáb</button>
                     </div>
+                </div>
+                <div class="form-group" id="task-assignee-group" style="display: none; margin-top: 16px;">
+                    <label for="task-assigned-to">Atribuído a</label>
+                    <select id="task-assigned-to">
+                        <option value="">Todos (Sem atribuição)</option>
+                    </select>
                 </div>
                 <div class="form-group" style="margin-top: 16px; margin-bottom: 24px;">
                     <label for="task-date">Data da Tarefa</label>
@@ -315,14 +335,20 @@
                 <div class="form-group" id="edit-repeat-days-group" style="display: none;">
                     <label>Dias da semana</label>
                     <div class="repeat-days-selector" id="edit-repeat-days-selector">
-                        <button type="button" class="day-toggle edit-day-toggle" data-day="0">D</button>
-                        <button type="button" class="day-toggle edit-day-toggle" data-day="1">S</button>
-                        <button type="button" class="day-toggle edit-day-toggle" data-day="2">T</button>
-                        <button type="button" class="day-toggle edit-day-toggle" data-day="3">Q</button>
-                        <button type="button" class="day-toggle edit-day-toggle" data-day="4">Q</button>
-                        <button type="button" class="day-toggle edit-day-toggle" data-day="5">S</button>
-                        <button type="button" class="day-toggle edit-day-toggle" data-day="6">S</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="0">Dom</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="1">Seg</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="2">Ter</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="3">Qua</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="4">Qui</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="5">Sex</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="6">Sáb</button>
                     </div>
+                </div>
+                <div class="form-group" id="edit-task-assignee-group" style="display: none; margin-top: 16px;">
+                    <label for="edit-task-assigned-to">Atribuído a</label>
+                    <select id="edit-task-assigned-to">
+                        <option value="">Todos (Sem atribuição)</option>
+                    </select>
                 </div>
                 <div class="form-group" style="margin-top: 16px; margin-bottom: 24px;">
                     <label for="edit-task-date">Data da Tarefa</label>
@@ -333,6 +359,170 @@
         </div>
     </div>
 
-    <script src="app.js"></script>
+    <!-- Modal: Smart Report -->
+    <div id="modal-smart-report" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content modal-large" style="padding: 24px;">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="background: rgba(139, 92, 246, 0.1); color: var(--primary); padding: 8px; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+                        <i data-lucide="brain-circuit"></i>
+                    </div>
+                    <div>
+                        <h3 id="smart-report-modal-title" style="margin: 0; font-size: 1.15rem; font-weight: 800;">Relatório Inteligente</h3>
+                        <p style="margin: 0; font-size: 0.75rem; color: var(--text-secondary);">Análise automática de rotinas e tarefas concluídas</p>
+                    </div>
+                </div>
+                <button id="btn-close-smart-report-modal" class="icon-button" style="padding: 6px;"><i data-lucide="x"></i></button>
+            </div>
+
+            <!-- Tabs selector for report periods -->
+            <div class="report-tabs-bar" style="display: flex; gap: 8px; border-bottom: 1px solid var(--border-color); padding: 12px 0;">
+                <button id="tab-report-weekly" class="category-chip active" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 12px;">Semanal</button>
+                <button id="tab-report-monthly" class="category-chip" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 12px;">Mensal</button>
+                <button id="tab-report-yearly" class="category-chip" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 12px;">Anual</button>
+            </div>
+
+            <div class="modal-body" style="padding-top: 20px; max-height: 60vh; overflow-y: auto;">
+                <!-- Summary Card -->
+                <div style="background: rgba(139, 92, 246, 0.04); padding: 20px; border-radius: 12px; border: 1px dashed rgba(139, 92, 246, 0.25); margin-bottom: 16px;">
+                    <h4 id="report-summary-title" style="margin: 0 0 12px 0; font-size: 0.88rem; font-weight: 800; text-transform: uppercase; color: var(--primary); letter-spacing: 0.05em; display: flex; align-items: center; gap: 6px;">
+                        <i data-lucide="sparkles" style="width: 16px; height: 16px;"></i>
+                        Resumo Semanal
+                    </h4>
+                    <div id="report-summary-content" style="font-size: 0.9rem; color: var(--text-primary); line-height: 1.6;">
+                        Carregando resumo...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Notifications -->
+    <div id="modal-notifications" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content" style="max-width: 380px; padding: 24px;">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="background: rgba(59, 130, 246, 0.1); color: #3b82f6; padding: 8px; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+                        <i data-lucide="bell" style="color: #3b82f6;"></i>
+                    </div>
+                    <div>
+                        <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800;">Central de Notificações</h3>
+                        <p style="margin: 0; font-size: 0.75rem; color: var(--text-secondary);">Lembretes e avisos do sistema</p>
+                    </div>
+                </div>
+                <button id="btn-close-notifications-modal" class="icon-button" style="padding: 6px;"><i data-lucide="x"></i></button>
+            </div>
+            
+            <div class="modal-body" id="notifications-list-container" style="padding-top: 16px; max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px;">
+                <!-- Notification Item 1 -->
+                <div style="display: flex; gap: 12px; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px;">
+                    <div style="background: rgba(16, 185, 129, 0.1); color: #10b981; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                        <i data-lucide="check-circle" style="width: 18px; height: 18px; color: #10b981;"></i>
+                    </div>
+                    <div>
+                        <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">Sincronização Ativa</h4>
+                        <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">Seu checklist está sincronizado com segurança na nuvem do Supabase.</p>
+                    </div>
+                </div>
+
+                <!-- Notification Item 2 -->
+                <div style="display: flex; gap: 12px; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px;">
+                    <div style="background: rgba(139, 92, 246, 0.1); color: var(--primary); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                        <i data-lucide="brain-circuit" style="width: 18px; height: 18px; color: var(--primary);"></i>
+                    </div>
+                    <div>
+                        <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">Dica de Produtividade</h4>
+                        <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">Tente completar primeiro as tarefas mais pesadas da manhã para ativar o efeito Momentum.</p>
+                    </div>
+                </div>
+
+                <!-- Notification Item 3 -->
+                <div style="display: flex; gap: 12px; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px;">
+                    <div style="background: rgba(59, 130, 246, 0.1); color: #3b82f6; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                        <i data-lucide="sparkles" style="width: 18px; height: 18px; color: #3b82f6;"></i>
+                    </div>
+                    <div>
+                        <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">Gestos de Deslizar</h4>
+                        <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">Agora você pode fechar qualquer janela do app deslizando-a para baixo! Experimente!</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Collaborators -->
+    <div id="modal-collaborators" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content" style="max-width: 380px; padding: 24px;">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="background: rgba(139, 92, 246, 0.1); color: var(--primary); padding: 8px; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+                        <i data-lucide="users" style="color: var(--primary);"></i>
+                    </div>
+                    <div>
+                        <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800;">Colaboradores da Guia</h3>
+                        <p style="margin: 0; font-size: 0.75rem; color: var(--text-secondary);" id="collab-modal-subtitle">Compartilhe esta guia com outros e-mails</p>
+                    </div>
+                </div>
+                <button id="btn-close-collaborators-modal" class="icon-button" style="padding: 6px;"><i data-lucide="x"></i></button>
+            </div>
+            
+            <div class="modal-body" style="padding-top: 20px;">
+                <input type="hidden" id="collab-category-id">
+                
+                <!-- Invite Form -->
+                <div id="collab-invite-section">
+                    <label style="display:block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); margin-bottom:8px;">Convidar Colaborador</label>
+                    <div style="display: flex; gap: 8px; margin-bottom: 20px;">
+                        <input type="email" id="input-collab-email" placeholder="email@exemplo.com" autocomplete="off" style="flex: 1; padding: 12px 14px;">
+                        <button id="btn-add-collab" class="btn btn-primary" style="padding: 10px 16px; font-weight: 700;">Convidar</button>
+                    </div>
+                </div>
+
+                <!-- Current Collaborators list -->
+                <div>
+                    <label style="display:block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); margin-bottom:8px;">Quem participa desta guia</label>
+                    <div class="manage-list" id="collaborators-list" style="max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin;">
+                        <!-- Dynamic items go here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Custom Delete Confirmation -->
+    <div id="modal-confirm-delete" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content" style="max-width: 360px; text-align: center; padding: 24px;">
+            <div style="display: flex; flex-direction: column; align-items: center; width: 100%;">
+                <div style="background: rgba(239, 68, 68, 0.1); color: #ef4444; width: 56px; height: 56px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 16px;">
+                    <i data-lucide="trash-2" style="width: 28px; height: 28px;"></i>
+                </div>
+                <h3 id="confirm-delete-title" style="margin: 0 0 8px 0; font-size: 1.25rem; font-weight: 800; color: var(--text-primary);">Excluir Tarefa</h3>
+                <p id="confirm-delete-body" style="margin: 0 0 24px 0; font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5; max-width: 280px;">Deseja realmente excluir esta tarefa?</p>
+                
+                <!-- Standard Actions (Non-recurring tasks) -->
+                <div id="confirm-delete-standard-actions" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; width: 100%;">
+                    <button id="btn-confirm-delete-cancel" class="btn btn-secondary" style="padding: 12px; font-weight: 700;">Não</button>
+                    <button id="btn-confirm-delete-ok" class="btn" style="background: #ef4444; color: white; padding: 12px; border-radius: var(--radius-md); font-weight: 700; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                        <i data-lucide="trash-2" style="width: 16px; height: 16px;"></i> Sim
+                    </button>
+                </div>
+
+                <!-- Recurring Actions (Recurring tasks) -->
+                <div id="confirm-delete-recurring-actions" class="hidden" style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
+                    <button id="btn-confirm-delete-recurring-today" class="btn btn-secondary" style="padding: 12px; font-weight: 700; width: 100%; border: 1px solid var(--border-color);">Excluir Apenas Hoje</button>
+                    <button id="btn-confirm-delete-recurring-all" class="btn" style="background: #ef4444; color: white; padding: 12px; border-radius: var(--radius-md); font-weight: 700; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%;">
+                        <i data-lucide="trash-2" style="width: 16px; height: 16px;"></i> Excluir de Todos os Dias
+                    </button>
+                    <button id="btn-confirm-delete-recurring-cancel" class="btn btn-secondary" style="padding: 8px; border: none; background: transparent; color: var(--text-secondary); width: 100%; cursor: pointer;">Cancelar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=3.2"></script>
 </body>
 </html>

@@ -12,6 +12,7 @@ const DEFAULT_TASKS = [];
 
 // App State
 let tasks = [];
+let allActiveTasks = [];
 let categories = [];
 let currentFilter = "all";
 let isEditMode = false;
@@ -43,6 +44,8 @@ const progressRingWrapper = document.querySelector(".progress-ring-wrapper");
 const progressBarFill = document.getElementById("progress-bar-fill");
 const currentDateEl = document.getElementById("current-date");
 const btnOpenCalendar = document.getElementById("btn-open-calendar");
+const btnPrevDay = document.getElementById("btn-prev-day");
+const btnNextDay = document.getElementById("btn-next-day");
 const orgTagEl = document.getElementById("org-tag");
 const appContainer = document.querySelector(".app-container");
 
@@ -50,18 +53,55 @@ const appContainer = document.querySelector(".app-container");
 const modalAddTask = document.getElementById("modal-add-task");
 const modalManageTasks = document.getElementById("modal-manage-tasks");
 const modalCalendar = document.getElementById("modal-calendar");
+const modalSmartReport = document.getElementById("modal-smart-report");
+const modalConfirmDelete = document.getElementById("modal-confirm-delete");
+const btnSmartReport = document.getElementById("btn-smart-report");
+const btnCloseSmartReportModal = document.getElementById("btn-close-smart-report-modal");
+
+// Custom Delete Confirmation Elements
+const confirmDeleteTitle = document.getElementById("confirm-delete-title");
+const confirmDeleteBody = document.getElementById("confirm-delete-body");
+const confirmDeleteStandardActions = document.getElementById("confirm-delete-standard-actions");
+const confirmDeleteRecurringActions = document.getElementById("confirm-delete-recurring-actions");
+const btnConfirmDeleteCancel = document.getElementById("btn-confirm-delete-cancel");
+const btnConfirmDeleteOk = document.getElementById("btn-confirm-delete-ok");
+const btnConfirmDeleteRecurringToday = document.getElementById("btn-confirm-delete-recurring-today");
+const btnConfirmDeleteRecurringAll = document.getElementById("btn-confirm-delete-recurring-all");
+const btnConfirmDeleteRecurringCancel = document.getElementById("btn-confirm-delete-recurring-cancel");
+// Collaborators Modal Elements
+const modalCollaborators = document.getElementById("modal-collaborators");
+const btnCloseCollaboratorsModal = document.getElementById("btn-close-collaborators-modal");
+const btnAddCollab = document.getElementById("btn-add-collab");
+const inputCollabEmail = document.getElementById("input-collab-email");
+const collabCategoryId = document.getElementById("collab-category-id");
+const collaboratorsList = document.getElementById("collaborators-list");
+const collabModalSubtitle = document.getElementById("collab-modal-subtitle");
+let confirmDeleteCallback = null;
+let switchReportTab = null;
+let categoryShares = [];
+let pendingInvites = [];
 
 // Forms & Inputs
 const formAddTask = document.getElementById("form-add-task");
 const inputTaskTitle = document.getElementById("task-title");
 const selectTaskCategory = document.getElementById("task-category");
 const selectTaskRecurring = document.getElementById("task-recurring");
+const selectTaskAssignedTo = document.getElementById("task-assigned-to");
+const taskAssigneeGroup = document.getElementById("task-assignee-group");
+
+const modalEditTask = document.getElementById("modal-edit-task");
+const selectEditTaskAssignedTo = document.getElementById("edit-task-assigned-to");
+const editTaskAssigneeGroup = document.getElementById("edit-task-assignee-group");
 
 const inputOrgName = document.getElementById("input-org-name");
 const inputNewCategory = document.getElementById("input-new-category");
 
 // Action Buttons
-const btnResetChecklist = document.getElementById("btn-reset-checklist");
+const btnNotifications = document.getElementById("btn-notifications");
+const modalNotifications = document.getElementById("modal-notifications");
+const btnCloseNotificationsModal = document.getElementById("btn-close-notifications-modal");
+const notificationsListContainer = document.getElementById("notifications-list-container");
+const notificationsBadge = document.getElementById("notifications-badge");
 const btnToggleEdit = document.getElementById("btn-toggle-edit");
 const btnManageTasks = document.getElementById("btn-manage-tasks");
 const btnAddTaskModal = document.getElementById("btn-add-task-modal");
@@ -123,12 +163,61 @@ async function initApp() {
 
     // Initialize Lucide Icons
     lucide.createIcons();
+
+    // Check notifications badge read status
+    if (localStorage.getItem("notifications_badge_read") === "true") {
+        if (notificationsBadge) notificationsBadge.style.display = "none";
+    }
 }
 
 // ----------------------------------------------------
 // Event Listeners Setup
 // ----------------------------------------------------
 function setupEventListeners() {
+    // Smart Report Modal Events
+    // Smart Report Tab Switcher and Listeners
+    const tabWeekly = document.getElementById("tab-report-weekly");
+    const tabMonthly = document.getElementById("tab-report-monthly");
+    const tabYearly = document.getElementById("tab-report-yearly");
+    const reportSummaryTitle = document.getElementById("report-summary-title");
+    const reportSummaryContent = document.getElementById("report-summary-content");
+
+    switchReportTab = (days) => {
+        [tabWeekly, tabMonthly, tabYearly].forEach(tab => {
+            if (tab) tab.classList.remove("active");
+        });
+        
+        if (days === 7) {
+            if (tabWeekly) tabWeekly.classList.add("active");
+            if (reportSummaryTitle) reportSummaryTitle.innerHTML = `<i data-lucide="sparkles" style="width: 16px; height: 16px;"></i> Resumo Semanal`;
+            loadAndRenderReport(7, reportSummaryContent);
+        } else if (days === 30) {
+            if (tabMonthly) tabMonthly.classList.add("active");
+            if (reportSummaryTitle) reportSummaryTitle.innerHTML = `<i data-lucide="sparkles" style="width: 16px; height: 16px;"></i> Resumo Mensal`;
+            loadAndRenderReport(30, reportSummaryContent);
+        } else if (days === 365) {
+            if (tabYearly) tabYearly.classList.add("active");
+            if (reportSummaryTitle) reportSummaryTitle.innerHTML = `<i data-lucide="sparkles" style="width: 16px; height: 16px;"></i> Resumo Anual`;
+            loadAndRenderReport(365, reportSummaryContent);
+        }
+    };
+
+    if (tabWeekly) tabWeekly.addEventListener("click", () => switchReportTab(7));
+    if (tabMonthly) tabMonthly.addEventListener("click", () => switchReportTab(30));
+    if (tabYearly) tabYearly.addEventListener("click", () => switchReportTab(365));
+
+    if (btnSmartReport) {
+        btnSmartReport.addEventListener("click", () => {
+            switchReportTab(7); // default to weekly summary
+            openModal(modalSmartReport);
+        });
+    }
+    if (btnCloseSmartReportModal) {
+        btnCloseSmartReportModal.addEventListener("click", () => {
+            closeModal(modalSmartReport);
+        });
+    }
+
     // Custom Calendar Modal Events
     btnOpenCalendar.addEventListener("click", () => {
         // Initialize calendar view to the currently selected date
@@ -150,6 +239,164 @@ function setupEventListeners() {
         currentCalendarMonth.setMonth(currentCalendarMonth.getMonth() + 1);
         renderCalendarGrid();
     });
+
+    // Date Navigation Arrows (Chevron-left/right)
+    async function changeDay(offset) {
+        const outClass = offset > 0 ? "slide-out-left" : "slide-out-right";
+        const inClass = offset > 0 ? "slide-in-right" : "slide-in-left";
+        
+        // Aplica transição de saída
+        tasksListEl.style.transition = "transform 0.15s ease-in, opacity 0.15s ease-in";
+        tasksListEl.classList.add(outClass);
+
+        await new Promise(resolve => setTimeout(resolve, 150));
+
+        const dateObj = new Date(selectedDate + "T12:00:00");
+        dateObj.setDate(dateObj.getDate() + offset);
+        
+        selectedDate = getLocalDateString(dateObj);
+        
+        const now = new Date();
+        const todayStr = getLocalDateString(now);
+        isHistoryMode = (selectedDate !== todayStr);
+        
+        if (isHistoryMode) {
+            appContainer.classList.add("history-mode");
+            toggleEditMode(false);
+        } else {
+            appContainer.classList.remove("history-mode");
+        }
+
+        updateDateDisplay();
+        await loadChecklistAndProgress();
+        lucide.createIcons();
+
+        // Configura posição de início da entrada
+        tasksListEl.style.transition = "none";
+        tasksListEl.classList.remove(outClass);
+        tasksListEl.classList.add(inClass);
+
+        // Força reflow para aplicar o estado sem transição
+        tasksListEl.offsetHeight;
+
+        // Ativa transição de entrada
+        tasksListEl.style.transition = "transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1)";
+        tasksListEl.classList.remove(inClass);
+        tasksListEl.classList.add("slide-in-active");
+
+        setTimeout(() => {
+            tasksListEl.classList.remove("slide-in-active");
+            tasksListEl.style.transition = "";
+        }, 220);
+    }
+
+    if (btnPrevDay) {
+        btnPrevDay.addEventListener("click", () => changeDay(-1));
+    }
+    if (btnNextDay) {
+        btnNextDay.addEventListener("click", () => changeDay(1));
+    }
+
+    // Navegação por deslize nas bordas da barra de progresso
+    const progressCard = document.querySelector(".progress-card-container");
+    if (progressCard) {
+        let touchStartX = 0;
+        let touchEndX = 0;
+        let startedOnEdge = false;
+        let edgeType = ""; // "left" ou "right"
+
+        progressCard.addEventListener("touchstart", (e) => {
+            touchStartX = e.touches[0].clientX;
+            touchEndX = touchStartX;
+            const width = window.innerWidth;
+            const threshold = 100;
+
+            if (touchStartX < threshold) {
+                startedOnEdge = true;
+                edgeType = "left";
+            } else if (touchStartX > width - threshold) {
+                startedOnEdge = true;
+                edgeType = "right";
+            } else {
+                startedOnEdge = false;
+                edgeType = "";
+            }
+
+            if (startedOnEdge) {
+                progressCard.style.transition = "none";
+            }
+        }, { passive: true });
+
+        progressCard.addEventListener("touchmove", (e) => {
+            if (!startedOnEdge) return;
+            touchEndX = e.touches[0].clientX;
+            const diffX = touchEndX - touchStartX;
+
+            // Restringe a direção do arraste visual de acordo com o lado iniciado
+            let dragX = diffX;
+            if (edgeType === "left" && dragX < 0) dragX = 0;
+            if (edgeType === "right" && dragX > 0) dragX = 0;
+
+            progressCard.style.transform = `translateX(${dragX}px)`;
+            
+            if (e.cancelable) {
+                e.preventDefault();
+            }
+        }, { passive: false });
+
+        progressCard.addEventListener("touchend", () => {
+            if (!startedOnEdge) return;
+
+            const diffX = touchEndX - touchStartX;
+            const minSwipeDistance = 40; 
+            let triggered = false;
+
+            if (edgeType === "left" && diffX > minSwipeDistance) {
+                triggered = true;
+                // Anima o card saindo para a direita
+                progressCard.style.transition = "transform 0.15s ease-out, opacity 0.15s ease-out";
+                progressCard.style.transform = "translateX(100vw)";
+                progressCard.style.opacity = "0";
+
+                setTimeout(async () => {
+                    await changeDay(-1);
+                    // Reposiciona na esquerda e entra
+                    progressCard.style.transition = "none";
+                    progressCard.style.transform = "translateX(-100vw)";
+                    progressCard.offsetHeight; // Força reflow
+                    progressCard.style.transition = "transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1)";
+                    progressCard.style.transform = "translateX(0)";
+                    progressCard.style.opacity = "1";
+                }, 150);
+            } else if (edgeType === "right" && diffX < -minSwipeDistance) {
+                triggered = true;
+                // Anima o card saindo para a esquerda
+                progressCard.style.transition = "transform 0.15s ease-out, opacity 0.15s ease-out";
+                progressCard.style.transform = "translateX(-100vw)";
+                progressCard.style.opacity = "0";
+
+                setTimeout(async () => {
+                    await changeDay(1);
+                    // Reposiciona na direita e entra
+                    progressCard.style.transition = "none";
+                    progressCard.style.transform = "translateX(100vw)";
+                    progressCard.offsetHeight; // Força reflow
+                    progressCard.style.transition = "transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1)";
+                    progressCard.style.transform = "translateX(0)";
+                    progressCard.style.opacity = "1";
+                }, 150);
+            }
+
+            if (!triggered) {
+                // Caso não tenha arrastado o suficiente, retorna de forma suave à posição original
+                progressCard.style.transition = "transform 0.22s cubic-bezier(0.16, 1, 0.3, 1)";
+                progressCard.style.transform = "translateX(0)";
+            }
+
+            startedOnEdge = false;
+            edgeType = "";
+        });
+    }
 
     // Toggle Task Complete (using event delegation)
     tasksListEl.addEventListener("click", (e) => {
@@ -261,6 +508,9 @@ function setupEventListeners() {
             selectTaskCategory.value = categories[0].name;
         }
 
+        // Atualiza as opções de atribuição com base no local selecionado
+        updateTaskAssigneeDropdown(selectTaskCategory.value, selectTaskAssignedTo, taskAssigneeGroup);
+
         // Pré-definir a data da tarefa com a data atualmente selecionada no calendário
         const taskDateInput = document.getElementById("task-date");
         if (taskDateInput) {
@@ -270,6 +520,12 @@ function setupEventListeners() {
         openModal(modalAddTask);
     });
     btnCloseAddModal.addEventListener("click", () => closeModal(modalAddTask));
+
+    if (selectTaskCategory) {
+        selectTaskCategory.addEventListener("change", () => {
+            updateTaskAssigneeDropdown(selectTaskCategory.value, selectTaskAssignedTo, taskAssigneeGroup);
+        });
+    }
 
     // Form Add Task Submit
     // Toggle repeat days visibility
@@ -282,8 +538,8 @@ function setupEventListeners() {
         }
     });
 
-    // Day toggle buttons
-    document.querySelectorAll(".day-toggle").forEach(btn => {
+    // Day toggle buttons (only for the Add Task modal)
+    document.querySelectorAll("#repeat-days-group .day-toggle").forEach(btn => {
         btn.addEventListener("click", () => {
             btn.classList.toggle("active");
         });
@@ -315,7 +571,8 @@ function setupEventListeners() {
         }
 
         try {
-            await addTask(inputTaskTitle.value.trim(), selectTaskCategory.value, selectTaskRecurring.value, taskDate, repeatDays);
+            const assignedTo = selectTaskAssignedTo ? selectTaskAssignedTo.value : null;
+            await addTask(inputTaskTitle.value.trim(), selectTaskCategory.value, selectTaskRecurring.value, taskDate, repeatDays, assignedTo);
             inputTaskTitle.value = "";
             // Reset day toggles
             document.querySelectorAll("#repeat-days-group .day-toggle").forEach(b => b.classList.remove("active"));
@@ -370,10 +627,13 @@ function setupEventListeners() {
 
         const createdAt = newDate ? new Date(newDate + "T12:00:00").toISOString() : undefined;
 
+        const assignedTo = selectEditTaskAssignedTo ? selectEditTaskAssignedTo.value : null;
+
         const updates = {
             title: newTitle,
             is_recurring: isRecurring,
-            repeat_days: repeatDays
+            repeat_days: repeatDays,
+            assigned_to: assignedTo || null
         };
         if (createdAt) updates.created_at = createdAt;
 
@@ -383,16 +643,23 @@ function setupEventListeners() {
         closeModal(modalEditTask);
     });
 
-    // Reset Today's Checklist Progress
-    btnResetChecklist.addEventListener("click", async () => {
-        if (isHistoryMode) {
-            alert("Não é possível reiniciar o histórico.");
-            return;
-        }
-        if (confirm("Deseja desmarcar todas as tarefas e reiniciar o progresso de hoje?")) {
-            await resetChecklistProgress();
-        }
-    });
+    // Notifications Modal Events
+    if (btnNotifications) {
+        btnNotifications.addEventListener("click", () => {
+            if (notificationsBadge) {
+                notificationsBadge.style.display = "none";
+                localStorage.setItem("notifications_badge_read", "true");
+            }
+            renderNotifications();
+            openModal(modalNotifications);
+        });
+    }
+
+    if (btnCloseNotificationsModal) {
+        btnCloseNotificationsModal.addEventListener("click", () => {
+            closeModal(modalNotifications);
+        });
+    }
 
     // Restore default database state
     btnResetDefault.addEventListener("click", async () => {
@@ -519,6 +786,50 @@ function setupEventListeners() {
             }
         });
     }
+
+    // Custom Delete Confirmation Modal Actions
+    const handleConfirmDeleteChoice = (choice) => {
+        closeModal(modalConfirmDelete);
+        if (confirmDeleteCallback) {
+            confirmDeleteCallback(choice);
+            confirmDeleteCallback = null;
+        }
+    };
+
+    if (btnConfirmDeleteCancel) btnConfirmDeleteCancel.addEventListener("click", () => handleConfirmDeleteChoice("cancel"));
+    if (btnConfirmDeleteOk) btnConfirmDeleteOk.addEventListener("click", () => handleConfirmDeleteChoice("all"));
+    if (btnConfirmDeleteRecurringToday) btnConfirmDeleteRecurringToday.addEventListener("click", () => handleConfirmDeleteChoice("today"));
+    if (btnConfirmDeleteRecurringAll) btnConfirmDeleteRecurringAll.addEventListener("click", () => handleConfirmDeleteChoice("all"));
+    if (btnConfirmDeleteRecurringCancel) btnConfirmDeleteRecurringCancel.addEventListener("click", () => handleConfirmDeleteChoice("cancel"));
+
+    // Collaborators Modal Events
+    if (btnCloseCollaboratorsModal) {
+        btnCloseCollaboratorsModal.addEventListener("click", () => {
+            closeModal(modalCollaborators);
+        });
+    }
+
+    if (btnAddCollab) {
+        btnAddCollab.addEventListener("click", () => {
+            const catId = parseInt(collabCategoryId.value) || collabCategoryId.value;
+            const email = inputCollabEmail.value;
+            inviteCollaborator(catId, email);
+        });
+    }
+
+    if (inputCollabEmail) {
+        inputCollabEmail.addEventListener("keypress", (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                const catId = parseInt(collabCategoryId.value) || collabCategoryId.value;
+                const email = inputCollabEmail.value;
+                inviteCollaborator(catId, email);
+            }
+        });
+    }
+
+    // Habilita deslize para baixo (swipe-down-to-close) em todos os modais
+    document.querySelectorAll(".modal").forEach(setupModalSwipeToClose);
 }
 
 // ----------------------------------------------------
@@ -547,10 +858,20 @@ function connectSupabase() {
 // UI Logic & Rendering
 // ----------------------------------------------------
 function updateDateDisplay() {
-    const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
-    const dateObj = new Date(selectedDate + "T12:00:00"); // Avoid timezone shifting
-    let dateString = dateObj.toLocaleDateString('pt-BR', options);
-    dateString = dateString.charAt(0).toUpperCase() + dateString.slice(1);
+    const dateObj = new Date(selectedDate + "T12:00:00"); // Evita problemas de fuso horário
+    const day = dateObj.getDate();
+    
+    // Nomes abreviados em português
+    const dayNames = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+    const abbreviatedDay = dayNames[dateObj.getDay()];
+    
+    const monthNames = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+    const abbreviatedMonth = monthNames[dateObj.getMonth()];
+    
+    const year = dateObj.getFullYear();
+    
+    // Formato: "Ter, 14 Jul 2026"
+    const dateString = `${abbreviatedDay}, ${day} ${abbreviatedMonth} ${year}`;
     currentDateEl.textContent = dateString;
 }
 
@@ -559,6 +880,11 @@ async function loadChecklistAndProgress() {
     renderCategories();
     renderChecklist();
     updateProgress();
+    checkAutomaticReports();
+
+    if (pendingInvites.length > 0 && notificationsBadge) {
+        notificationsBadge.style.display = "block";
+    }
 }
 
 async function loadData() {
@@ -570,34 +896,77 @@ async function loadData() {
                 countResult,
                 tasksResult,
                 compTodayResult,
-                compBeforeResult
+                compBeforeResult,
+                sharesResult
             ] = await Promise.all([
                 supabaseClient.from('categories').select('*').eq('is_active', true),
                 supabaseClient.from('categories').select('*', { count: 'exact', head: true }),
                 supabaseClient.from('tasks').select('*').eq('is_active', true),
                 supabaseClient.from('completions').select('*').eq('date', selectedDate),
-                supabaseClient.from('completions').select('task_id').lt('date', selectedDate)
+                supabaseClient.from('completions').select('task_id').lt('date', selectedDate),
+                supabaseClient.from('category_shares').select('*').or(`owner_id.eq.${currentUser.id},collaborator_email.eq.${currentUser.email}`).then(r => r, err => {
+                    console.warn("Tabela 'category_shares' não encontrada ou inacessível.", err);
+                    return { data: [], error: null };
+                })
             ]);
 
-            let dbCats = catsResult.data;
+            let dbCats = catsResult.data || [];
             const errCats = catsResult.error;
             
             const count = countResult.count;
             const errCount = countResult.error;
             
-            const dbTasks = tasksResult.data;
+            const dbTasks = tasksResult.data || [];
             const errTasks = tasksResult.error;
             
-            const dbCompletionsToday = compTodayResult.data;
+            const dbCompletionsToday = compTodayResult.data || [];
             const errCompToday = compTodayResult.error;
             
-            const dbCompletionsBefore = compBeforeResult.data;
+            const dbCompletionsBefore = compBeforeResult.data || [];
             const errCompBefore = compBeforeResult.error;
 
             if (errCats) throw errCats;
             if (errTasks) throw errTasks;
             if (errCompToday) throw errCompToday;
             if (errCompBefore) throw errCompBefore;
+
+            // Salva os compartilhamentos carregados na sessão
+            categoryShares = (sharesResult && sharesResult.data) ? sharesResult.data : [];
+            localStorage.setItem("offline_category_shares", JSON.stringify(categoryShares));
+
+            // Filtra os convites pendentes recebidos
+            pendingInvites = categoryShares.filter(s => s.collaborator_email === currentUser.email && s.accepted !== true);
+
+            // Busca as categorias compartilhadas comigo (aceitas e pendentes)
+            const allSharedShares = categoryShares.filter(s => s.collaborator_email === currentUser.email && s.owner_id !== currentUser.id);
+            const allSharedCatIds = allSharedShares.map(s => s.category_id);
+            
+            if (allSharedCatIds.length > 0) {
+                try {
+                    const { data: sharedCats, error: errSharedCats } = await supabaseClient
+                        .from('categories')
+                        .select('*')
+                        .in('id', allSharedCatIds)
+                        .eq('is_active', true);
+                    if (!errSharedCats && sharedCats) {
+                        // 1. Vincula o nome da categoria nos convites pendentes
+                        pendingInvites.forEach(invite => {
+                            const catObj = sharedCats.find(c => c.id === invite.category_id);
+                            invite.category_name = catObj ? catObj.name : "Guia Compartilhada";
+                        });
+
+                        // 2. Mescla apenas as categorias que já foram aceitas
+                        const acceptedCatIds = collaboratorShares.map(s => s.category_id);
+                        sharedCats.forEach(sc => {
+                            if (acceptedCatIds.includes(sc.id) && !dbCats.some(c => c.id === sc.id)) {
+                                dbCats.push(sc);
+                            }
+                        });
+                    }
+                } catch (err) {
+                    console.error("Erro ao carregar categorias compartilhadas:", err);
+                }
+            }
             
             // Seed default categories ONLY if the user has absolutely ZERO categories in their account (active or inactive)
             if (!errCount && count === 0) {
@@ -626,20 +995,25 @@ async function loadData() {
                 }
             }
             categories = dbCats;
+            allActiveTasks = dbTasks || [];
 
             const completedBeforeIds = new Set(dbCompletionsBefore.map(c => c.task_id));
-            const completedTodayIds = new Set(dbCompletionsToday.filter(c => c.completed).map(c => c.task_id));
+            const completedTodayIds = new Set(dbCompletionsToday.filter(c => c.completed === true).map(c => c.task_id));
+            const excludedTodayIds = new Set(dbCompletionsToday.filter(c => c.completed === false).map(c => c.task_id));
 
             // Map tasks with Rollover and Recurrence
             tasks = dbTasks.filter(task => {
-                const taskCreatedDate = task.created_at.split('T')[0];
+                if (excludedTodayIds.has(task.id)) return false;
+                
+                const taskCreatedDate = extractDateFromTimestamp(task.created_at);
                 
                 if (task.is_recurring) {
                     if (task.repeat_days && task.repeat_days.length > 0) {
                         // Tarefas com dias específicos de repetição
                         const viewDate = new Date(selectedDate + 'T12:00:00');
                         const dayOfWeek = viewDate.getDay(); // 0=Dom, 1=Seg...
-                        return taskCreatedDate <= selectedDate && task.repeat_days.includes(dayOfWeek);
+                        const repeatDaysNum = task.repeat_days.map(Number);
+                        return taskCreatedDate <= selectedDate && repeatDaysNum.includes(dayOfWeek);
                     }
                     // Tarefas diárias aparecem a partir da data de criação
                     return taskCreatedDate <= selectedDate;
@@ -653,6 +1027,8 @@ async function loadData() {
                 category: task.category,
                 is_recurring: task.is_recurring,
                 repeat_days: task.repeat_days || null,
+                context: task.context || null,
+                assigned_to: task.assigned_to || null,
                 completed: completedTodayIds.has(task.id)
             }));
 
@@ -666,6 +1042,8 @@ async function loadData() {
 }
 
 function loadDataOffline() {
+    categoryShares = JSON.parse(localStorage.getItem("offline_category_shares")) || [];
+    pendingInvites = [];
     let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
     const isSeeded = localStorage.getItem("checklist_categories_seeded");
     if (localCats.length === 0 && !isSeeded) {
@@ -692,28 +1070,34 @@ function loadDataOffline() {
         }));
         localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
     }
+    allActiveTasks = localTasks || [];
 
     // 3. Fetch completions
     let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
 
     const completedBeforeIds = new Set(
-        localCompletions.filter(c => c.date < selectedDate && c.completed).map(c => c.task_id)
+        localCompletions.filter(c => c.date < selectedDate && c.completed === true).map(c => c.task_id)
     );
     const completedTodayIds = new Set(
-        localCompletions.filter(c => c.date === selectedDate && c.completed).map(c => c.task_id)
+        localCompletions.filter(c => c.date === selectedDate && c.completed === true).map(c => c.task_id)
+    );
+    const excludedTodayIds = new Set(
+        localCompletions.filter(c => c.date === selectedDate && c.completed === false).map(c => c.task_id)
     );
 
     // Map tasks
     tasks = localTasks.filter(task => {
         if (!task.is_active) return false;
+        if (excludedTodayIds.has(task.id)) return false;
         
-        const taskCreatedDate = task.created_at.split('T')[0];
+        const taskCreatedDate = extractDateFromTimestamp(task.created_at);
         
         if (task.is_recurring) {
             if (task.repeat_days && task.repeat_days.length > 0) {
                 const viewDate = new Date(selectedDate + 'T12:00:00');
                 const dayOfWeek = viewDate.getDay();
-                return taskCreatedDate <= selectedDate && task.repeat_days.includes(dayOfWeek);
+                const repeatDaysNum = task.repeat_days.map(Number);
+                return taskCreatedDate <= selectedDate && repeatDaysNum.includes(dayOfWeek);
             }
             return taskCreatedDate <= selectedDate;
         } else {
@@ -725,6 +1109,8 @@ function loadDataOffline() {
         category: task.category,
         is_recurring: task.is_recurring,
         repeat_days: task.repeat_days || null,
+        context: task.context || null,
+        assigned_to: task.assigned_to || null,
         completed: completedTodayIds.has(task.id)
     }));
 }
@@ -821,11 +1207,25 @@ function renderCategories() {
             const item = document.createElement("div");
             item.className = "manage-item";
             item.style.cssText = "background:rgba(255,255,255,0.02); border:1px solid var(--border-color); padding:10px 14px; border-radius:var(--radius-sm); display:flex; justify-content:space-between; align-items:center;";
+            
+            const isOwner = currentUser && cat.user_id === currentUser.id;
+            let collabBtnHtml = "";
+            if (currentUser) {
+                collabBtnHtml = `
+                    <button class="btn-collab-cat" data-id="${cat.id}" style="background:transparent; border:none; color:var(--primary); cursor:pointer; padding:4px; border-radius:4px; transition:var(--transition-smooth); display:flex; align-items:center; justify-content:center; margin-right: 8px;" title="Colaboradores">
+                        <i data-lucide="users" style="width:14px; height:14px; color: var(--primary);"></i>
+                    </button>
+                `;
+            }
+
             item.innerHTML = `
                 <span style="font-size:0.88rem; font-weight:600;">${escapeHTML(cat.name)}</span>
-                <button class="btn-delete-cat" data-id="${cat.id}" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; padding:4px; border-radius:4px; transition:var(--transition-smooth); display:flex; align-items:center; justify-content:center;">
-                    <i data-lucide="trash-2" style="width:14px; height:14px;"></i>
-                </button>
+                <div style="display:flex; align-items:center;">
+                    ${collabBtnHtml}
+                    <button class="btn-delete-cat" data-id="${cat.id}" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; padding:4px; border-radius:4px; transition:var(--transition-smooth); display:flex; align-items:center; justify-content:center;">
+                        <i data-lucide="trash-2" style="width:14px; height:14px;"></i>
+                    </button>
+                </div>
             `;
             
             const btnDel = item.querySelector(".btn-delete-cat");
@@ -833,6 +1233,16 @@ function renderCategories() {
                 e.stopPropagation();
                 deleteCategory(cat.id);
             });
+
+            if (currentUser) {
+                const btnCollab = item.querySelector(".btn-collab-cat");
+                if (btnCollab) {
+                    btnCollab.addEventListener("click", (e) => {
+                        e.stopPropagation();
+                        openCollaboratorsModal(cat);
+                    });
+                }
+            }
             
             manageList.appendChild(item);
         });
@@ -908,6 +1318,11 @@ function renderChecklist() {
                         <div class="task-meta">
                             <span class="task-tag" style="${tagStyle}">${escapeHTML(task.category)}</span>
                             <span class="task-tag" style="background: rgba(255,255,255,0.02);">${getRecurrenceLabel(task)}</span>
+                            ${task.assigned_to ? (() => {
+                                const initials = task.assigned_to.split('@')[0].substring(0, 2).toUpperCase();
+                                const isMe = currentUser && task.assigned_to.toLowerCase() === currentUser.email.toLowerCase();
+                                return `<span class="task-assignee-avatar ${isMe ? '' : 'partner'}" title="Atribuído a: ${escapeHTML(task.assigned_to)}">${escapeHTML(initials)}</span>`;
+                            })() : ''}
                         </div>
                     </div>
                     <!-- Global edit mode actions -->
@@ -926,10 +1341,18 @@ function renderChecklist() {
             const btnDelete = taskEl.querySelector(".task-edit-actions .btn-task-action.delete");
             btnDelete.addEventListener("click", (e) => {
                 e.stopPropagation();
-                taskEl.classList.add("deleting");
-                setTimeout(() => {
-                    deleteTask(task.id);
-                }, 400);
+                showConfirmDelete(task, (choice) => {
+                    if (choice !== "cancel") {
+                        taskEl.classList.add("deleting");
+                        setTimeout(() => {
+                            if (choice === "all") {
+                                deleteTask(task.id);
+                            } else if (choice === "today") {
+                                excludeTaskForToday(task.id);
+                            }
+                        }, 400);
+                    }
+                });
             });
 
             const btnRename = taskEl.querySelector(".task-edit-actions .btn-task-action.rename");
@@ -940,16 +1363,36 @@ function renderChecklist() {
 
             // Setup swipe actions buttons (visible on swipe underneath)
             const btnSwipeDelete = taskEl.querySelector(".task-swipe-actions .delete-btn");
-            btnSwipeDelete.addEventListener("click", (e) => {
+            const handleDeleteAction = (e) => {
+                e.preventDefault();
                 e.stopPropagation();
-                taskEl.classList.add("deleting");
-                setTimeout(() => {
-                    deleteTask(task.id);
-                }, 400);
-            });
+                showConfirmDelete(task, (choice) => {
+                    if (choice === "cancel") {
+                        // Se cancelar, fecha o swipe lateral suavemente
+                        const fg = taskEl.querySelector(".task-item-foreground");
+                        if (fg) {
+                            fg.style.transition = "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)";
+                            fg.style.transform = "translateX(0px)";
+                        }
+                        taskEl.classList.remove("swiped");
+                    } else {
+                        taskEl.classList.add("deleting");
+                        setTimeout(() => {
+                            if (choice === "all") {
+                                deleteTask(task.id);
+                            } else if (choice === "today") {
+                                excludeTaskForToday(task.id);
+                            }
+                        }, 400);
+                    }
+                });
+            };
+            btnSwipeDelete.addEventListener("click", handleDeleteAction);
+            btnSwipeDelete.addEventListener("touchend", handleDeleteAction, { passive: false });
 
             const btnSwipeRename = taskEl.querySelector(".task-swipe-actions .rename-btn");
-            btnSwipeRename.addEventListener("click", (e) => {
+            const handleRenameAction = (e) => {
+                e.preventDefault();
                 e.stopPropagation();
                 // Close swipe panel
                 const fg = taskEl.querySelector(".task-item-foreground");
@@ -959,7 +1402,9 @@ function renderChecklist() {
                 }
                 taskEl.classList.remove("swiped");
                 openEditTaskModal(task);
-            });
+            };
+            btnSwipeRename.addEventListener("click", handleRenameAction);
+            btnSwipeRename.addEventListener("touchend", handleRenameAction, { passive: false });
 
             // Attach swipe-to-reveal gestures
             setupSwipeToReveal(taskEl);
@@ -969,6 +1414,7 @@ function renderChecklist() {
         
         lucide.createIcons();
     }
+
 }
 
 function renderChecklistWithAnimation() {
@@ -1112,7 +1558,7 @@ function saveCompletionOffline(taskId, date, completed) {
     localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
 }
 
-async function addTask(title, category, recurrenceMode, customDate, repeatDays) {
+async function addTask(title, category, recurrenceMode, customDate, repeatDays, assignedTo) {
     if (!title) return;
     const isRecurring = recurrenceMode !== "once";
     const tempId = Date.now();
@@ -1120,6 +1566,9 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays) 
     // Evita problemas de fuso horário definindo a data ao meio-dia
     const createdAtDate = customDate ? new Date(customDate + "T12:00:00") : new Date();
     const createdAt = createdAtDate.toISOString();
+
+    const context = analyzeTaskContext(title, category, tasks);
+    console.log(`%c[Motor de Contexto] Tarefa: "${title}" na guia "${category}"`, "color: #8b5cf6; font-weight: bold;", context);
 
     const newTask = {
         title: title,
@@ -1131,28 +1580,76 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays) 
     if (repeatDays) {
         newTask.repeat_days = repeatDays;
     }
+    if (context) {
+        newTask.context = context;
+    }
+    if (assignedTo) {
+        newTask.assigned_to = assignedTo;
+    }
     if (currentUser) {
         newTask.user_id = currentUser.id;
     }
 
     if (supabaseClient) {
         try {
-            const { error } = await supabaseClient
+            let { error } = await supabaseClient
                 .from('tasks')
                 .insert(newTask);
-            if (error) throw error;
+            
+            if (error) {
+                console.warn("Falha ao inserir tarefa completa no Supabase. Tentando fallbacks...", error.message);
+                const fallbackTask = { ...newTask };
+                
+                // 1. Tenta sem o campo assigned_to (se ele existia)
+                if (fallbackTask.assigned_to !== undefined) {
+                    delete fallbackTask.assigned_to;
+                    const res = await supabaseClient.from('tasks').insert(fallbackTask);
+                    error = res.error;
+                }
+
+                // 2. Tenta sem o campo context (se ele existia)
+                if (error && fallbackTask.context) {
+                    delete fallbackTask.context;
+                    const res = await supabaseClient.from('tasks').insert(fallbackTask);
+                    error = res.error;
+                }
+                
+                // 3. Se ainda falhar e tiver repeat_days, tenta sem repeat_days
+                if (error && fallbackTask.repeat_days) {
+                    delete fallbackTask.repeat_days;
+                    const res = await supabaseClient.from('tasks').insert(fallbackTask);
+                    error = res.error;
+                }
+                
+                if (error) throw error;
+            }
             
             await loadChecklistAndProgress();
         } catch (error) {
-            console.error("Erro ao inserir no Supabase. Salvando offline.", error);
-            addTaskOffline(title, category, isRecurring, tempId, createdAt, repeatDays);
+            console.error("Erro ao inserir no Supabase.", error);
+            // Adicionar à lista em memória SEM substituir as tarefas existentes
+            const inMemoryTask = {
+                id: tempId,
+                title: title,
+                category: category,
+                is_recurring: isRecurring,
+                repeat_days: repeatDays || null,
+                context: context || null,
+                completed: false
+            };
+            if (assignedTo) {
+                inMemoryTask.assigned_to = assignedTo;
+            }
+            tasks.push(inMemoryTask);
+            renderChecklist();
+            updateProgress();
         }
     } else {
-        addTaskOffline(title, category, isRecurring, tempId, createdAt, repeatDays);
+        addTaskOffline(title, category, isRecurring, tempId, createdAt, repeatDays, context, assignedTo);
     }
 }
 
-function addTaskOffline(title, category, isRecurring, id, createdAt, repeatDays) {
+function addTaskOffline(title, category, isRecurring, id, createdAt, repeatDays, context, assignedTo) {
     let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
     const task = {
         id: id,
@@ -1165,6 +1662,12 @@ function addTaskOffline(title, category, isRecurring, id, createdAt, repeatDays)
     if (repeatDays) {
         task.repeat_days = repeatDays;
     }
+    if (context) {
+        task.context = context;
+    }
+    if (assignedTo) {
+        task.assigned_to = assignedTo;
+    }
     localTasks.push(task);
     localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
     
@@ -1176,35 +1679,55 @@ function addTaskOffline(title, category, isRecurring, id, createdAt, repeatDays)
 async function renameTask(id, newTitle) {
     if (!newTitle) return;
 
+    const existingTask = tasks.find(t => String(t.id) === String(id));
+    const category = existingTask ? existingTask.category : "";
+    const context = analyzeTaskContext(newTitle, category, tasks);
+
     // Atualização otimista local imediata
     tasks = tasks.map(t => {
-        if (String(t.id) === String(id)) return { ...t, title: newTitle };
+        if (String(t.id) === String(id)) return { ...t, title: newTitle, context: context || null };
         return t;
     });
     renderChecklist();
 
     if (supabaseClient) {
         try {
-            const { error } = await supabaseClient
+            const updates = { title: newTitle };
+            if (context) updates.context = context;
+            
+            let { error } = await supabaseClient
                 .from('tasks')
-                .update({ title: newTitle })
+                .update(updates)
                 .eq('id', id);
-            if (error) throw error;
+            
+            if (error) {
+                // Se falhar com context, tentar sem
+                if (updates.context) {
+                    delete updates.context;
+                    const res = await supabaseClient.from('tasks').update(updates).eq('id', id);
+                    error = res.error;
+                }
+                if (error) throw error;
+            }
             
             await loadChecklistAndProgress();
         } catch (error) {
             console.error("Erro ao renomear no Supabase. Renomeando offline.", error);
-            renameTaskOffline(id, newTitle);
+            renameTaskOffline(id, newTitle, context);
         }
     } else {
-        renameTaskOffline(id, newTitle);
+        renameTaskOffline(id, newTitle, context);
     }
 }
 
-function renameTaskOffline(id, newTitle) {
+function renameTaskOffline(id, newTitle, context) {
     let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
     localTasks = localTasks.map(t => {
-        if (String(t.id) === String(id)) return { ...t, title: newTitle };
+        if (String(t.id) === String(id)) {
+            const updated = { ...t, title: newTitle };
+            if (context) updated.context = context;
+            return updated;
+        }
         return t;
     });
     localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
@@ -1215,6 +1738,18 @@ function renameTaskOffline(id, newTitle) {
 
 // Full task update (title, date, recurrence, repeat_days)
 async function updateTask(id, updates) {
+    const existingTask = tasks.find(t => String(t.id) === String(id));
+    
+    // Analyze new context if title is being updated
+    if (updates.title !== undefined) {
+        const category = existingTask ? existingTask.category : "";
+        const context = analyzeTaskContext(updates.title, category, tasks);
+        console.log(`%c[Motor de Contexto] Edição da Tarefa: "${updates.title}" na guia "${category}"`, "color: #10b981; font-weight: bold;", context);
+        if (context) {
+            updates.context = context;
+        }
+    }
+
     // Otimista local
     tasks = tasks.map(t => {
         if (String(t.id) === String(id)) return { ...t, ...updates };
@@ -1230,23 +1765,46 @@ async function updateTask(id, updates) {
             if (updates.is_recurring !== undefined) dbUpdates.is_recurring = updates.is_recurring;
             if (updates.repeat_days !== undefined) dbUpdates.repeat_days = updates.repeat_days;
             if (updates.created_at !== undefined) dbUpdates.created_at = updates.created_at;
+            if (updates.context !== undefined) dbUpdates.context = updates.context;
+            if (updates.assigned_to !== undefined) dbUpdates.assigned_to = updates.assigned_to;
 
-            const { error } = await supabaseClient
+            let { error } = await supabaseClient
                 .from('tasks')
                 .update(dbUpdates)
                 .eq('id', id);
-            if (error) throw error;
+            
+            if (error) {
+                console.warn("Falha ao atualizar com todos os campos. Tentando fallbacks...", error.message);
+                const dbUpdatesFallback = { ...dbUpdates };
+                
+                // 1. Tenta sem o campo assigned_to se ele existia
+                if (dbUpdatesFallback.assigned_to !== undefined) {
+                    delete dbUpdatesFallback.assigned_to;
+                    const res = await supabaseClient.from('tasks').update(dbUpdatesFallback).eq('id', id);
+                    error = res.error;
+                }
+
+                // 2. Tenta sem o campo context se ele existia
+                if (error && dbUpdatesFallback.context !== undefined) {
+                    delete dbUpdatesFallback.context;
+                    const res = await supabaseClient.from('tasks').update(dbUpdatesFallback).eq('id', id);
+                    error = res.error;
+                }
+                
+                // 3. Se ainda falhar e tiver repeat_days, tenta sem repeat_days
+                if (error && dbUpdatesFallback.repeat_days !== undefined) {
+                    delete dbUpdatesFallback.repeat_days;
+                    const res = await supabaseClient.from('tasks').update(dbUpdatesFallback).eq('id', id);
+                    error = res.error;
+                }
+                
+                if (error) throw error;
+            }
             
             await loadChecklistAndProgress();
         } catch (error) {
             console.error("Erro ao atualizar tarefa no Supabase.", error);
-            // Fallback offline
-            let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
-            localTasks = localTasks.map(t => {
-                if (String(t.id) === String(id)) return { ...t, ...updates };
-                return t;
-            });
-            localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+            // A atualização otimista já mantém o estado visual correto
         }
     } else {
         let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
@@ -1267,7 +1825,7 @@ function getRecurrenceLabel(task) {
     if (task.repeat_days && task.repeat_days.length > 0) {
         const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
         if (task.repeat_days.length === 7) return 'Diária';
-        return task.repeat_days.map(d => dayNames[d]).join(', ');
+        return task.repeat_days.map(d => dayNames[Number(d)]).join(', ');
     }
     return 'Diária';
 }
@@ -1297,7 +1855,7 @@ function openEditTaskModal(task) {
     // Set day toggles
     document.querySelectorAll(".edit-day-toggle").forEach(btn => {
         const day = parseInt(btn.dataset.day);
-        if (task.repeat_days && task.repeat_days.includes(day)) {
+        if (task.repeat_days && task.repeat_days.map(Number).includes(day)) {
             btn.classList.add("active");
         } else {
             btn.classList.remove("active");
@@ -1309,6 +1867,12 @@ function openEditTaskModal(task) {
     // We need the original created_at; find from the full task data if available
     // For now use selectedDate as fallback
     editDate.value = selectedDate;
+
+    // Configura e pré-seleciona a atribuição do colaborador
+    updateTaskAssigneeDropdown(task.category, selectEditTaskAssignedTo, editTaskAssigneeGroup);
+    if (selectEditTaskAssignedTo) {
+        selectEditTaskAssignedTo.value = task.assigned_to || "";
+    }
     
     openModal(modalEditTask);
     lucide.createIcons();
@@ -1354,6 +1918,486 @@ function deleteTaskOffline(id) {
     loadDataOffline();
     renderChecklist();
     updateProgress();
+}
+
+async function excludeTaskForToday(id) {
+    if (pendingDeletes.has(id)) return;
+    pendingDeletes.add(id);
+
+    // Atualização otimista local imediata
+    tasks = tasks.filter(t => String(t.id) !== String(id));
+    updateProgress();
+
+    if (supabaseClient) {
+        try {
+            // Insere na tabela 'completions' um registro com completed: false para marcar como excluído hoje
+            const { error } = await supabaseClient
+                .from('completions')
+                .upsert({
+                    task_id: id,
+                    date: selectedDate,
+                    completed: false
+                }, { onConflict: 'task_id,date' });
+            if (error) throw error;
+            
+            await loadChecklistAndProgress();
+        } catch (error) {
+            console.error("Erro ao excluir do dia atual no Supabase. Fazendo offline.", error);
+            excludeTaskForTodayOffline(id);
+        } finally {
+            pendingDeletes.delete(id);
+        }
+    } else {
+        excludeTaskForTodayOffline(id);
+        pendingDeletes.delete(id);
+    }
+}
+
+function excludeTaskForTodayOffline(id) {
+    let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+    localCompletions = localCompletions.filter(c => !(String(c.task_id) === String(id) && c.date === selectedDate));
+    
+    localCompletions.push({
+        task_id: id,
+        date: selectedDate,
+        completed: false
+    });
+    localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
+    
+    loadDataOffline();
+    renderChecklist();
+    updateProgress();
+}
+
+function showConfirmDelete(task, onChoice) {
+    if (!modalConfirmDelete) return;
+    
+    confirmDeleteTitle.textContent = "Excluir Tarefa";
+    confirmDeleteBody.textContent = task.is_recurring 
+        ? `"${task.title}" é uma tarefa recorrente. Como deseja excluí-la?`
+        : `Deseja realmente excluir a tarefa "${task.title}"?`;
+        
+    if (task.is_recurring) {
+        confirmDeleteStandardActions.classList.add("hidden");
+        confirmDeleteRecurringActions.classList.remove("hidden");
+    } else {
+        confirmDeleteStandardActions.classList.remove("hidden");
+        confirmDeleteRecurringActions.classList.add("hidden");
+    }
+    
+    confirmDeleteCallback = onChoice;
+    openModal(modalConfirmDelete);
+}
+
+function setupModalSwipeToClose(modal) {
+    const content = modal.querySelector(".modal-content");
+    if (!content) return;
+
+    let startY = 0;
+    let currentY = 0;
+    let isDragging = false;
+    
+    content.addEventListener("touchstart", (e) => {
+        // Ignora gestos de deslize iniciados em campos interativos (inputs, selects, botões, etc.)
+        if (e.target.closest("input") || e.target.closest("select") || e.target.closest("button") || e.target.closest("textarea") || e.target.closest(".day-toggle") || e.target.closest(".edit-day-toggle")) {
+            return;
+        }
+        
+        // Se o toque começou dentro de algum elemento interno que está com scroll ativo (ex: listas com max-height)
+        let hasActiveScrollParent = false;
+        let parent = e.target;
+        while (parent && parent !== content) {
+            if (parent.scrollHeight > parent.clientHeight) {
+                const overflowY = window.getComputedStyle(parent).overflowY;
+                if ((overflowY === "auto" || overflowY === "scroll") && parent.scrollTop > 0) {
+                    hasActiveScrollParent = true;
+                    break;
+                }
+            }
+            parent = parent.parentElement;
+        }
+
+        if (hasActiveScrollParent) {
+            return;
+        }
+        
+        // Só arrasta se começar a deslizar do cabeçalho ou se o scroll interno estiver no topo (scrollTop === 0)
+        const scrollContainer = content.querySelector(".manage-tasks-body") || content.querySelector(".modal-body") || content;
+        const isScrollAtTop = scrollContainer.scrollTop === 0;
+        const touchedHeader = e.target.closest(".modal-header") || (e.touches[0].clientY - content.getBoundingClientRect().top < 60);
+        
+        if (touchedHeader || isScrollAtTop) {
+            startY = e.touches[0].clientY;
+            currentY = startY;
+            isDragging = true;
+            content.style.transition = "none";
+        }
+    }, { passive: true });
+
+    content.addEventListener("touchmove", (e) => {
+        if (!isDragging) return;
+        currentY = e.touches[0].clientY;
+        let diffY = currentY - startY;
+        
+        // Se o movimento for para cima (dedo subindo / scroll para baixo), cancelamos o arrastar do modal
+        if (diffY < 0) {
+            isDragging = false;
+            content.style.transform = "";
+            return;
+        } else if (diffY > 5) {
+            // Se de fato está arrastando para baixo, cancela a ação padrão do navegador (Pull-to-Refresh do iOS/Safari)
+            if (e.cancelable) {
+                e.preventDefault();
+            }
+        }
+        
+        content.style.transform = `translateY(${diffY}px)`;
+    }, { passive: false });
+
+    content.addEventListener("touchend", () => {
+        if (!isDragging) return;
+        isDragging = false;
+        
+        const diffY = currentY - startY;
+        
+        // Se arrastou para baixo mais de 120 pixels, fecha o modal
+        if (diffY > 120) {
+            closeModal(modal);
+            // Reseta a animação/estilo após a transição de fechar terminar
+            setTimeout(() => {
+                content.style.transform = "";
+                content.style.transition = "";
+            }, 350);
+        } else {
+            // Caso contrário, volta de forma elástica para a posição original (0)
+            content.style.transition = "transform 0.3s cubic-bezier(0.16, 1, 0.3, 1)";
+            content.style.transform = "translateY(0px)";
+            setTimeout(() => {
+                content.style.transition = "";
+            }, 300);
+        }
+    });
+}
+
+function openCollaboratorsModal(cat) {
+    if (!modalCollaborators) return;
+    
+    collabCategoryId.value = cat.id;
+    collabModalSubtitle.textContent = `Compartilhar a guia "${cat.name}"`;
+    inputCollabEmail.value = "";
+    
+    renderCollaborators(cat);
+    openModal(modalCollaborators);
+}
+
+function renderCollaborators(cat) {
+    if (!collaboratorsList) return;
+    
+    const isOwner = currentUser && cat.user_id === currentUser.id;
+    const inviteSection = document.getElementById("collab-invite-section");
+    
+    if (inviteSection) {
+        inviteSection.style.display = isOwner ? "block" : "none";
+    }
+    
+    collaboratorsList.innerHTML = "";
+    
+    // Mostra o Dono (dono da categoria)
+    const ownerItem = document.createElement("div");
+    ownerItem.className = "manage-item";
+    ownerItem.style.cssText = "background:rgba(255,255,255,0.01); border:1px solid var(--border-color); padding:10px 14px; border-radius:var(--radius-sm); display:flex; justify-content:space-between; align-items:center;";
+    ownerItem.innerHTML = `
+        <span style="font-size:0.85rem; font-weight:700; color:var(--text-secondary);">${escapeHTML(isOwner ? currentUser.email : 'Dono da Guia')} (Criador)</span>
+    `;
+    collaboratorsList.appendChild(ownerItem);
+    
+    // Lista os colaboradores da categoria
+    const shares = categoryShares.filter(s => s.category_id === cat.id);
+    shares.forEach(share => {
+        const item = document.createElement("div");
+        item.className = "manage-item";
+        item.style.cssText = "background:rgba(255,255,255,0.02); border:1px solid var(--border-color); padding:10px 14px; border-radius:var(--radius-sm); display:flex; justify-content:space-between; align-items:center;";
+        
+        let removeBtn = "";
+        if (isOwner) {
+            removeBtn = `
+                <button class="btn-remove-collab" data-id="${share.id}" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; padding:4px; border-radius:4px; transition:var(--transition-smooth); display:flex; align-items:center; justify-content:center;">
+                    <i data-lucide="x" style="width:14px; height:14px; color: var(--text-muted);"></i>
+                </button>
+            `;
+        }
+        
+        item.innerHTML = `
+            <span style="font-size:0.85rem; font-weight:600; color:var(--text-primary);">${escapeHTML(share.collaborator_email)}</span>
+            ${removeBtn}
+        `;
+        
+        if (isOwner) {
+            const btnRemove = item.querySelector(".btn-remove-collab");
+            if (btnRemove) {
+                btnRemove.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    removeCollaborator(share.id, cat);
+                });
+            }
+        }
+        
+        collaboratorsList.appendChild(item);
+    });
+    
+    lucide.createIcons();
+}
+
+async function inviteCollaborator(catId, email) {
+    if (!email) return;
+    if (!supabaseClient) {
+        alert("Conexão online indisponível.");
+        return;
+    }
+    
+    const cat = categories.find(c => c.id === catId);
+    if (!cat) return;
+    
+    const cleanEmail = email.trim().toLowerCase();
+    
+    // Evita convidar a si mesmo ou convidar duplicado
+    if (cleanEmail === currentUser.email.toLowerCase()) {
+        alert("Você já é o dono e participa desta guia.");
+        return;
+    }
+    
+    const exists = categoryShares.some(s => s.category_id === catId && s.collaborator_email === cleanEmail);
+    if (exists) {
+        alert("Este e-mail já foi convidado para esta guia.");
+        return;
+    }
+    
+    const newShare = {
+        category_id: catId,
+        owner_id: currentUser.id,
+        owner_email: currentUser.email,
+        collaborator_email: cleanEmail
+    };
+    
+    try {
+        const { error } = await supabaseClient
+            .from('category_shares')
+            .insert(newShare);
+        if (error) throw error;
+        
+        alert("Colaborador convidado com sucesso!");
+        if (inputCollabEmail) inputCollabEmail.value = "";
+        
+        await loadChecklistAndProgress();
+        renderCollaborators(cat);
+    } catch (err) {
+        console.error("Erro ao convidar colaborador:", err);
+        alert("Erro ao convidar: " + err.message);
+    }
+}
+
+async function removeCollaborator(shareId, cat) {
+    if (!supabaseClient) {
+        alert("Conexão online indisponível.");
+        return;
+    }
+    
+    if (confirm("Deseja realmente remover este colaborador da guia?")) {
+        try {
+            const { error } = await supabaseClient
+                .from('category_shares')
+                .delete()
+                .eq('id', shareId);
+            if (error) throw error;
+            
+            alert("Colaborador removido com sucesso!");
+            await loadChecklistAndProgress();
+            renderCollaborators(cat);
+        } catch (err) {
+            console.error("Erro ao remover colaborador:", err);
+            alert("Erro ao remover: " + err.message);
+        }
+    }
+}
+
+function renderNotifications() {
+    if (!notificationsListContainer) return;
+
+    notificationsListContainer.innerHTML = "";
+
+    // 1. Renderizar convites pendentes de colaboração
+    if (pendingInvites && pendingInvites.length > 0) {
+        pendingInvites.forEach(invite => {
+            const item = document.createElement("div");
+            item.style.cssText = "display: flex; gap: 12px; padding: 14px; background: rgba(139, 92, 246, 0.05); border: 1.5px solid var(--primary); border-radius: 12px; flex-direction: column;";
+            item.innerHTML = `
+                <div style="display: flex; gap: 12px;">
+                    <div style="background: rgba(139, 92, 246, 0.15); color: var(--primary); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                        <i data-lucide="users" style="width: 18px; height: 18px; color: var(--primary);"></i>
+                    </div>
+                    <div style="flex: 1;">
+                        <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 800; color: var(--text-primary);">Convite de Colaboração</h4>
+                        <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">
+                            <strong>${escapeHTML(invite.owner_email || 'Um usuário')}</strong> convidou você para compartilhar a guia <strong>${escapeHTML(invite.category_name || 'Compartilhada')}</strong>.
+                        </p>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;">
+                    <button class="btn btn-secondary btn-accept-invite" data-id="${invite.id}" style="padding: 6px 12px; font-size: 0.75rem; font-weight: 700; border-radius: var(--radius-sm); border: 1px solid var(--border-color); background: var(--bg-surface-solid); color: #fff; cursor: pointer;">Aceitar</button>
+                    <button class="btn btn-danger-outline btn-decline-invite" data-id="${invite.id}" style="padding: 6px 12px; font-size: 0.75rem; font-weight: 700; border-radius: var(--radius-sm); cursor: pointer;">Recusar</button>
+                </div>
+            `;
+
+            const btnAccept = item.querySelector(".btn-accept-invite");
+            const btnDecline = item.querySelector(".btn-decline-invite");
+
+            btnAccept.addEventListener("click", async () => {
+                btnAccept.disabled = true;
+                btnAccept.textContent = "...";
+                await acceptInvitation(invite.id);
+            });
+
+            btnDecline.addEventListener("click", async () => {
+                btnDecline.disabled = true;
+                btnDecline.textContent = "...";
+                await declineInvitation(invite.id);
+            });
+
+            notificationsListContainer.appendChild(item);
+        });
+    }
+
+    // 2. Renderizar notificações estáticas do sistema
+    const staticNotifications = [
+        {
+            icon: "cloud-lightning",
+            iconBg: "rgba(16, 185, 129, 0.1)",
+            iconColor: "#10b981",
+            title: "Sincronização Ativa",
+            body: "Seu checklist está sincronizado com segurança na nuvem do Supabase."
+        },
+        {
+            icon: "brain-circuit",
+            iconBg: "rgba(139, 92, 246, 0.1)",
+            iconColor: "var(--primary)",
+            title: "Dica de Produtividade",
+            body: "Tente completar primeiro as tarefas mais pesadas da manhã para ativar o efeito Momentum."
+        },
+        {
+            icon: "sparkles",
+            iconBg: "rgba(59, 130, 246, 0.1)",
+            iconColor: "#3b82f6",
+            title: "Gestos de Deslizar",
+            body: "Agora você pode fechar qualquer janela do app deslizando-a para baixo! Experimente!"
+        }
+    ];
+
+    staticNotifications.forEach(notif => {
+        const item = document.createElement("div");
+        item.style.cssText = "display: flex; gap: 12px; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px;";
+        item.innerHTML = `
+            <div style="background: ${notif.iconBg}; color: ${notif.iconColor}; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                <i data-lucide="${notif.icon}" style="width: 18px; height: 18px; color: ${notif.iconColor};"></i>
+            </div>
+            <div>
+                <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">${escapeHTML(notif.title)}</h4>
+                <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">${escapeHTML(notif.body)}</p>
+            </div>
+        `;
+        notificationsListContainer.appendChild(item);
+    });
+
+    lucide.createIcons();
+}
+
+async function acceptInvitation(shareId) {
+    if (!supabaseClient) return;
+    try {
+        const { error } = await supabaseClient
+            .from('category_shares')
+            .update({ accepted: true })
+            .eq('id', shareId);
+
+        if (error) throw error;
+
+        alert("Convite aceito! A guia compartilhada agora está disponível.");
+        await loadChecklistAndProgress();
+        renderNotifications();
+    } catch (err) {
+        console.error("Erro ao aceitar convite:", err);
+        alert("Erro ao aceitar convite: " + err.message);
+    }
+}
+
+async function declineInvitation(shareId) {
+    if (!supabaseClient) return;
+    if (confirm("Deseja realmente recusar este convite?")) {
+        try {
+            const { error } = await supabaseClient
+                .from('category_shares')
+                .delete()
+                .eq('id', shareId);
+
+            if (error) throw error;
+
+            alert("Convite recusado.");
+            await loadChecklistAndProgress();
+            renderNotifications();
+        } catch (err) {
+            console.error("Erro ao recusar convite:", err);
+            alert("Erro ao recusar convite: " + err.message);
+        }
+    }
+}
+
+function updateTaskAssigneeDropdown(categoryName, selectEl, groupEl) {
+    if (!selectEl || !groupEl) return;
+
+    const cat = categories.find(c => c.name === categoryName);
+    if (!cat || !currentUser) {
+        groupEl.style.display = "none";
+        return;
+    }
+
+    const shares = categoryShares.filter(s => s.category_id === cat.id);
+    if (shares.length === 0) {
+        // Not a shared category
+        groupEl.style.display = "none";
+        selectEl.innerHTML = '<option value="">Todos (Sem atribuição)</option>';
+        return;
+    }
+
+    // Shared category! Show assignment group
+    groupEl.style.display = "block";
+    
+    // Clear and rebuild options
+    const currentValue = selectEl.value;
+    selectEl.innerHTML = "";
+    
+    // Todos Option
+    const optAll = document.createElement("option");
+    optAll.value = "";
+    optAll.textContent = "Todos (Sem atribuição)";
+    selectEl.appendChild(optAll);
+    
+    // Owner Option (Creator)
+    const isOwnerMe = cat.user_id === currentUser.id;
+    const ownerEmail = isOwnerMe ? currentUser.email : (shares[0].owner_email || "Dono da Guia");
+    const optOwner = document.createElement("option");
+    optOwner.value = ownerEmail;
+    optOwner.textContent = `${ownerEmail} (Dono)`;
+    selectEl.appendChild(optOwner);
+    
+    // Collaborator Options
+    shares.forEach(share => {
+        const optCollab = document.createElement("option");
+        optCollab.value = share.collaborator_email;
+        optCollab.textContent = share.collaborator_email;
+        selectEl.appendChild(optCollab);
+    });
+    
+    // Restore value if still exists
+    selectEl.value = currentValue;
 }
 
 async function addCategory(name) {
@@ -1578,6 +2622,13 @@ function getLocalDateString(date) {
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
+}
+
+// Extrair a parte da data de um timestamp (suporta formato ISO com 'T' e formato Supabase com espaço)
+function extractDateFromTimestamp(timestamp) {
+    if (!timestamp) return '';
+    // Supabase pode retornar com 'T' ou com espaço. Pegar os primeiros 10 chars (YYYY-MM-DD)
+    return String(timestamp).substring(0, 10);
 }
 
 function capitalize(str) {
@@ -2119,8 +3170,12 @@ function setupSwipeToReveal(taskEl) {
     if (!foreground) return;
 
     let startX = 0;
+    let startY = 0;
     let currentX = 0;
+    let currentY = 0;
     let isDragging = false;
+    let isSwipeConfirmed = false;
+    let isScrollConfirmed = false;
     const maxSwipe = 136; // Width of revealed action buttons (rename + delete) + offsets
 
     function setTranslate(x, animate = false) {
@@ -2150,7 +3205,10 @@ function setupSwipeToReveal(taskEl) {
         if (isEditMode) return;
         closeAllOtherSwipes();
         startX = e.touches[0].clientX;
+        startY = e.touches[0].clientY;
         isDragging = true;
+        isSwipeConfirmed = false;
+        isScrollConfirmed = false;
         if (taskEl.classList.contains("swiped")) {
             startX += maxSwipe;
         }
@@ -2159,7 +3217,23 @@ function setupSwipeToReveal(taskEl) {
     foreground.addEventListener("touchmove", (e) => {
         if (!isDragging) return;
         currentX = e.touches[0].clientX;
+        currentY = e.touches[0].clientY;
         let diffX = currentX - startX;
+        let diffY = currentY - startY;
+
+        // Detectar se o usuário quer rolar verticalmente a página
+        if (!isSwipeConfirmed && !isScrollConfirmed) {
+            if (Math.abs(diffY) > Math.abs(diffX) && Math.abs(diffY) > 8) {
+                isScrollConfirmed = true;
+                isDragging = false; // Cancela o gesto de deslizar, liberando a rolagem vertical
+                return;
+            } else if (Math.abs(diffX) > 8) {
+                isSwipeConfirmed = true;
+            }
+        }
+
+        // Se a rolagem foi confirmada ou o deslize lateral ainda não atingiu o limite de confirmação, não traduz o elemento
+        if (isScrollConfirmed || !isSwipeConfirmed) return;
 
         // Swiping only to the left
         if (diffX > 0) diffX = 0;
@@ -2174,6 +3248,8 @@ function setupSwipeToReveal(taskEl) {
     foreground.addEventListener("touchend", () => {
         if (!isDragging) return;
         isDragging = false;
+        
+        if (isScrollConfirmed) return;
         
         // Extract matrix value
         const style = window.getComputedStyle(foreground);
@@ -2231,4 +3307,494 @@ function setupSwipeToReveal(taskEl) {
             taskEl.classList.remove("swiped");
         }
     });
+}
+
+// ----------------------------------------------------
+// Task Context Engine (Semantic Analysis)
+// ----------------------------------------------------
+function analyzeTaskContext(title, category, existingTasks = []) {
+    if (!title) return null;
+    
+    const lowerTitle = title.toLowerCase().trim();
+    const cleanCategory = (category || "").toLowerCase().trim();
+    
+    // Normalization helper
+    const removeAccents = str => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const normalizedTitle = removeAccents(lowerTitle);
+    
+    let activityType = null;
+    let semanticCategory = null;
+    let confidence = 0;
+    
+    const entities = {
+        people: [],
+        clients: [],
+        projects: []
+    };
+
+    // 1. Identify Activity Type and Semantic Category based on patterns and category context
+    const rules = [
+        // Marketing
+        {
+            type: "marketing",
+            category: "marketing_divulgacao",
+            match: /(public|stori|post|feed|insta|whats|rede.*social|divulg|anunci|campanh)/i,
+            weight: 0.6
+        },
+        // Estudo
+        {
+            type: "estudo",
+            category: "educacao_desenvolvimento",
+            match: /(estud|ler|revis|aula|videoaula|livro|capitul|artig)/i,
+            weight: 0.6
+        },
+        // Trabalho Acadêmico
+        {
+            type: "trabalho_academico",
+            category: "educacao_desenvolvimento",
+            match: /(entreg.*trabalh|fazer.*tcc|tcc|apresent|seminari|prova|trabalh)/i,
+            weight: 0.7
+        },
+        // Entrega
+        {
+            type: "entrega",
+            category: "logistica_operacoes",
+            match: /(entreg|envi|despach|motoboy|delivery)/i,
+            weight: 0.6
+        },
+        // Atendimento
+        {
+            type: "atendimento",
+            category: "atendimento_suporte",
+            match: /(atend|respond|ligar|mensag|falar|whats.*com|telefon|cham)/i,
+            weight: 0.6
+        },
+        // Financeiro
+        {
+            type: "financeiro",
+            category: "financeiro_adm",
+            match: /(pagar|cobrar|orcament|financeir|transfer|pix|bolet|nota.*fiscal|nf|caix|vend)/i,
+            weight: 0.6
+        },
+        // Compras
+        {
+            type: "compras",
+            category: "suprimentos",
+            match: /(compr|adquir|supermercad|mercado)/i,
+            weight: 0.6
+        },
+        // Limpeza/Organização
+        {
+            type: "limpeza",
+            category: "manutencao_casa",
+            match: /(limp|organiz|arrum|lavar|passar|faxin)/i,
+            weight: 0.6
+        },
+        // Reunião
+        {
+            type: "reuniao",
+            category: "reunioes_comunicacao",
+            match: /(reuniao|meeting|call|encontr|alinhament|brainstorm)/i,
+            weight: 0.7
+        },
+        // Compromisso Pessoal / Treino / Saúde
+        {
+            type: "compromisso_pessoal",
+            category: "pessoal_social",
+            match: /(present|aniversari|namora|mae|pai|filh|amig|medic|consult|academi|trein|musculac|gym|exercic)/i,
+            weight: 0.6
+        },
+        // Administrativo
+        {
+            type: "administrativo",
+            category: "financeiro_adm",
+            match: /(agend|cadastr|planilh|document|contrat)/i,
+            weight: 0.6
+        },
+        // Produção
+        {
+            type: "producao",
+            category: "producao_operacoes",
+            match: /(prepar|mont|fabric|produz|embal|etiquet)/i,
+            weight: 0.6
+        }
+    ];
+
+    let maxWeight = 0;
+    let matchedRule = null;
+    for (const rule of rules) {
+        if (rule.match.test(normalizedTitle)) {
+            let weight = rule.weight;
+            
+            // Adjust based on category context
+            if (rule.type === "entrega" && cleanCategory.includes("tio nan")) {
+                weight += 0.2;
+            }
+            if (rule.type === "trabalho_academico" && (cleanCategory.includes("faculdade") || cleanCategory.includes("pucrs"))) {
+                weight += 0.25;
+            }
+            if (rule.type === "estudo" && (cleanCategory.includes("faculdade") || cleanCategory.includes("pucrs"))) {
+                weight += 0.2;
+            }
+            if (rule.type === "compromisso_pessoal" && cleanCategory.includes("pessoal")) {
+                weight += 0.25;
+            }
+            if (rule.type === "marketing" && cleanCategory.includes("tio nan")) {
+                weight += 0.25;
+            }
+
+            if (weight > maxWeight) {
+                maxWeight = weight;
+                matchedRule = rule;
+            }
+        }
+    }
+
+    if (matchedRule) {
+        activityType = matchedRule.type;
+        semanticCategory = matchedRule.category;
+        confidence = Math.min(maxWeight, 1.0);
+    }
+
+    // Context resolution fallback or refinement by category if no regex matches perfectly but category is strongly suggestive
+    if (!matchedRule) {
+        if (cleanCategory.includes("tio nan")) {
+            if (normalizedTitle.includes("entregar")) {
+                activityType = "entrega";
+                semanticCategory = "logistica_operacoes";
+                confidence = 0.55;
+            }
+        } else if (cleanCategory.includes("pucrs") || cleanCategory.includes("faculdade")) {
+            if (normalizedTitle.includes("entregar")) {
+                activityType = "trabalho_academico";
+                semanticCategory = "educacao_desenvolvimento";
+                confidence = 0.65;
+            }
+        } else if (cleanCategory.includes("pessoal")) {
+            if (normalizedTitle.includes("entregar")) {
+                activityType = "compromisso_pessoal";
+                semanticCategory = "pessoal_social";
+                confidence = 0.55;
+            }
+        }
+    }
+
+    // 2. Entity Extraction (People, Clients, Projects)
+    const words = title.split(/\s+/);
+    const ignoreStartWords = new Set([
+        "Entregar", "Enviar", "Despachar", "Publicar", "Estudar", "Ler", "Revisar", 
+        "Assistir", "Fazer", "Apresentar", "Atender", "Responder", "Ligar", "Falar", 
+        "Pagar", "Cobrar", "Comprar", "Limpar", "Organizar", "Arrumar", "Lavar", 
+        "Passar", "Agendar", "Cadastrar", "Atualizar", "Alimentar", "Preparar", 
+        "Montar", "Fabricar", "Produzir", "Embalar", "Etiquetar", "O", "A", "Os", 
+        "As", "Um", "Uma", "Estes", "Esta", "E", "De", "Para", "Com", "Em", "No", "Na"
+    ]);
+
+    words.forEach((word, idx) => {
+        const cleanWord = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g, "");
+        if (!cleanWord) return;
+        
+        if (cleanWord[0] === cleanWord[0].toUpperCase() && cleanWord[0] !== cleanWord[0].toLowerCase()) {
+            if (idx === 0 && ignoreStartWords.has(cleanWord)) {
+                return;
+            }
+            if (ignoreStartWords.has(cleanWord)) {
+                return;
+            }
+
+            if (cleanWord === cleanWord.toUpperCase() && cleanWord.length > 2 && isNaN(cleanWord)) {
+                entities.projects.push(cleanWord);
+            } else {
+                entities.people.push(cleanWord);
+            }
+        }
+    });
+
+    if (cleanCategory.includes("tio nan") || cleanCategory.includes("trabalho") || cleanCategory.includes("cassol")) {
+        entities.clients = [...entities.people];
+    }
+
+    // 3. Similar Tasks Context Matching
+    if (existingTasks && existingTasks.length > 0) {
+        let bestMatch = null;
+        let bestSim = 0;
+        
+        const getWords = str => new Set(removeAccents(str.toLowerCase()).split(/\W+/).filter(w => w.length > 2));
+        const currentWords = getWords(title);
+        
+        for (const t of existingTasks) {
+            if (t.id === title) continue;
+            if (!t.context || !t.context.activity_type) continue;
+            
+            const otherWords = getWords(t.title);
+            let intersection = 0;
+            for (const w of currentWords) {
+                if (otherWords.has(w)) intersection++;
+            }
+            const union = currentWords.size + otherWords.size - intersection;
+            const sim = union > 0 ? intersection / union : 0;
+            
+            if (sim > bestSim) {
+                bestSim = sim;
+                bestMatch = t;
+            }
+        }
+        
+        if (bestSim > 0.4 && bestMatch) {
+            if (!activityType) {
+                activityType = bestMatch.context.activity_type;
+                semanticCategory = bestMatch.context.semantic_category;
+                confidence = Math.max(0.4, bestSim * bestMatch.context.confidence);
+            } else if (activityType === bestMatch.context.activity_type) {
+                confidence = Math.min(1.0, confidence + 0.1);
+            }
+        }
+    }
+
+    const finalActivityType = confidence >= 0.4 ? activityType : null;
+    const finalSemanticCategory = confidence >= 0.4 ? semanticCategory : null;
+
+    return {
+        activity_type: finalActivityType,
+        semantic_category: finalSemanticCategory,
+        entities: entities,
+        confidence: Number(confidence.toFixed(2)),
+        analyzed_at: new Date().toISOString()
+    };
+}
+
+async function loadAndRenderReport(days, containerEl) {
+    const now = new Date();
+    let isExpired = false;
+    let daysRemaining = 0;
+
+    // Calcula expiração (limite de 3 dias incluindo o dia de conclusão)
+    if (days === 7) {
+        const daysSinceSat = (now.getDay() === 6) ? 0 : (now.getDay() + 1);
+        if (daysSinceSat >= 2) {
+            isExpired = true;
+        } else {
+            daysRemaining = 2 - daysSinceSat;
+        }
+    } else if (days === 30) {
+        const date = now.getDate();
+        if (date > 3) {
+            isExpired = true;
+        } else {
+            daysRemaining = 4 - date;
+        }
+    } else if (days === 365) {
+        const isJanuary = now.getMonth() === 0;
+        const date = now.getDate();
+        if (!isJanuary || date > 3) {
+            isExpired = true;
+        } else {
+            daysRemaining = 4 - date;
+        }
+    }
+
+    if (isExpired) {
+        const periodLabel = days === 7 ? "semanal" : days === 30 ? "mensal" : "anual";
+        containerEl.innerHTML = `
+            <div style="text-align: center; padding: 32px 16px; color: var(--text-secondary);">
+                <div style="background: rgba(239, 68, 68, 0.05); color: #ef4444; width: 52px; height: 52px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; border: 1px solid rgba(239, 68, 68, 0.15);">
+                    <i data-lucide="clock" style="width: 22px; height: 22px;"></i>
+                </div>
+                <h5 style="margin: 0 0 6px 0; font-size: 1rem; font-weight: 800; color: var(--text-primary);">Relatório Expirado</h5>
+                <p style="margin: 0; font-size: 0.82rem; line-height: 1.5; max-width: 260px; margin: 0 auto;">Este relatório ${periodLabel} já expirou. Os resumos ficam disponíveis por apenas 3 dias após o encerramento do período.</p>
+            </div>
+        `;
+        lucide.createIcons();
+        return;
+    }
+
+    containerEl.innerHTML = `<span style="font-size: 0.8rem; color: var(--text-secondary);"><span class="loading-spinner" style="display:inline-block; vertical-align:middle; margin-right:6px; width:12px; height:12px; border:2px solid var(--primary); border-top-color:transparent; border-radius:50%; animation:spin 1s linear infinite;"></span> Carregando resumo...</span>`;
+
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    const startDateStr = getLocalDateString(startDate);
+
+    let completionsList = [];
+    if (supabaseClient && currentUser) {
+        try {
+            const { data, error } = await supabaseClient
+                .from('completions')
+                .select('*')
+                .gte('date', startDateStr)
+                .eq('completed', true);
+            if (!error && data) {
+                completionsList = data;
+            }
+        } catch (e) {
+            console.error("Erro ao carregar conclusões do Supabase", e);
+        }
+    }
+    
+    // Fallback offline or merged
+    if (completionsList.length === 0) {
+        let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+        completionsList = localCompletions.filter(c => c.date >= startDateStr && c.completed);
+    }
+
+    const completionCounts = {};
+    completionsList.forEach(c => {
+        completionCounts[c.task_id] = (completionCounts[c.task_id] || 0) + 1;
+    });
+
+    let storiesCount = 0;
+    let collegeWorksCount = 0;
+    let studiesCount = 0;
+    let deliveriesCount = 0;
+    let financialCount = 0;
+    let meetingsCount = 0;
+    let cleaningCount = 0;
+    let fitnessCount = 0;
+
+    Object.entries(completionCounts).forEach(([taskId, count]) => {
+        const task = allActiveTasks.find(t => String(t.id) === String(taskId));
+        if (!task) return;
+        
+        const ctx = task.context || analyzeTaskContext(task.title, task.category, allActiveTasks);
+        if (!ctx) return;
+
+        const titleLower = task.title.toLowerCase();
+        const categoryLower = task.category.toLowerCase();
+
+        if ((titleLower.includes("storie") || titleLower.includes("video") || titleLower.includes("stories") || titleLower.includes("post")) 
+            && (categoryLower.includes("tio nan") || titleLower.includes("tio nan") || categoryLower.includes("marketing"))) {
+            storiesCount += count;
+        }
+        else if (titleLower.includes("trein") || titleLower.includes("musculac") || titleLower.includes("academia") || titleLower.includes("gym") || titleLower.includes("corrida") || titleLower.includes("correr") || titleLower.includes("futebol")) {
+            fitnessCount += count;
+        }
+        else if (ctx.activity_type === "trabalho_academico" || categoryLower.includes("pucrs") || categoryLower.includes("faculdade")) {
+            collegeWorksCount += count;
+        }
+        else if (ctx.activity_type === "estudo") {
+            studiesCount += count;
+        }
+        else if (ctx.activity_type === "entrega") {
+            deliveriesCount += count;
+        }
+        else if (ctx.activity_type === "financeiro") {
+            financialCount += count;
+        }
+        else if (ctx.activity_type === "reuniao") {
+            meetingsCount += count;
+        }
+        else if (ctx.activity_type === "limpeza") {
+            cleaningCount += count;
+        }
+    });
+
+    const summarySentences = [];
+    if (storiesCount > 0) {
+        summarySentences.push(`Subiu <strong>${storiesCount}</strong> stories para o Tio Nan.`);
+    }
+    if (collegeWorksCount > 0) {
+        summarySentences.push(`Fez <strong>${collegeWorksCount}</strong> trabalhos da faculdade.`);
+    }
+    if (fitnessCount > 0) {
+        summarySentences.push(`Realizou <strong>${fitnessCount}</strong> treinos / exercícios físicos.`);
+    }
+    if (studiesCount > 0) {
+        summarySentences.push(`Realizou <strong>${studiesCount}</strong> sessões de estudo.`);
+    }
+    if (deliveriesCount > 0) {
+        summarySentences.push(`Concluiu <strong>${deliveriesCount}</strong> entregas ou envios.`);
+    }
+    if (financialCount > 0) {
+        summarySentences.push(`Lançou/pagou <strong>${financialCount}</strong> movimentações financeiras.`);
+    }
+    if (meetingsCount > 0) {
+        summarySentences.push(`Participou de <strong>${meetingsCount}</strong> reuniões.`);
+    }
+    if (cleaningCount > 0) {
+        summarySentences.push(`Completou <strong>${cleaningCount}</strong> tarefas de limpeza e organização.`);
+    }
+
+    const labelPeriod = days === 7 ? "esta semana" : days === 30 ? "este mês" : "este ano";
+    const warningLabel = daysRemaining === 1 ? "amanhã" : `em ${daysRemaining} dias`;
+
+    const warningHtml = `
+        <div style="background: rgba(245, 158, 11, 0.07); border: 1px solid rgba(245, 158, 11, 0.2); color: #eab308; padding: 12px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 0.82rem; font-weight: 600; display: flex; align-items: center; gap: 8px; line-height: 1.4;">
+            <i data-lucide="camera" style="width: 18px; height: 18px; flex-shrink: 0; color: #eab308;"></i>
+            <span>📸 Tire print! Este relatório expirará e sumirá do app ${warningLabel}.</span>
+        </div>
+    `;
+
+    if (summarySentences.length > 0) {
+        containerEl.innerHTML = `
+            ${warningHtml}
+            <p style="margin: 0 0 12px 0; font-weight: bold; color: var(--text-primary);">Aqui está o que você concluiu ${labelPeriod}:</p>
+            <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px;">
+                ${summarySentences.map(s => `<li>${s}</li>`).join("")}
+            </ul>
+        `;
+    } else {
+        containerEl.innerHTML = `
+            ${warningHtml}
+            <p style="margin: 0; color: var(--text-secondary); font-style: italic;">Nenhuma rotina ou tarefa concluída ${labelPeriod}.</p>
+        `;
+    }
+    lucide.createIcons();
+}
+
+function checkAutomaticReports() {
+    const now = new Date();
+    const todayStr = getLocalDateString(now);
+    const currentMonthYearStr = `${now.getFullYear()}-${now.getMonth() + 1}`;
+    const currentYearStr = `${now.getFullYear()}`;
+
+    // 1. Relatório Anual (Disponível de 1 a 3 de Janeiro)
+    if (now.getMonth() === 0 && now.getDate() <= 3) {
+        const lastYearlyShown = localStorage.getItem("last_yearly_summary_shown");
+        if (lastYearlyShown !== currentYearStr) {
+            localStorage.setItem("last_yearly_summary_shown", currentYearStr);
+            setTimeout(() => {
+                if (typeof switchReportTab === "function") {
+                    switchReportTab(365);
+                }
+                openModal(modalSmartReport);
+            }, 1200);
+            return;
+        }
+    }
+
+    // 2. Relatório Mensal (Disponível de 1 a 3 de qualquer mês)
+    if (now.getDate() <= 3) {
+        const lastMonthlyShown = localStorage.getItem("last_monthly_summary_shown");
+        if (lastMonthlyShown !== currentMonthYearStr) {
+            localStorage.setItem("last_monthly_summary_shown", currentMonthYearStr);
+            setTimeout(() => {
+                if (typeof switchReportTab === "function") {
+                    switchReportTab(30);
+                }
+                openModal(modalSmartReport);
+            }, 1200);
+            return;
+        }
+    }
+
+    // 3. Relatório Semanal (Sábado, Domingo)
+    const day = now.getDay();
+    if (day === 6 || day === 0) { // 6 = Sábado, 0 = Domingo
+        const lastWeeklyShown = localStorage.getItem("last_weekly_summary_shown");
+        
+        // Calcula a data do sábado de referência para este ciclo de 2 dias
+        const saturday = new Date(now);
+        const diffToSaturday = (day === 6) ? 0 : -1;
+        saturday.setDate(saturday.getDate() + diffToSaturday);
+        const satStr = getLocalDateString(saturday);
+
+        if (lastWeeklyShown !== satStr) {
+            localStorage.setItem("last_weekly_summary_shown", satStr);
+            setTimeout(() => {
+                if (typeof switchReportTab === "function") {
+                    switchReportTab(7);
+                }
+                openModal(modalSmartReport);
+            }, 1200);
+        }
+    }
 }
