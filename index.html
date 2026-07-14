@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Checklist Diário Organizacional</title>
-    <link rel="stylesheet" href="style.css?v=3.2">
+    <link rel="stylesheet" href="style.css?v=7.20">
     
     <!-- iOS / PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -89,9 +89,9 @@
             <button id="btn-prev-day" class="icon-button" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); color: var(--text-primary); cursor: pointer; border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; transition: var(--transition-smooth);" title="Dia Anterior">
                 <i data-lucide="chevron-left" style="width: 20px; height: 20px;"></i>
             </button>
-            <div class="date-picker-wrapper" id="btn-open-calendar" style="cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 16px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 20px; transition: var(--transition-smooth);">
-                <span id="current-date" style="font-size: 1rem; font-weight: 800; color: var(--text-primary);">Carregando data...</span>
-                <i data-lucide="calendar" style="width: 14px; height: 14px; color: var(--text-secondary);"></i>
+            <div class="date-picker-wrapper" id="btn-open-calendar">
+                <span id="current-date">Carregando data...</span>
+                <i data-lucide="calendar" style="width: 14px; height: 14px;"></i>
             </div>
             <button id="btn-next-day" class="icon-button" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); color: var(--text-primary); cursor: pointer; border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; transition: var(--transition-smooth);" title="Próximo Dia">
                 <i data-lucide="chevron-right" style="width: 20px; height: 20px;"></i>
@@ -154,15 +154,17 @@
             </div>
         </main>
 
-        <!-- Bottom Actions (Stuck to bottom on mobile) -->
-        <footer class="app-footer">
-            <button id="btn-add-task-modal" class="btn btn-secondary">
-                <i data-lucide="plus"></i> Nova Tarefa
+        <!-- Bottom Actions (Floating Stacked FAB Menu at Bottom-Left) -->
+        <div class="fab-menu-container" id="fab-menu">
+            <button id="btn-share-report" class="fab-btn fab-share" title="Relatório WhatsApp">
+                <i data-lucide="share-2" style="width: 24px; height: 24px;"></i>
+                <span class="fab-label">Relatório WhatsApp</span>
             </button>
-            <button id="btn-share-report" class="btn btn-primary">
-                <i data-lucide="share-2"></i> Relatório WhatsApp
+            <button id="btn-add-task-modal" class="fab-btn fab-menu-trigger" title="Nova Tarefa">
+                <i data-lucide="plus" style="width: 24px; height: 24px;"></i>
+                <span class="fab-label">Nova Tarefa</span>
             </button>
-        </footer>
+        </div>
     </div>
 
     <!-- Modal: Add Task -->
@@ -178,6 +180,20 @@
                     <label for="task-title">Descrição da Tarefa</label>
                     <input type="text" id="task-title" required placeholder="Ex: Verificar temperatura do freezer" autocomplete="off">
                 </div>
+                <div class="form-group" style="margin-top: 10px;">
+                    <label>Turno</label>
+                    <div class="shift-selector" id="add-shift-selector">
+                        <button type="button" class="shift-toggle-btn" data-shift="Manhã">
+                            <i data-lucide="sunrise" style="width: 14px; height: 14px; margin-right: 4px;"></i> Manhã
+                        </button>
+                        <button type="button" class="shift-toggle-btn" data-shift="Tarde">
+                            <i data-lucide="sun" style="width: 14px; height: 14px; margin-right: 4px;"></i> Tarde
+                        </button>
+                        <button type="button" class="shift-toggle-btn" data-shift="Noite">
+                            <i data-lucide="moon" style="width: 14px; height: 14px; margin-right: 4px;"></i> Noite
+                        </button>
+                    </div>
+                </div>
                 <div class="form-group">
                     <label for="task-category">Categoria</label>
                     <select id="task-category" required>
@@ -190,8 +206,8 @@
                 <div class="form-group">
                     <label for="task-recurring">Recorrência</label>
                     <select id="task-recurring" required>
-                        <option value="daily">Diária (Todo dia)</option>
                         <option value="once">Única (Apenas na data)</option>
+                        <option value="daily">Diária (Todo dia)</option>
                         <option value="repeat">Repetir (Dias específicos)</option>
                     </select>
                 </div>
@@ -240,14 +256,14 @@
                 <div style="margin-bottom: 24px;">
                     <label style="display:block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); margin-bottom:8px;">Tema do Aplicativo</label>
                     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
-                        <button class="btn theme-selector-btn active" data-theme="default" style="padding: 10px; font-size: 0.75rem; font-weight: 700; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-surface-solid); color: #fff;">
-                            Escuro
+                        <button class="btn theme-selector-btn active" data-theme="default" style="padding: 10px; font-size: 0.75rem; font-weight: 700; border: 1px solid rgba(255,255,255,0.15); border-radius: var(--radius-sm); background: #161e31; color: #e2e8f0;">
+                            🌙 Escuro
                         </button>
-                        <button class="btn theme-selector-btn" data-theme="light" style="padding: 10px; font-size: 0.75rem; font-weight: 700; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: #ffffff; color: #000;">
-                            Claro
+                        <button class="btn theme-selector-btn" data-theme="light" style="padding: 10px; font-size: 0.75rem; font-weight: 700; border: 1px solid rgba(0,0,0,0.15); border-radius: var(--radius-sm); background: #ffffff; color: #0f172a;">
+                            ☀️ Claro
                         </button>
-                        <button class="btn theme-selector-btn" data-theme="girly" style="padding: 10px; font-size: 0.75rem; font-weight: 700; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: #ffe4e6; color: #ec4899;">
-                            Feminino
+                        <button class="btn theme-selector-btn" data-theme="girly" style="padding: 10px; font-size: 0.75rem; font-weight: 700; border: 1px solid rgba(219,39,119,0.3); border-radius: var(--radius-sm); background: #ffe4e6; color: #9d174d;">
+                            🌸 Feminino
                         </button>
                     </div>
                 </div>
@@ -323,6 +339,26 @@
                 <div class="form-group">
                     <label for="edit-task-title">Descrição</label>
                     <input type="text" id="edit-task-title" required autocomplete="off">
+                </div>
+                <div class="form-group" style="margin-top: 10px;">
+                    <label>Turno</label>
+                    <div class="shift-selector" id="edit-shift-selector">
+                        <button type="button" class="shift-toggle-btn" data-shift="Manhã">
+                            <i data-lucide="sun" style="width: 14px; height: 14px; margin-right: 4px;"></i> Manhã
+                        </button>
+                        <button type="button" class="shift-toggle-btn" data-shift="Tarde">
+                            <i data-lucide="sunset" style="width: 14px; height: 14px; margin-right: 4px;"></i> Tarde
+                        </button>
+                        <button type="button" class="shift-toggle-btn" data-shift="Noite">
+                            <i data-lucide="moon" style="width: 14px; height: 14px; margin-right: 4px;"></i> Noite
+                        </button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="edit-task-category">Categoria / Local</label>
+                    <select id="edit-task-category" required>
+                        <!-- Javascript will inject categories here -->
+                    </select>
                 </div>
                 <div class="form-group">
                     <label for="edit-task-recurring">Recorrência</label>
@@ -523,6 +559,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=3.2"></script>
+    <script src="app.js?v=7.20"></script>
 </body>
 </html>

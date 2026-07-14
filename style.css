@@ -139,7 +139,7 @@ body {
     background-color: var(--bg-dark);
     padding-top: 4px;
     padding-bottom: 12px;
-    margin-bottom: 24px;
+    margin-bottom: 8px;
     z-index: 100;
     display: flex;
     justify-content: space-between;
@@ -370,6 +370,9 @@ body {
     transition: var(--transition-smooth);
     position: relative;
     z-index: 1;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
 }
 
 .category-chip:active {
@@ -394,7 +397,7 @@ body {
     flex-direction: column;
     flex: 1;
     overflow-y: visible; /* A rolagem agora é tratada nativamente no nível do document/body */
-    padding-bottom: 30px; /* Espaço normal para distanciamento do rodapé relativo */
+    padding-bottom: 110px; /* Garante que os botões FAB flutuantes não cubram as últimas tarefas ao rolar até o fim */
 }
 .tasks-section::-webkit-scrollbar {
     display: none; /* Esconder barra de rolagem no Chrome/Safari */
@@ -411,6 +414,18 @@ body {
     cursor: pointer;
     transition: var(--transition-smooth);
     user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+}
+
+.task-item * {
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
 }
 
 /* Edit Mode styling */
@@ -482,12 +497,20 @@ body {
     box-shadow: 0 0 12px rgba(139, 92, 246, 0.4);
 }
 
-/* Custom Checkbox Design */
 .task-checkbox-wrapper {
     position: relative;
     width: 20px;
     height: 20px;
     flex-shrink: 0;
+}
+
+/* Desativa visualmente o checkbox em dias futuros (Planejamento) ou passados (Histórico) */
+.planning-mode .task-checkbox,
+.history-mode .task-checkbox {
+    cursor: not-allowed;
+    opacity: 0.55;
+    background: rgba(255, 255, 255, 0.03);
+    border-color: var(--border-color);
 }
 
 .task-checkbox {
@@ -629,18 +652,161 @@ body {
     max-width: 260px;
 }
 
-/* Bottom Footer (Static at the bottom of container) */
-.app-footer {
-    position: relative;
-    width: 100%;
-    padding: 20px 0 24px 0;
+/* Floating Actions Stacked Menu (Bottom-Left) */
+.fab-menu-container {
+    position: fixed;
+    bottom: 24px;
+    left: 24px;
+    width: 56px;
+    height: 56px;
     background: transparent;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-    z-index: 10;
-    margin-top: auto;
+    z-index: 95; /* Fica atrás dos modals (z-index 100) quando ativos */
+    transition: height 0.3s cubic-bezier(0.16, 1, 0.3, 1), width 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
+
+.fab-menu-container.open {
+    height: 136px; /* Abre espaço vertical para ambos os botões */
+    width: 230px; /* Abre espaço horizontal para as escritas */
+}
+
+@media (min-width: 481px) {
+    .fab-menu-container {
+        position: absolute;
+        bottom: 24px;
+        left: 24px;
+    }
+}
+
+/* Floating Action Button (FAB) base styles */
+.fab-btn {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 56px;
+    height: 56px;
+    border-radius: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start; /* Mantém flex-start constante para evitar pulos no alinhamento */
+    padding: 0 0 0 16px; /* 16px centraliza perfeitamente o ícone de 24px quando fechado (largura 56px) */
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    overflow: hidden; /* Oculta o texto quando fechado */
+    white-space: nowrap;
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), 
+                width 0.3s cubic-bezier(0.16, 1, 0.3, 1), 
+                box-shadow 0.25s ease, 
+                border-radius 0.3s ease, 
+                background 0.25s ease,
+                padding-left 0.3s ease;
+}
+
+.fab-btn:hover {
+    transform: scale(1.04);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
+.fab-btn:active {
+    transform: scale(0.95);
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.25);
+}
+
+/* Escrita / Label oculta por padrão */
+.fab-label {
+    display: inline-block; /* Garante que max-width e overflow funcionem corretamentte */
+    opacity: 0;
+    max-width: 0;
+    font-size: 0.85rem;
+    font-weight: 700;
+    text-transform: none;
+    letter-spacing: normal;
+    overflow: hidden;
+    white-space: nowrap;
+    /* Transição rápida ao fechar para evitar que o texto quebre ou cause pulos */
+    transition: opacity 0.12s ease-out, max-width 0.12s ease-out, margin-left 0.12s ease-out;
+}
+
+/* Quando o menu está aberto, vira pílula e exibe a escrita */
+.fab-menu-container.open .fab-btn {
+    width: 210px; /* Estica para virar pílula */
+    padding-left: 18px; /* Ajusta suavemente a margem esquerda do ícone */
+    border-radius: 16px; /* Formato de pílula arredondada premium */
+}
+
+.fab-menu-container.open .fab-label {
+    opacity: 1;
+    max-width: 150px;
+    margin-left: 10px;
+    /* Transição suave ao abrir com um leve atraso (delay) para sincronizar com a expansão */
+    transition: opacity 0.25s ease 0.05s, max-width 0.25s ease 0.05s, margin-left 0.25s ease 0.05s;
+}
+
+/* Botão Gatilho / Adicionar (+) fica na frente */
+.fab-menu-trigger {
+    z-index: 1002;
+    background: #ffffff !important;
+    color: #0f172a !important; /* Sempre escuro para contraste */
+    border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.fab-menu-trigger i {
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Botão de relatório (WhatsApp) fica atrás, espiando no topo-direito */
+.fab-share {
+    z-index: 1001;
+    background: var(--primary-gradient);
+    color: #ffffff;
+    /* Efeito de empilhamento premium: espiando inclinada e com borda de separação */
+    transform: translate(6px, -8px) rotate(8deg) scale(0.92);
+    border: 2px solid var(--bg-dark);
+    opacity: 0.9;
+    /* Adicionado border-color na transição para suavizar o desaparecimento da borda */
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), 
+                width 0.3s cubic-bezier(0.16, 1, 0.3, 1), 
+                border-color 0.2s ease, 
+                border-radius 0.3s ease, 
+                opacity 0.3s ease;
+}
+
+/* Animação quando o menu está aberto */
+.fab-menu-container.open .fab-share {
+    opacity: 1;
+    border-color: transparent; /* Remove a borda de separação ao expandir */
+    /* Desloca verticalmente para cima */
+    transform: translateY(-72px) rotate(0deg) scale(1);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
+/* Mantém o + como + pois agora exibe a escrita "Nova Tarefa" */
+.fab-menu-container.open .fab-menu-trigger i {
+    transform: rotate(0deg);
+}
+
+/* Ajustes de cores dos botões para temas */
+body.theme-light .fab-menu-trigger {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    box-shadow: 0 4px 16px rgba(15, 23, 42, 0.15);
+}
+
+body.theme-light .fab-share {
+    background: var(--primary-gradient);
+    color: #ffffff;
+    box-shadow: 0 4px 16px rgba(15, 23, 42, 0.12);
+}
+
+body.theme-girly .fab-menu-trigger {
+    background: #ffffff !important;
+    color: #9d174d !important; /* Rosa para o plus */
+    border: 1px solid rgba(219, 39, 119, 0.15);
+    box-shadow: 0 4px 16px rgba(219, 39, 119, 0.12);
+}
+
+
 
 /* Buttons System */
 .btn {
@@ -925,8 +1091,172 @@ body.theme-girly .modal-content::before {
     align-items: center;
     gap: 6px;
     cursor: pointer;
-    padding: 2px 0;
+    padding: 6px 16px;
+    border-radius: 20px;
+    border: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.02);
+    transition: background 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
 }
+
+#current-date {
+    font-size: 1rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    transition: color 0.25s ease;
+}
+
+.date-picker-wrapper i[data-lucide="calendar"] {
+    width: 14px;
+    height: 14px;
+    color: var(--text-secondary);
+    transition: color 0.25s ease;
+}
+
+/* Hoje — verde vibrante */
+.app-container:not(.history-mode):not(.planning-mode) .date-picker-wrapper {
+    background: linear-gradient(135deg, rgba(34, 197, 94, 0.15), rgba(16, 185, 129, 0.1));
+    border-color: rgba(34, 197, 94, 0.45);
+    box-shadow: 0 0 12px rgba(34, 197, 94, 0.18);
+}
+.app-container:not(.history-mode):not(.planning-mode) #current-date {
+    color: #4ade80;
+}
+.app-container:not(.history-mode):not(.planning-mode) .date-picker-wrapper i {
+    color: rgba(74, 222, 128, 0.7);
+}
+
+/* Histórico — âmbar */
+.app-container.history-mode .date-picker-wrapper {
+    background: rgba(245, 158, 11, 0.07);
+    border-color: rgba(245, 158, 11, 0.3);
+    box-shadow: none;
+}
+.app-container.history-mode #current-date {
+    color: #fbbf24;
+}
+.app-container.history-mode .date-picker-wrapper i {
+    color: rgba(251, 191, 36, 0.6);
+}
+
+/* Planejamento — azul */
+.app-container.planning-mode .date-picker-wrapper {
+    background: rgba(59, 130, 246, 0.07);
+    border-color: rgba(59, 130, 246, 0.3);
+    box-shadow: none;
+}
+.app-container.planning-mode #current-date {
+    color: #93c5fd;
+}
+.app-container.planning-mode .date-picker-wrapper i {
+    color: rgba(147, 197, 253, 0.6);
+}
+
+/* ─── Overrides para tema Claro (theme-light) ─── */
+body.theme-light .app-container:not(.history-mode):not(.planning-mode) .date-picker-wrapper {
+    background: linear-gradient(135deg, rgba(22, 163, 74, 0.1), rgba(5, 150, 105, 0.08));
+    border-color: rgba(22, 163, 74, 0.4);
+    box-shadow: 0 0 10px rgba(22, 163, 74, 0.1);
+}
+body.theme-light .app-container:not(.history-mode):not(.planning-mode) #current-date {
+    color: #15803d; /* green-700 — contraste alto no branco */
+}
+body.theme-light .app-container:not(.history-mode):not(.planning-mode) .date-picker-wrapper i {
+    color: rgba(21, 128, 61, 0.6);
+}
+body.theme-light .app-container.history-mode .date-picker-wrapper {
+    background: rgba(217, 119, 6, 0.08);
+    border-color: rgba(217, 119, 6, 0.35);
+}
+body.theme-light .app-container.history-mode #current-date {
+    color: #92400e; /* amber-800 */
+}
+body.theme-light .app-container.planning-mode .date-picker-wrapper {
+    background: rgba(29, 78, 216, 0.08);
+    border-color: rgba(29, 78, 216, 0.35);
+}
+body.theme-light .app-container.planning-mode #current-date {
+    color: #1e40af; /* blue-800 */
+}
+
+/* ─── Overrides para tema Girly (theme-girly) ─── */
+body.theme-girly .app-container:not(.history-mode):not(.planning-mode) .date-picker-wrapper {
+    background: linear-gradient(135deg, rgba(34, 197, 94, 0.12), rgba(16, 185, 129, 0.08));
+    border-color: rgba(34, 197, 94, 0.4);
+    box-shadow: 0 0 10px rgba(34, 197, 94, 0.12);
+}
+body.theme-girly .app-container:not(.history-mode):not(.planning-mode) #current-date {
+    color: #15803d; /* green-700 */
+}
+body.theme-girly .app-container:not(.history-mode):not(.planning-mode) .date-picker-wrapper i {
+    color: rgba(21, 128, 61, 0.6);
+}
+body.theme-girly .app-container.history-mode .date-picker-wrapper {
+    background: rgba(217, 119, 6, 0.08);
+    border-color: rgba(217, 119, 6, 0.35);
+}
+body.theme-girly .app-container.history-mode #current-date {
+    color: #92400e;
+}
+body.theme-girly .app-container.planning-mode .date-picker-wrapper {
+    background: rgba(139, 92, 246, 0.1);
+    border-color: rgba(139, 92, 246, 0.35);
+    box-shadow: 0 0 8px rgba(139, 92, 246, 0.1);
+}
+body.theme-girly .app-container.planning-mode #current-date {
+    color: #6d28d9; /* violet-700 — feminino mas claramente diferente do rosa */
+}
+body.theme-girly .app-container.planning-mode .date-picker-wrapper i {
+    color: rgba(109, 40, 217, 0.7);
+}
+body.theme-girly .app-container.planning-mode .history-badge {
+    background: rgba(139, 92, 246, 0.12);
+    color: #7c3aed;
+    border-color: rgba(139, 92, 246, 0.25);
+}
+
+/* ─── Corretor de contraste para o badge de Planejamento no tema Claro ─── */
+body.theme-light .app-container.planning-mode .history-badge {
+    background: rgba(29, 78, 216, 0.08);
+    color: #1e40af;
+    border-color: rgba(29, 78, 216, 0.25);
+}
+body.theme-light .app-container.planning-mode .date-picker-wrapper i {
+    color: rgba(30, 64, 175, 0.6);
+}
+body.theme-girly .app-container.history-mode .date-picker-wrapper i {
+    color: rgba(146, 64, 14, 0.6);
+}
+body.theme-light .app-container.history-mode .date-picker-wrapper i {
+    color: rgba(146, 64, 14, 0.6);
+}
+body.theme-light .app-container.history-mode .history-badge {
+    background: rgba(217, 119, 6, 0.08);
+    color: #92400e;
+    border-color: rgba(217, 119, 6, 0.25);
+}
+body.theme-girly .app-container.history-mode .history-badge {
+    background: rgba(217, 119, 6, 0.08);
+    color: #92400e;
+    border-color: rgba(217, 119, 6, 0.25);
+}
+
+/* Overrides para Hoje no tema Claro */
+body.theme-light .app-container.today-mode .history-badge,
+body.theme-light .history-badge {
+    background: rgba(5, 150, 105, 0.08);
+    color: #059669; /* emerald-700 */
+    border-color: rgba(5, 150, 105, 0.25);
+}
+
+/* Overrides para Hoje no tema Feminino */
+body.theme-girly .app-container.today-mode .history-badge,
+body.theme-girly .history-badge {
+    background: rgba(219, 39, 119, 0.08);
+    color: #db2777; /* pink-600 */
+    border-color: rgba(219, 39, 119, 0.25);
+}
+
+
 
 .date-select-input {
     position: absolute;
@@ -950,22 +1280,68 @@ body.theme-girly .modal-content::before {
     transform: translateY(1px);
 }
 
-/* History Badge and History Mode Styling */
+/* History / Planning / Today Badge */
 .history-badge {
-    display: none;
+    display: inline-block;
+    visibility: visible;  /* Sempre visível — sem salto de layout */
     font-size: 0.65rem;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     padding: 2px 8px;
     border-radius: 4px;
-    background: rgba(245, 158, 11, 0.12);
-    color: #f59e0b;
-    border: 1px solid rgba(245, 158, 11, 0.2);
+    background: rgba(16, 185, 129, 0.12); /* Default para Hoje (emerald green) */
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.2);
+    transition: all 0.25s ease;
+    display: inline-flex;
+    align-items: center;
 }
 
-.app-container.history-mode .history-badge {
+.pulse-dot {
     display: inline-block;
+    width: 6px;
+    height: 6px;
+    background-color: currentColor;
+    border-radius: 50%;
+    margin-right: 6px;
+    animation: pulse-badge 1.8s infinite ease-in-out;
+}
+
+@keyframes pulse-badge {
+    0% {
+        transform: scale(0.85);
+        opacity: 0.5;
+    }
+    50% {
+        transform: scale(1.25);
+        opacity: 1;
+    }
+    100% {
+        transform: scale(0.85);
+        opacity: 0.5;
+    }
+}
+
+/* Hoje — dia atual */
+.app-container.today-mode .history-badge {
+    background: rgba(16, 185, 129, 0.12);
+    color: #10b981;
+    border-color: rgba(16, 185, 129, 0.25);
+}
+
+/* Histórico — dias passados */
+.app-container.history-mode .history-badge {
+    background: rgba(245, 158, 11, 0.12);
+    color: #f59e0b;
+    border-color: rgba(245, 158, 11, 0.25);
+}
+
+/* Planejamento — dias futuros */
+.app-container.planning-mode .history-badge {
+    background: rgba(59, 130, 246, 0.12);
+    color: #60a5fa;
+    border-color: rgba(59, 130, 246, 0.25);
 }
 
 .app-container.history-mode .task-item {
@@ -1004,9 +1380,7 @@ body.theme-girly .modal-content::before {
         height: 850px;
     }
     
-    .app-footer {
-        border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-    }
+    /* Footer is now a transparent FAB container, no border-radius needed */
     
     .modal {
         align-items: center; /* Center modals on desktop */
@@ -1596,4 +1970,117 @@ body.theme-light .date-navigator-section .icon-button:active {
 .slide-in-active {
     transform: translateX(0);
     opacity: 1;
+}
+
+/* Turnos (Shifts) Selector design */
+.shift-selector {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+    width: 100%;
+}
+
+.shift-toggle-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    border: 1.5px solid var(--border-color);
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: var(--transition-smooth);
+}
+
+.shift-toggle-btn:active {
+    transform: scale(0.95);
+}
+
+.shift-toggle-btn.active {
+    background: var(--primary-gradient);
+    color: #ffffff;
+    border-color: transparent;
+    box-shadow: 0 4px 10px rgba(139, 92, 246, 0.25);
+}
+
+body.theme-light .shift-toggle-btn.active {
+    box-shadow: 0 4px 10px rgba(29, 78, 216, 0.25);
+}
+
+body.theme-girly .shift-toggle-btn.active {
+    box-shadow: 0 4px 10px rgba(219, 39, 119, 0.25);
+}
+
+/* Shift Group Headings in TODOS tab */
+.shift-group-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 20px;
+    margin-bottom: 8px;
+    padding: 8px 4px;
+    border-bottom: 1.5px solid var(--border-color);
+    color: var(--text-secondary);
+}
+
+.shift-group-header:first-of-type {
+    margin-top: 8px;
+}
+
+.shift-group-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-primary);
+}
+
+.shift-group-title i {
+    width: 15px;
+    height: 15px;
+    color: var(--primary);
+}
+
+.shift-group-count {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.03);
+    padding: 3px 8px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.02);
+}
+
+/* Drag and Drop Task items styles */
+.task-item.dragging {
+    opacity: 0.85;
+    transform: scale(1.02);
+    box-shadow: 0 8px 24px rgba(139, 92, 246, 0.35) !important;
+    border-color: var(--primary) !important;
+    background: var(--bg-surface) !important;
+    z-index: 1000;
+    position: relative;
+    user-select: none;
+}
+
+body.theme-light .task-item.dragging {
+    box-shadow: 0 8px 24px rgba(29, 78, 216, 0.2) !important;
+}
+
+body.theme-girly .task-item.dragging {
+    box-shadow: 0 8px 24px rgba(219, 39, 119, 0.2) !important;
+}
+
+.shift-group-tasks {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
 }

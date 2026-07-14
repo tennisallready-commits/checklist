@@ -30,6 +30,7 @@ let pendingToggles = new Set();
 // Authentication State
 let currentUser = null;
 let isAuthModeLogin = true;
+let localDataVersion = 0; // Previne race conditions de sync
 
 // Supabase Client instance
 let supabaseClient = null;
@@ -85,6 +86,7 @@ let pendingInvites = [];
 const formAddTask = document.getElementById("form-add-task");
 const inputTaskTitle = document.getElementById("task-title");
 const selectTaskCategory = document.getElementById("task-category");
+const selectEditTaskCategory = document.getElementById("edit-task-category");
 const selectTaskRecurring = document.getElementById("task-recurring");
 const selectTaskAssignedTo = document.getElementById("task-assigned-to");
 const taskAssigneeGroup = document.getElementById("task-assignee-group");
@@ -153,7 +155,12 @@ async function initApp() {
         orgTagEl.textContent = "Checklist Organizacional";
     }
 
-    // Prefill Supabase credentials (using code constants now)
+    // Carrega dados offline de imediato para renderização instantânea na tela
+    // enquanto a sessão do Supabase é verificada assincronamente (evita tela em branco/delay de 1s)
+    loadDataOffline();
+    renderCategories();
+    renderChecklist();
+    updateProgress();
 
     // Connect to Supabase
     connectSupabase();
@@ -174,6 +181,11 @@ async function initApp() {
 // Event Listeners Setup
 // ----------------------------------------------------
 function setupEventListeners() {
+    let initialScrollY = 0;
+    let initialTasksScrollTop = 0;
+    let lastAddTaskInteractionTime = 0;
+    let lastShareInteractionTime = 0;
+
     // Smart Report Modal Events
     // Smart Report Tab Switcher and Listeners
     const tabWeekly = document.getElementById("tab-report-weekly");
@@ -240,54 +252,69 @@ function setupEventListeners() {
         renderCalendarGrid();
     });
 
-    // Date Navigation Arrows (Chevron-left/right)
-    async function changeDay(offset) {
-        const outClass = offset > 0 ? "slide-out-left" : "slide-out-right";
-        const inClass = offset > 0 ? "slide-in-right" : "slide-in-left";
-        
-        // Aplica transição de saída
-        tasksListEl.style.transition = "transform 0.15s ease-in, opacity 0.15s ease-in";
-        tasksListEl.classList.add(outClass);
-
-        await new Promise(resolve => setTimeout(resolve, 150));
-
+    // Lógica pura de dados — sem animação. Compartilhada entre setas e swipe.
+    async function changeDayData(offset) {
         const dateObj = new Date(selectedDate + "T12:00:00");
         dateObj.setDate(dateObj.getDate() + offset);
-        
         selectedDate = getLocalDateString(dateObj);
-        
-        const now = new Date();
-        const todayStr = getLocalDateString(now);
-        isHistoryMode = (selectedDate !== todayStr);
-        
-        if (isHistoryMode) {
-            appContainer.classList.add("history-mode");
-            toggleEditMode(false);
-        } else {
-            appContainer.classList.remove("history-mode");
-        }
 
         updateDateDisplay();
         await loadChecklistAndProgress();
         lucide.createIcons();
+    }
 
-        // Configura posição de início da entrada
-        tasksListEl.style.transition = "none";
-        tasksListEl.classList.remove(outClass);
-        tasksListEl.classList.add(inClass);
+    // Para os botões de seta — crossfade + leve escala (sem slide horizontal)
+    async function changeDay(offset) {
+        const categoriesBar = document.getElementById("categories-bar");
 
-        // Força reflow para aplicar o estado sem transição
-        tasksListEl.offsetHeight;
+        // Fade out
+        const fadeOut = "opacity 0.12s ease-out, transform 0.12s ease-out";
+        tasksListEl.style.transition    = fadeOut;
+        if (categoriesBar) categoriesBar.style.transition = fadeOut;
 
-        // Ativa transição de entrada
-        tasksListEl.style.transition = "transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1)";
-        tasksListEl.classList.remove(inClass);
-        tasksListEl.classList.add("slide-in-active");
+        tasksListEl.style.opacity    = "0";
+        tasksListEl.style.transform  = `scale(0.97) translateX(${offset > 0 ? "-12px" : "12px"})`;
+        if (categoriesBar) {
+            categoriesBar.style.opacity   = "0";
+            categoriesBar.style.transform = `translateX(${offset > 0 ? "-8px" : "8px"})`;
+        }
+
+        await Promise.all([
+            new Promise(resolve => setTimeout(resolve, 120)),
+            changeDayData(offset)
+        ]);
+
+        // Reposiciona do lado oposto (sem transição)
+        const inX = offset > 0 ? "12px" : "-12px";
+        tasksListEl.style.transition    = "none";
+        if (categoriesBar) categoriesBar.style.transition = "none";
+        tasksListEl.style.transform     = `scale(0.97) translateX(${inX})`;
+        tasksListEl.style.opacity       = "0";
+        if (categoriesBar) {
+            categoriesBar.style.opacity   = "0";
+            categoriesBar.style.transform = `translateX(${offset > 0 ? "8px" : "-8px"})`;
+        }
+        tasksListEl.offsetHeight; // reflow
+
+        // Fade in
+        const fadeIn = "opacity 0.2s ease-out, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)";
+        tasksListEl.style.transition    = fadeIn;
+        if (categoriesBar) categoriesBar.style.transition = fadeIn;
+        tasksListEl.style.opacity       = "1";
+        tasksListEl.style.transform     = "scale(1) translateX(0)";
+        if (categoriesBar) {
+            categoriesBar.style.opacity   = "1";
+            categoriesBar.style.transform = "translateX(0)";
+        }
 
         setTimeout(() => {
-            tasksListEl.classList.remove("slide-in-active");
-            tasksListEl.style.transition = "";
-        }, 220);
+            tasksListEl.style.transition   = "";
+            tasksListEl.style.transform    = "";
+            if (categoriesBar) {
+                categoriesBar.style.transition = "";
+                categoriesBar.style.transform  = "";
+            }
+        }, 200);
     }
 
     if (btnPrevDay) {
@@ -297,106 +324,172 @@ function setupEventListeners() {
         btnNextDay.addEventListener("click", () => changeDay(1));
     }
 
-    // Navegação por deslize nas bordas da barra de progresso
+    // Navegação por deslize em qualquer parte da barra de progresso
     const progressCard = document.querySelector(".progress-card-container");
     if (progressCard) {
-        let touchStartX = 0;
-        let touchEndX = 0;
-        let startedOnEdge = false;
-        let edgeType = ""; // "left" ou "right"
+        let pcTouchStartX = 0;
+        let pcTouchCurrX  = 0;
+        let pcActive      = false;
+        let pcStartY      = 0;
+        let pcLocked      = false;
+
+        const SWIPE_THRESHOLD = 50;
+        const DRAG_RESIST     = 0.45;
+        const categoriesBar = document.getElementById("categories-bar");
+
+        function applyDrag(dx) {
+            // Só o card de progresso se move fisicamente
+            const resist = dx * DRAG_RESIST;
+            progressCard.style.transform = `translateX(${resist}px)`;
+
+            // Lista e guias apenas fazem fade proporcional ao arraste
+            const progress = Math.min(Math.abs(dx) / 120, 1);
+            const fadeVal  = 1 - progress * 0.6;
+            tasksListEl.style.opacity   = fadeVal;
+            if (categoriesBar) categoriesBar.style.opacity = fadeVal + 0.2 > 1 ? 1 : fadeVal + 0.2;
+        }
+
+        function resetDrag(animate = true) {
+            const t = animate ? "transform 0.3s cubic-bezier(0.16, 1, 0.3, 1)" : "none";
+            progressCard.style.transition = t;
+            progressCard.style.transform  = "translateX(0)";
+            progressCard.style.opacity    = "1";
+
+            const tFade = animate ? "opacity 0.25s ease-out" : "none";
+            tasksListEl.style.transition  = tFade;
+            tasksListEl.style.opacity     = "1";
+            tasksListEl.style.transform   = "";
+            if (categoriesBar) {
+                categoriesBar.style.transition = tFade;
+                categoriesBar.style.opacity    = "1";
+                categoriesBar.style.transform  = "";
+            }
+        }
+
+        function throwOut(direction) {
+            const offset = direction === "left" ? 1 : -1;
+            const outX   = direction === "left" ? "-100vw" : "100vw";
+            const inXpx  = offset > 0 ? "12px" : "-12px";
+
+            // Card de progresso sai deslizando
+            progressCard.style.transition = "transform 0.15s ease-in, opacity 0.15s ease-in";
+            progressCard.style.transform  = `translateX(${outX})`;
+            progressCard.style.opacity    = "0";
+
+            // Conteúdo (guias + lista) faz fade out suave
+            const contentFade = "opacity 0.12s ease-out, transform 0.12s ease-out";
+            tasksListEl.style.transition    = contentFade;
+            tasksListEl.style.opacity       = "0";
+            tasksListEl.style.transform     = `scale(0.97) translateX(${offset > 0 ? "-8px" : "8px"})`;
+            if (categoriesBar) {
+                categoriesBar.style.transition = contentFade;
+                categoriesBar.style.opacity    = "0";
+                categoriesBar.style.transform  = `translateX(${offset > 0 ? "-6px" : "6px"})`;
+            }
+
+            // Saída + dados em paralelo
+            Promise.all([
+                new Promise(resolve => setTimeout(resolve, 150)),
+                changeDayData(offset)
+            ]).then(() => {
+                // Posiciona tudo sem transição
+                progressCard.style.transition = "none";
+                tasksListEl.style.transition  = "none";
+                if (categoriesBar) categoriesBar.style.transition = "none";
+
+                progressCard.style.transform  = `translateX(${direction === "left" ? "100vw" : "-100vw"})`;
+                progressCard.style.opacity    = "0";
+                tasksListEl.style.opacity     = "0";
+                tasksListEl.style.transform   = `scale(0.97) translateX(${inXpx})`;
+                if (categoriesBar) {
+                    categoriesBar.style.opacity   = "0";
+                    categoriesBar.style.transform = `translateX(${offset > 0 ? "6px" : "-6px"})`;
+                }
+
+                progressCard.offsetHeight; // reflow
+
+                // Tudo entra junto com spring
+                const enterT = "transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease-out";
+                progressCard.style.transition = enterT;
+                tasksListEl.style.transition  = enterT;
+                if (categoriesBar) categoriesBar.style.transition = enterT;
+
+                progressCard.style.transform  = "translateX(0)";
+                progressCard.style.opacity    = "1";
+                tasksListEl.style.opacity     = "1";
+                tasksListEl.style.transform   = "scale(1) translateX(0)";
+                if (categoriesBar) {
+                    categoriesBar.style.opacity   = "1";
+                    categoriesBar.style.transform = "translateX(0)";
+                }
+
+                setTimeout(() => {
+                    tasksListEl.style.transition   = "";
+                    tasksListEl.style.transform    = "";
+                    if (categoriesBar) {
+                        categoriesBar.style.transition = "";
+                        categoriesBar.style.transform  = "";
+                    }
+                }, 280);
+            });
+        }
 
         progressCard.addEventListener("touchstart", (e) => {
-            touchStartX = e.touches[0].clientX;
-            touchEndX = touchStartX;
-            const width = window.innerWidth;
-            const threshold = 100;
+            pcTouchStartX = e.touches[0].clientX;
+            pcTouchCurrX  = pcTouchStartX;
+            pcStartY      = e.touches[0].clientY;
+            pcActive      = true;
+            pcLocked      = false;
 
-            if (touchStartX < threshold) {
-                startedOnEdge = true;
-                edgeType = "left";
-            } else if (touchStartX > width - threshold) {
-                startedOnEdge = true;
-                edgeType = "right";
-            } else {
-                startedOnEdge = false;
-                edgeType = "";
-            }
-
-            if (startedOnEdge) {
-                progressCard.style.transition = "none";
-            }
+            progressCard.style.transition = "none";
+            tasksListEl.style.transition  = "none";
+            if (categoriesBar) categoriesBar.style.transition = "none";
         }, { passive: true });
 
         progressCard.addEventListener("touchmove", (e) => {
-            if (!startedOnEdge) return;
-            touchEndX = e.touches[0].clientX;
-            const diffX = touchEndX - touchStartX;
+            if (!pcActive) return;
 
-            // Restringe a direção do arraste visual de acordo com o lado iniciado
-            let dragX = diffX;
-            if (edgeType === "left" && dragX < 0) dragX = 0;
-            if (edgeType === "right" && dragX > 0) dragX = 0;
+            const dx = e.touches[0].clientX - pcTouchStartX;
+            const dy = e.touches[0].clientY - pcStartY;
 
-            progressCard.style.transform = `translateX(${dragX}px)`;
-            
-            if (e.cancelable) {
-                e.preventDefault();
+            if (!pcLocked && Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+
+            if (!pcLocked) {
+                if (Math.abs(dy) > Math.abs(dx)) {
+                    pcActive = false;
+                    resetDrag(true);
+                    return;
+                }
+                pcLocked = true;
             }
+
+            pcTouchCurrX = e.touches[0].clientX;
+            applyDrag(dx);
+
+            if (e.cancelable) e.preventDefault();
         }, { passive: false });
 
         progressCard.addEventListener("touchend", () => {
-            if (!startedOnEdge) return;
+            if (!pcActive) return;
+            pcActive = false;
 
-            const diffX = touchEndX - touchStartX;
-            const minSwipeDistance = 40; 
-            let triggered = false;
+            const dx = pcTouchCurrX - pcTouchStartX;
 
-            if (edgeType === "left" && diffX > minSwipeDistance) {
-                triggered = true;
-                // Anima o card saindo para a direita
-                progressCard.style.transition = "transform 0.15s ease-out, opacity 0.15s ease-out";
-                progressCard.style.transform = "translateX(100vw)";
-                progressCard.style.opacity = "0";
-
-                setTimeout(async () => {
-                    await changeDay(-1);
-                    // Reposiciona na esquerda e entra
-                    progressCard.style.transition = "none";
-                    progressCard.style.transform = "translateX(-100vw)";
-                    progressCard.offsetHeight; // Força reflow
-                    progressCard.style.transition = "transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1)";
-                    progressCard.style.transform = "translateX(0)";
-                    progressCard.style.opacity = "1";
-                }, 150);
-            } else if (edgeType === "right" && diffX < -minSwipeDistance) {
-                triggered = true;
-                // Anima o card saindo para a esquerda
-                progressCard.style.transition = "transform 0.15s ease-out, opacity 0.15s ease-out";
-                progressCard.style.transform = "translateX(-100vw)";
-                progressCard.style.opacity = "0";
-
-                setTimeout(async () => {
-                    await changeDay(1);
-                    // Reposiciona na direita e entra
-                    progressCard.style.transition = "none";
-                    progressCard.style.transform = "translateX(100vw)";
-                    progressCard.offsetHeight; // Força reflow
-                    progressCard.style.transition = "transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1)";
-                    progressCard.style.transform = "translateX(0)";
-                    progressCard.style.opacity = "1";
-                }, 150);
+            if (dx < -SWIPE_THRESHOLD) {
+                throwOut("left");
+            } else if (dx > SWIPE_THRESHOLD) {
+                throwOut("right");
+            } else {
+                resetDrag(true);
             }
+        });
 
-            if (!triggered) {
-                // Caso não tenha arrastado o suficiente, retorna de forma suave à posição original
-                progressCard.style.transition = "transform 0.22s cubic-bezier(0.16, 1, 0.3, 1)";
-                progressCard.style.transform = "translateX(0)";
-            }
-
-            startedOnEdge = false;
-            edgeType = "";
+        progressCard.addEventListener("touchcancel", () => {
+            pcActive = false;
+            resetDrag(true);
         });
     }
+
 
     // Toggle Task Complete (using event delegation)
     tasksListEl.addEventListener("click", (e) => {
@@ -418,7 +511,9 @@ function setupEventListeners() {
             return;
         }
 
-        if (isEditMode || isHistoryMode) return;
+        const todayStr = getLocalDateString(new Date());
+        const isFutureDate = selectedDate > todayStr;
+        if (isEditMode || isHistoryMode || isFutureDate) return;
         
         const isCompleting = !item.classList.contains("completed");
         if (isCompleting) {
@@ -490,8 +585,29 @@ function setupEventListeners() {
         }
     });
 
-    // Add Task Modal
-    btnAddTaskModal.addEventListener("click", () => {
+    // Add Task Modal (FAB menu trigger)
+    const handleAddTaskTrigger = (e) => {
+        const now = Date.now();
+        // Cooldown de 300ms para evitar duplo acionamento (pointerdown + click)
+        if (now - lastAddTaskInteractionTime < 300) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
+        lastAddTaskInteractionTime = now;
+
+        e.preventDefault();
+        e.stopPropagation();
+        const fabMenu = document.getElementById("fab-menu");
+        if (fabMenu && !fabMenu.classList.contains("open")) {
+            fabMenu.classList.add("open");
+            initialScrollY = window.scrollY;
+            if (tasksListEl) initialTasksScrollTop = tasksListEl.scrollTop;
+            return;
+        }
+
+        if (fabMenu) fabMenu.classList.remove("open");
+
         if (isHistoryMode) {
             alert("Não é possível adicionar tarefas no histórico.");
             return;
@@ -508,6 +624,8 @@ function setupEventListeners() {
             selectTaskCategory.value = categories[0].name;
         }
 
+        selectTaskRecurring.value = "once";
+
         // Atualiza as opções de atribuição com base no local selecionado
         updateTaskAssigneeDropdown(selectTaskCategory.value, selectTaskAssignedTo, taskAssigneeGroup);
 
@@ -517,13 +635,26 @@ function setupEventListeners() {
             taskDateInput.value = selectedDate;
         }
 
+        // Limpar seleção de turnos
+        const shiftButtons = document.querySelectorAll("#add-shift-selector .shift-toggle-btn");
+        shiftButtons.forEach(btn => btn.classList.remove("active"));
+
         openModal(modalAddTask);
-    });
+    };
+
+    btnAddTaskModal.addEventListener("pointerdown", handleAddTaskTrigger);
+    btnAddTaskModal.addEventListener("click", handleAddTaskTrigger);
     btnCloseAddModal.addEventListener("click", () => closeModal(modalAddTask));
 
     if (selectTaskCategory) {
         selectTaskCategory.addEventListener("change", () => {
             updateTaskAssigneeDropdown(selectTaskCategory.value, selectTaskAssignedTo, taskAssigneeGroup);
+        });
+    }
+
+    if (selectEditTaskCategory) {
+        selectEditTaskCategory.addEventListener("change", () => {
+            updateTaskAssigneeDropdown(selectEditTaskCategory.value, selectEditTaskAssignedTo, editTaskAssigneeGroup);
         });
     }
 
@@ -540,6 +671,13 @@ function setupEventListeners() {
 
     // Day toggle buttons (only for the Add Task modal)
     document.querySelectorAll("#repeat-days-group .day-toggle").forEach(btn => {
+        btn.addEventListener("click", () => {
+            btn.classList.toggle("active");
+        });
+    });
+
+    // Turno toggle buttons (for Add and Edit modals)
+    document.querySelectorAll(".shift-toggle-btn").forEach(btn => {
         btn.addEventListener("click", () => {
             btn.classList.toggle("active");
         });
@@ -570,15 +708,22 @@ function setupEventListeners() {
             repeatDays = selectedDays;
         }
 
+        // Collect selected shifts (turnos)
+        const shifts = Array.from(document.querySelectorAll("#add-shift-selector .shift-toggle-btn.active")).map(b => b.dataset.shift);
+
         try {
             const assignedTo = selectTaskAssignedTo ? selectTaskAssignedTo.value : null;
-            await addTask(inputTaskTitle.value.trim(), selectTaskCategory.value, selectTaskRecurring.value, taskDate, repeatDays, assignedTo);
+            await addTask(inputTaskTitle.value.trim(), selectTaskCategory.value, selectTaskRecurring.value, taskDate, repeatDays, assignedTo, shifts);
             inputTaskTitle.value = "";
             // Reset day toggles
             document.querySelectorAll("#repeat-days-group .day-toggle").forEach(b => b.classList.remove("active"));
             document.getElementById("repeat-days-group").style.display = "none";
-            selectTaskRecurring.value = "daily";
+            // Reset shifts to all selected by default for new tasks
+            document.querySelectorAll("#add-shift-selector .shift-toggle-btn").forEach(b => b.classList.add("active"));
+            selectTaskRecurring.value = "once";
             closeModal(modalAddTask);
+        } catch (error) {
+            console.error("Erro ao adicionar tarefa: ", error);
         } finally {
             btnSubmit.disabled = false;
             btnSubmit.innerHTML = originalText;
@@ -628,13 +773,33 @@ function setupEventListeners() {
         const createdAt = newDate ? new Date(newDate + "T12:00:00").toISOString() : undefined;
 
         const assignedTo = selectEditTaskAssignedTo ? selectEditTaskAssignedTo.value : null;
+        const newCategory = selectEditTaskCategory ? selectEditTaskCategory.value : null;
+        const editShifts = Array.from(document.querySelectorAll("#edit-shift-selector .shift-toggle-btn.active")).map(b => b.dataset.shift);
+
+        // Mescla turnos no context existente (evita bugs caso seja string stringificada)
+        const existingTask = tasks.find(t => String(t.id) === String(taskId));
+        let context = {};
+        if (existingTask && existingTask.context) {
+            if (typeof existingTask.context === 'string') {
+                try {
+                    context = JSON.parse(existingTask.context);
+                } catch (e) {
+                    context = {};
+                }
+            } else {
+                context = { ...existingTask.context };
+            }
+        }
+        context.turnos = editShifts;
 
         const updates = {
             title: newTitle,
             is_recurring: isRecurring,
             repeat_days: repeatDays,
-            assigned_to: assignedTo || null
+            assigned_to: assignedTo || null,
+            context: context
         };
+        if (newCategory) updates.category = newCategory;
         if (createdAt) updates.created_at = createdAt;
 
         // Parse ID (handle uuid string or int)
@@ -678,7 +843,59 @@ function setupEventListeners() {
     });
 
     // Share report via WhatsApp
-    btnShareReport.addEventListener("click", shareReport);
+    const handleShareReport = (e) => {
+        const now = Date.now();
+        // Cooldown de 300ms para evitar duplo acionamento (pointerdown + click)
+        if (now - lastShareInteractionTime < 300) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
+        lastShareInteractionTime = now;
+
+        e.preventDefault();
+        e.stopPropagation();
+        const fabMenu = document.getElementById("fab-menu");
+        if (fabMenu) fabMenu.classList.remove("open");
+        shareReport();
+    };
+
+    btnShareReport.addEventListener("pointerdown", handleShareReport);
+    btnShareReport.addEventListener("click", handleShareReport);
+
+    // Close FAB menu when clicking outside, scrolling, or swiping past a threshold
+    const closeFabMenu = () => {
+        const fabMenu = document.getElementById("fab-menu");
+        if (fabMenu && fabMenu.classList.contains("open")) {
+            fabMenu.classList.remove("open");
+        }
+    };
+
+    document.addEventListener("click", (e) => {
+        const fabMenu = document.getElementById("fab-menu");
+        if (fabMenu && fabMenu.classList.contains("open")) {
+            if (!fabMenu.contains(e.target)) {
+                closeFabMenu();
+            }
+        }
+    });
+
+
+
+    // Fecha se arrastar o dedo na tela principal (fora do menu)
+    document.addEventListener("touchmove", (e) => {
+        const fabMenu = document.getElementById("fab-menu");
+        if (fabMenu && fabMenu.classList.contains("open")) {
+            if (!fabMenu.contains(e.target)) {
+                // Apenas se arrastar mais de 15px
+                const currentScrollY = window.scrollY;
+                const currentTasksScroll = tasksListEl ? tasksListEl.scrollTop : 0;
+                if (Math.abs(currentScrollY - initialScrollY) > 15 || Math.abs(currentTasksScroll - initialTasksScrollTop) > 15) {
+                    closeFabMenu();
+                }
+            }
+        }
+    }, { passive: true });
 
     // Theme Selection Event Listeners
     const themeBtns = document.querySelectorAll(".theme-selector-btn");
@@ -687,6 +904,12 @@ function setupEventListeners() {
             applyTheme(btn.dataset.theme);
             renderChecklist();
         });
+    });
+
+    // Sincroniza dados locais com a nuvem quando a conexão com a internet é restaurada
+    window.addEventListener("online", () => {
+        console.log("Internet restaurada! Sincronizando dados offline...");
+        syncOfflineDataToCloud();
     });
 
     // Auth Listeners & Forms
@@ -873,10 +1096,41 @@ function updateDateDisplay() {
     // Formato: "Ter, 14 Jul 2026"
     const dateString = `${abbreviatedDay}, ${day} ${abbreviatedMonth} ${year}`;
     currentDateEl.textContent = dateString;
+    
+    updateDateState();
 }
 
-async function loadChecklistAndProgress() {
-    await loadData();
+function updateDateState() {
+    const now = new Date();
+    const todayStr = getLocalDateString(now);
+    const historyBadge = document.getElementById("history-badge");
+
+    if (selectedDate < todayStr) {
+        isHistoryMode = true;
+        appContainer.classList.add("history-mode");
+        appContainer.classList.remove("planning-mode", "today-mode");
+        toggleEditMode(false);
+        if (historyBadge) historyBadge.innerHTML = "Histórico";
+    } else if (selectedDate > todayStr) {
+        isHistoryMode = false;
+        appContainer.classList.add("planning-mode");
+        appContainer.classList.remove("history-mode", "today-mode");
+        if (historyBadge) historyBadge.innerHTML = "Planejamento";
+    } else {
+        isHistoryMode = false;
+        appContainer.classList.add("today-mode");
+        appContainer.classList.remove("history-mode", "planning-mode");
+        if (historyBadge) historyBadge.innerHTML = '<span class="pulse-dot"></span>Hoje';
+    }
+}
+
+async function loadChecklistAndProgress(skipOfflineReload = false) {
+    // 1. Recarrega dados do localStorage, exceto quando chamado após uma mutação otimista local
+    // (toggle, drag, delete) — nesses casos, tasks já está correto e recarregar causaria flash de 0%
+    if (!skipOfflineReload) {
+        loadDataOffline();
+    }
+
     renderCategories();
     renderChecklist();
     updateProgress();
@@ -885,9 +1139,38 @@ async function loadChecklistAndProgress() {
     if (pendingInvites.length > 0 && notificationsBadge) {
         notificationsBadge.style.display = "block";
     }
+
+    // 2. Revalida com o Supabase em segundo plano sem travar a interface do usuário
+    if (supabaseClient && currentUser) {
+        // Guarda fingerprint dos dados atuais para comparar depois
+        const fingerprintBefore = JSON.stringify(tasks.map(t => t.id + '|' + t.title + '|' + t.completed + '|' + JSON.stringify(t.context)));
+        const catFingerprintBefore = JSON.stringify(categories.map(c => c.id + '|' + c.name));
+
+        loadData().then((didUpdate) => {
+            if (!didUpdate) return; // Se o fetch foi abortado (ex: o usuário arrastou uma tarefa), não re-renderiza nada
+
+            // Só re-renderiza se os dados realmente mudaram — evita flash desnecessário
+            const fingerprintAfter = JSON.stringify(tasks.map(t => t.id + '|' + t.title + '|' + t.completed + '|' + JSON.stringify(t.context)));
+            const catFingerprintAfter = JSON.stringify(categories.map(c => c.id + '|' + c.name));
+
+            if (fingerprintAfter !== fingerprintBefore) {
+                renderChecklist();
+                updateProgress();
+            }
+            if (catFingerprintAfter !== catFingerprintBefore) {
+                renderCategories();
+            }
+            if (pendingInvites.length > 0 && notificationsBadge) {
+                notificationsBadge.style.display = "block";
+            }
+        }).catch(err => {
+            console.warn("Erro silencioso ao revalidar dados do Supabase:", err);
+        });
+    }
 }
 
 async function loadData() {
+    const versionAtFetchStart = localDataVersion;
     if (supabaseClient && currentUser) {
         try {
             // Executa as consultas ao banco de dados em paralelo usando Promise.all para máxima velocidade de carregamento
@@ -903,7 +1186,7 @@ async function loadData() {
                 supabaseClient.from('categories').select('*', { count: 'exact', head: true }),
                 supabaseClient.from('tasks').select('*').eq('is_active', true),
                 supabaseClient.from('completions').select('*').eq('date', selectedDate),
-                supabaseClient.from('completions').select('task_id').lt('date', selectedDate),
+                supabaseClient.from('completions').select('task_id, date, completed').lt('date', selectedDate),
                 supabaseClient.from('category_shares').select('*').or(`owner_id.eq.${currentUser.id},collaborator_email.eq.${currentUser.email}`).then(r => r, err => {
                     console.warn("Tabela 'category_shares' não encontrada ou inacessível.", err);
                     return { data: [], error: null };
@@ -994,6 +1277,11 @@ async function loadData() {
                     await supabaseClient.from('tasks').insert(seedTasks);
                 }
             }
+            if (localDataVersion !== versionAtFetchStart) {
+                console.warn("Usuário modificou dados durante o carregamento assíncrono. Descartando fetch para evitar flash/zerada da tela.");
+                return false;
+            }
+
             categories = dbCats;
             allActiveTasks = dbTasks || [];
 
@@ -1032,8 +1320,43 @@ async function loadData() {
                 completed: completedTodayIds.has(task.id)
             }));
 
-        } catch (error) {
-            console.error("Erro ao consultar Supabase. Usando fallback offline.", error);
+            // Salva os dados mais recentes carregados do Supabase no cache local (LocalStorage)
+            // Isso garante que mudanças de data e reinicializações futuras sejam instantâneas
+            localStorage.setItem("offline_categories", JSON.stringify(dbCats));
+            localStorage.setItem("offline_tasks", JSON.stringify(dbTasks));
+
+            let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+            
+            // Remove conclusões locais obsoletas para a data de hoje e as datas do histórico recebido
+            const dbCompBeforeIds = new Set(dbCompletionsBefore.map(c => String(c.task_id)));
+            localCompletions = localCompletions.filter(c => {
+                if (c.date === selectedDate) return false;
+                if (dbCompBeforeIds.has(String(c.task_id)) && c.date < selectedDate) return false;
+                return true;
+            });
+
+            // Adiciona as conclusões do Supabase para hoje
+            dbCompletionsToday.forEach(c => {
+                localCompletions.push({
+                    task_id: c.task_id,
+                    date: c.date,
+                    completed: c.completed
+                });
+            });
+
+            // Adiciona as conclusões do Supabase para o histórico
+            dbCompletionsBefore.forEach(c => {
+                localCompletions.push({
+                    task_id: c.task_id,
+                    date: c.date,
+                    completed: c.completed
+                });
+            });
+
+            localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
+            return true;
+        } catch (err) {
+            console.error("Erro ao consultar Supabase. Usando fallback offline.", err);
             loadDataOffline();
         }
     } else {
@@ -1152,31 +1475,15 @@ function renderCategories() {
             <span>${escapeHTML(cat.name)}</span>
         `;
 
-        if (isEditMode) {
-            chip.setAttribute("draggable", "true");
-            setupDragAndDrop(chip, cat);
-        }
-        
-        // Detecta gesto de segurar (Long-press de 800ms) para ativar a reordenação das guias
-        let pressTimer;
-        const startPress = () => {
-            if (isEditMode) return;
-            pressTimer = setTimeout(() => {
-                toggleEditMode(true);
-            }, 800);
-        };
-        const cancelPress = () => {
-            if (pressTimer) clearTimeout(pressTimer);
-        };
+        chip.setAttribute("draggable", "true");
+        setupDragAndDrop(chip, cat);
 
-        chip.addEventListener("mousedown", startPress);
-        chip.addEventListener("mouseup", cancelPress);
-        chip.addEventListener("mouseleave", cancelPress);
-        chip.addEventListener("touchstart", startPress, { passive: true });
-        chip.addEventListener("touchend", cancelPress, { passive: true });
-        chip.addEventListener("touchmove", cancelPress, { passive: true });
-        
-        chip.addEventListener("click", () => {
+        chip.addEventListener("click", (e) => {
+            if (window.wasCategoryDragged) {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+            }
             if (isEditMode) {
                 // Clicar em qualquer guia durante a edição conclui e filtra
                 toggleEditMode(false);
@@ -1189,13 +1496,21 @@ function renderCategories() {
         bar.appendChild(chip);
     });
 
-    // 2. Render options in task category dropdown
+    // 2. Render options in task category dropdowns (Add and Edit)
     select.innerHTML = "";
+    if (selectEditTaskCategory) selectEditTaskCategory.innerHTML = "";
     categories.forEach(cat => {
         const opt = document.createElement("option");
         opt.value = cat.name;
         opt.textContent = cat.name;
         select.appendChild(opt);
+
+        if (selectEditTaskCategory) {
+            const optEdit = document.createElement("option");
+            optEdit.value = cat.name;
+            optEdit.textContent = cat.name;
+            selectEditTaskCategory.appendChild(optEdit);
+        }
     });
 
     // 3. Render categories list in Settings Modal
@@ -1250,6 +1565,9 @@ function renderCategories() {
 }
 
 function renderChecklist() {
+    // Aborta a renderização se o usuário estiver arrastando uma tarefa para não causar flash/zerar a tela
+    if (isDraggingTask) return;
+
     tasksListEl.innerHTML = "";
     
     // Filter tasks
@@ -1271,150 +1589,424 @@ function renderChecklist() {
         emptyStateEl.classList.add("hidden");
         tasksListEl.classList.remove("hidden");
 
-        // Sort: unchecked first, completed last. Within groups, sort by ID
+        // Sort: unchecked first, completed last. Within groups, sort by custom order position
         const sortedTasks = isEditMode
-            ? [...filteredTasks].sort((a, b) => {
-                const idA = typeof a.id === 'number' ? a.id : parseFloat(a.id) || 0;
-                const idB = typeof b.id === 'number' ? b.id : parseFloat(b.id) || 0;
-                return idA - idB;
-            })
+            ? [...filteredTasks].sort((a, b) => getTaskOrder(a) - getTaskOrder(b))
             : [...filteredTasks].sort((a, b) => {
                 if (a.completed !== b.completed) {
                     return a.completed ? 1 : -1;
                 }
-                const idA = typeof a.id === 'number' ? a.id : parseFloat(a.id) || 0;
-                const idB = typeof b.id === 'number' ? b.id : parseFloat(b.id) || 0;
-                return idA - idB;
+                return getTaskOrder(a) - getTaskOrder(b);
             });
 
-        sortedTasks.forEach(task => {
-            const taskEl = document.createElement("div");
-            taskEl.className = `task-item ${task.completed ? 'completed' : ''}`;
-            taskEl.dataset.id = task.id;
+        if (currentFilter === "all") {
+            // Separa tarefas por turnos para a aba "TODOS"
+            const manhaTasks = [];
+            const tardeTasks = [];
+            const noiteTasks = [];
+            const semTurnoTasks = [];
 
-            // Generate premium dynamic tag style based on category name
-            const colorStyle = getCategoryColorStyle(task.category);
-            const tagStyle = `color: ${colorStyle.color}; background: ${colorStyle.bg}; border: 1px solid rgba(255,255,255,0.03);`;
+            sortedTasks.forEach(task => {
+                const turnos = (task.context && task.context.turnos) ? task.context.turnos : [];
+                if (turnos.length === 0) {
+                    semTurnoTasks.push(task);
+                } else {
+                    if (turnos.includes("Manhã")) manhaTasks.push(task);
+                    if (turnos.includes("Tarde")) tardeTasks.push(task);
+                    if (turnos.includes("Noite")) noiteTasks.push(task);
+                }
+            });
 
-            taskEl.innerHTML = `
-                <!-- Actions revealed on swipe (underneath) -->
-                <div class="task-swipe-actions">
-                    <button class="swipe-action-btn rename-btn" title="Renomear">
-                        <i data-lucide="pencil"></i>
-                    </button>
-                    <button class="swipe-action-btn delete-btn" title="Excluir">
-                        <i data-lucide="trash-2"></i>
-                    </button>
-                </div>
-                <!-- Main content of the task (on top) -->
-                <div class="task-item-foreground">
-                    <div class="task-checkbox-wrapper">
-                        <div class="task-checkbox">
-                            <i data-lucide="check"></i>
-                        </div>
-                    </div>
-                    <div class="task-content">
-                        <span class="task-title">${escapeHTML(task.title)}</span>
-                        <div class="task-meta">
-                            <span class="task-tag" style="${tagStyle}">${escapeHTML(task.category)}</span>
-                            <span class="task-tag" style="background: rgba(255,255,255,0.02);">${getRecurrenceLabel(task)}</span>
-                            ${task.assigned_to ? (() => {
-                                const initials = task.assigned_to.split('@')[0].substring(0, 2).toUpperCase();
-                                const isMe = currentUser && task.assigned_to.toLowerCase() === currentUser.email.toLowerCase();
-                                return `<span class="task-assignee-avatar ${isMe ? '' : 'partner'}" title="Atribuído a: ${escapeHTML(task.assigned_to)}">${escapeHTML(initials)}</span>`;
-                            })() : ''}
-                        </div>
-                    </div>
-                    <!-- Global edit mode actions -->
-                    <div class="task-edit-actions">
-                        <button class="btn-task-action rename" title="Renomear">
-                            <i data-lucide="pencil"></i>
-                        </button>
-                        <button class="btn-task-action delete" title="Excluir">
-                            <i data-lucide="trash-2"></i>
-                        </button>
-                    </div>
-                </div>
-            `;
+            const renderGroup = (title, iconName, groupTasks) => {
+                if (groupTasks.length === 0) return;
+                
+                // Div principal do grupo de turno
+                const groupContainer = document.createElement("div");
+                groupContainer.className = "shift-group";
+                groupContainer.dataset.shift = title;
 
-            // Setup static button event listeners (visible in global edit mode)
-            const btnDelete = taskEl.querySelector(".task-edit-actions .btn-task-action.delete");
-            btnDelete.addEventListener("click", (e) => {
-                e.stopPropagation();
-                showConfirmDelete(task, (choice) => {
-                    if (choice !== "cancel") {
-                        taskEl.classList.add("deleting");
-                        setTimeout(() => {
-                            if (choice === "all") {
-                                deleteTask(task.id);
-                            } else if (choice === "today") {
-                                excludeTaskForToday(task.id);
-                            }
-                        }, 400);
-                    }
+                // Cabeçalho de divisão de Turno
+                const header = document.createElement("div");
+                header.className = "shift-group-header";
+                header.innerHTML = `
+                    <div class="shift-group-title">
+                        <i data-lucide="${iconName}"></i>
+                        <span>${title}</span>
+                    </div>
+                    <span class="shift-group-count">${groupTasks.length} ${groupTasks.length === 1 ? 'tarefa' : 'tarefas'}</span>
+                `;
+                groupContainer.appendChild(header);
+
+                // Contêiner das tarefas do turno
+                const tasksContainer = document.createElement("div");
+                tasksContainer.className = "shift-group-tasks";
+                
+                // Insere os elementos das tarefas
+                groupTasks.forEach(task => {
+                    tasksContainer.appendChild(createTaskDOMElement(task));
                 });
-            });
-
-            const btnRename = taskEl.querySelector(".task-edit-actions .btn-task-action.rename");
-            btnRename.addEventListener("click", (e) => {
-                e.stopPropagation();
-                openEditTaskModal(task);
-            });
-
-            // Setup swipe actions buttons (visible on swipe underneath)
-            const btnSwipeDelete = taskEl.querySelector(".task-swipe-actions .delete-btn");
-            const handleDeleteAction = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                showConfirmDelete(task, (choice) => {
-                    if (choice === "cancel") {
-                        // Se cancelar, fecha o swipe lateral suavemente
-                        const fg = taskEl.querySelector(".task-item-foreground");
-                        if (fg) {
-                            fg.style.transition = "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)";
-                            fg.style.transform = "translateX(0px)";
-                        }
-                        taskEl.classList.remove("swiped");
-                    } else {
-                        taskEl.classList.add("deleting");
-                        setTimeout(() => {
-                            if (choice === "all") {
-                                deleteTask(task.id);
-                            } else if (choice === "today") {
-                                excludeTaskForToday(task.id);
-                            }
-                        }, 400);
-                    }
-                });
+                
+                groupContainer.appendChild(tasksContainer);
+                tasksListEl.appendChild(groupContainer);
+                
+                // Ativa a reordenação por pressionamento tátil (Hold and Drag) neste contêiner
+                setupTaskDragAndDrop(tasksContainer, title);
             };
-            btnSwipeDelete.addEventListener("click", handleDeleteAction);
-            btnSwipeDelete.addEventListener("touchend", handleDeleteAction, { passive: false });
 
-            const btnSwipeRename = taskEl.querySelector(".task-swipe-actions .rename-btn");
-            const handleRenameAction = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                // Close swipe panel
+            // Determina o turno atual com base no horário local do dispositivo
+            const getCurrentShift = () => {
+                const hour = new Date().getHours();
+                if (hour >= 5 && hour < 12) return "Manhã";
+                if (hour >= 12 && hour < 18) return "Tarde";
+                return "Noite";
+            };
+
+            const currentShift = getCurrentShift();
+            const groupDefinitions = [
+                { name: "Manhã", icon: "sunrise", tasks: manhaTasks },
+                { name: "Tarde", icon: "sun", tasks: tardeTasks },
+                { name: "Noite", icon: "moon", tasks: noiteTasks },
+                { name: "Sem Turno / Geral", icon: "archive", tasks: semTurnoTasks }
+            ];
+
+            let orderedGroups = [];
+            const now = new Date();
+            const todayStr = getLocalDateString(now);
+            const isToday = (selectedDate === todayStr);
+
+            if (isToday) {
+                const currentShift = getCurrentShift();
+                const currentGroup = groupDefinitions.find(g => g.name === currentShift);
+                if (currentGroup) orderedGroups.push(currentGroup);
+
+                const shiftsOrder = {
+                    "Manhã": ["Tarde", "Noite"],
+                    "Tarde": ["Noite", "Manhã"],
+                    "Noite": ["Tarde", "Manhã"]
+                };
+                const nextShifts = shiftsOrder[currentShift] || ["Manhã", "Tarde", "Noite"];
+                nextShifts.forEach(shiftName => {
+                    const group = groupDefinitions.find(g => g.name === shiftName);
+                    if (group) orderedGroups.push(group);
+                });
+            } else {
+                // Ordem fixa (cronológica normal) para outros dias
+                ["Manhã", "Tarde", "Noite"].forEach(shiftName => {
+                    const group = groupDefinitions.find(g => g.name === shiftName);
+                    if (group) orderedGroups.push(group);
+                });
+            }
+
+            const semTurnoGroup = groupDefinitions.find(g => g.name === "Sem Turno / Geral");
+            if (semTurnoGroup) orderedGroups.push(semTurnoGroup);
+
+            // Renderiza na ordem de prioridade
+            orderedGroups.forEach(group => {
+                renderGroup(group.name, group.icon, group.tasks);
+            });
+        } else {
+            // Renderização plana para guias de categorias específicas
+            sortedTasks.forEach(task => {
+                tasksListEl.appendChild(createTaskDOMElement(task));
+            });
+        }
+        
+        lucide.createIcons();
+    }
+}
+
+// Cria e configura o elemento DOM de um card de tarefa reutilizável
+function createTaskDOMElement(task) {
+    const taskEl = document.createElement("div");
+    taskEl.className = `task-item ${task.completed ? 'completed' : ''}`;
+    taskEl.dataset.id = task.id;
+
+    // Estilo dinâmico da categoria
+    const colorStyle = getCategoryColorStyle(task.category);
+    const tagStyle = `color: ${colorStyle.color}; background: ${colorStyle.bg}; border: 1px solid rgba(255,255,255,0.03);`;
+
+    taskEl.innerHTML = `
+        <!-- Actions revealed on swipe (underneath) -->
+        <div class="task-swipe-actions">
+            <button class="swipe-action-btn rename-btn" title="Renomear">
+                <i data-lucide="pencil"></i>
+            </button>
+            <button class="swipe-action-btn delete-btn" title="Excluir">
+                <i data-lucide="trash-2"></i>
+            </button>
+        </div>
+        <!-- Main content of the task (on top) -->
+        <div class="task-item-foreground">
+            <div class="task-checkbox-wrapper">
+                <div class="task-checkbox">
+                    <i data-lucide="check"></i>
+                </div>
+            </div>
+            <div class="task-content">
+                <span class="task-title">${escapeHTML(task.title)}</span>
+                <div class="task-meta">
+                    <span class="task-tag" style="${tagStyle}">${escapeHTML(task.category)}</span>
+                    <span class="task-tag" style="background: rgba(255,255,255,0.02);">${getRecurrenceLabel(task)}</span>
+                    ${task.context && task.context.turnos && task.context.turnos.length > 0 ? task.context.turnos.map(t => {
+                        let iconName = 'sun';
+                        if (t === 'Tarde') iconName = 'sunset';
+                        if (t === 'Noite') iconName = 'moon';
+                        return `<span class="task-tag shift-tag" style="background: rgba(139, 92, 246, 0.06); color: var(--primary); font-weight: 700; display: inline-flex; align-items: center; gap: 3px;"><i data-lucide="${iconName}" style="width: 10px; height: 10px;"></i>${escapeHTML(t)}</span>`;
+                    }).join('') : ''}
+                    ${task.assigned_to ? (() => {
+                        const initials = task.assigned_to.split('@')[0].substring(0, 2).toUpperCase();
+                        const isMe = currentUser && task.assigned_to.toLowerCase() === currentUser.email.toLowerCase();
+                        return `<span class="task-assignee-avatar ${isMe ? '' : 'partner'}" title="Atribuído a: ${escapeHTML(task.assigned_to)}">${escapeHTML(initials)}</span>`;
+                    })() : ''}
+                </div>
+            </div>
+            <!-- Global edit mode actions -->
+            <div class="task-edit-actions">
+                <button class="btn-task-action rename" title="Renomear">
+                    <i data-lucide="pencil"></i>
+                </button>
+                <button class="btn-task-action delete" title="Excluir">
+                    <i data-lucide="trash-2"></i>
+                </button>
+            </div>
+        </div>
+    `;
+
+    // Configura botões de ação estáticos (Modo Edição global)
+    const btnDelete = taskEl.querySelector(".task-edit-actions .btn-task-action.delete");
+    btnDelete.addEventListener("click", (e) => {
+        e.stopPropagation();
+        showConfirmDelete(task, (choice) => {
+            if (choice !== "cancel") {
+                taskEl.classList.add("deleting");
+                setTimeout(() => {
+                    if (choice === "all") {
+                        deleteTask(task.id);
+                    } else if (choice === "today") {
+                        excludeTaskForToday(task.id);
+                    }
+                }, 400);
+            }
+        });
+    });
+
+    const btnRename = taskEl.querySelector(".task-edit-actions .btn-task-action.rename");
+    btnRename.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openEditTaskModal(task);
+    });
+
+    // Configura botões de swipe (WhatsApp/iOS style)
+    const btnSwipeDelete = taskEl.querySelector(".task-swipe-actions .delete-btn");
+    const handleDeleteAction = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showConfirmDelete(task, (choice) => {
+            if (choice === "cancel") {
                 const fg = taskEl.querySelector(".task-item-foreground");
                 if (fg) {
                     fg.style.transition = "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)";
                     fg.style.transform = "translateX(0px)";
                 }
                 taskEl.classList.remove("swiped");
-                openEditTaskModal(task);
-            };
-            btnSwipeRename.addEventListener("click", handleRenameAction);
-            btnSwipeRename.addEventListener("touchend", handleRenameAction, { passive: false });
-
-            // Attach swipe-to-reveal gestures
-            setupSwipeToReveal(taskEl);
-
-            tasksListEl.appendChild(taskEl);
+            } else {
+                taskEl.classList.add("deleting");
+                setTimeout(() => {
+                    if (choice === "all") {
+                        deleteTask(task.id);
+                    } else if (choice === "today") {
+                        excludeTaskForToday(task.id);
+                    }
+                }, 400);
+            }
         });
-        
-        lucide.createIcons();
+    };
+    btnSwipeDelete.addEventListener("click", handleDeleteAction);
+    btnSwipeDelete.addEventListener("touchend", handleDeleteAction, { passive: false });
+
+    const btnSwipeRename = taskEl.querySelector(".task-swipe-actions .rename-btn");
+    const handleRenameAction = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const fg = taskEl.querySelector(".task-item-foreground");
+        if (fg) {
+            fg.style.transition = "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)";
+            fg.style.transform = "translateX(0px)";
+        }
+        taskEl.classList.remove("swiped");
+        openEditTaskModal(task);
+    };
+    btnSwipeRename.addEventListener("click", handleRenameAction);
+    btnSwipeRename.addEventListener("touchend", handleRenameAction, { passive: false });
+
+    // Configura o gesto físico de deslize
+    setupSwipeToReveal(taskEl);
+
+    return taskEl;
+}
+
+// Retorna a posição personalizada de ordenação da tarefa
+function getTaskOrder(task) {
+    if (task.context && typeof task.context.position === 'number') {
+        return task.context.position;
+    }
+    // Fallback: usar o ID numérico ou string
+    const idVal = typeof task.id === 'number' ? task.id : parseFloat(task.id) || 0;
+    return idVal;
+}
+
+// Configura o sistema de arrastar e soltar (Drag and Drop) para as tarefas dentro de um turno
+function setupTaskDragAndDrop(container, shiftName) {
+    let dragItem = null;
+    let pressTimer = null;
+    let isDragging = false;
+    let startY = 0;
+
+    container.addEventListener("touchstart", onStart, { passive: false });
+    container.addEventListener("mousedown", onStart);
+    container.addEventListener("touchend", cancelPress, { passive: true });
+    container.addEventListener("touchcancel", cancelPress, { passive: true });
+    container.addEventListener("mouseup", cancelPress);
+    container.addEventListener("touchmove", (e) => {
+        if (!isDragging) {
+            cancelPress();
+        }
+    }, { passive: true });
+
+    function onStart(e) {
+        const item = e.target.closest(".task-item");
+        if (!item) return;
+
+        // Não arrasta se clicar em botões de ação ou checkbox
+        if (e.target.closest(".btn-task-action") || e.target.closest(".swipe-action-btn") || e.target.closest(".task-checkbox-wrapper")) return;
+
+        const touch = e.touches ? e.touches[0] : e;
+        startY = touch.clientY;
+
+        // Long press de 600ms
+        pressTimer = setTimeout(() => {
+            isDragging = true;
+            isDraggingTask = true;
+            dragItem = item;
+            dragItem.classList.add("dragging");
+
+            // Feedback háptico de toque longo
+            if (navigator.vibrate) {
+                navigator.vibrate(20);
+            }
+
+            if (e.touches) {
+                window.addEventListener("touchmove", onMove, { passive: false });
+                window.addEventListener("touchend", onEnd);
+                window.addEventListener("touchcancel", onEnd);
+            } else {
+                window.addEventListener("mousemove", onMove);
+                window.addEventListener("mouseup", onEnd);
+            }
+        }, 600);
     }
 
+    function onMove(e) {
+        if (!isDragging || !dragItem) return;
+
+        // Bloqueia scroll do navegador
+        e.preventDefault();
+
+        const touch = e.touches ? e.touches[0] : e;
+        const currentY = touch.clientY;
+
+        const siblings = [...container.querySelectorAll(".task-item:not(.dragging)")];
+        let nextSibling = siblings.find(sibling => {
+            const box = sibling.getBoundingClientRect();
+            const offset = currentY - box.top - box.height / 2;
+            return offset < 0;
+        });
+
+        if (nextSibling) {
+            container.insertBefore(dragItem, nextSibling);
+        } else {
+            container.appendChild(dragItem);
+        }
+    }
+
+    function onEnd() {
+        cancelPress();
+        window.removeEventListener("touchmove", onMove);
+        window.removeEventListener("touchend", onEnd);
+        window.removeEventListener("touchcancel", onEnd);
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onEnd);
+
+        if (isDragging && dragItem) {
+            dragItem.classList.remove("dragging");
+            saveNewTasksOrder(container);
+        }
+
+        isDragging = false;
+        isDraggingTask = false;
+        dragItem = null;
+    }
+
+    function cancelPress() {
+        if (pressTimer) {
+            clearTimeout(pressTimer);
+            pressTimer = null;
+        }
+    }
+}
+
+// Salva a nova ordenação no cache local e dispara update para o banco
+function saveNewTasksOrder(container) {
+    localDataVersion++;
+    const items = [...container.querySelectorAll(".task-item")];
+
+    // Atualiza a posição em memória das tarefas reordenadas
+    items.forEach((item, index) => {
+        const id = parseInt(item.dataset.id) || item.dataset.id;
+
+        tasks = tasks.map(t => {
+            if (String(t.id) === String(id)) {
+                const updatedContext = t.context ? { ...t.context } : {};
+                updatedContext.position = index;
+                return { ...t, context: updatedContext };
+            }
+            return t;
+        });
+
+        allActiveTasks = allActiveTasks.map(t => {
+            if (String(t.id) === String(id)) {
+                const updatedContext = t.context ? { ...t.context } : {};
+                updatedContext.position = index;
+                return { ...t, context: updatedContext };
+            }
+            return t;
+        });
+
+        // Envia para o Supabase em segundo plano de forma assíncrona
+        if (supabaseClient && currentUser && isNaN(id) === false) {
+            const task = tasks.find(t => String(t.id) === String(id));
+            if (task && task.context) {
+                supabaseClient.from('tasks').update({ context: task.context }).eq('id', id)
+                    .catch(err => console.error("Erro assíncrono ao salvar nova ordenação no Supabase:", err));
+            }
+        }
+    });
+
+    // Salva a nova ordenação no LocalStorage offline_tasks
+    let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    localTasks = localTasks.map(t => {
+        const itemIndex = items.findIndex(item => String(item.dataset.id) === String(t.id));
+        if (itemIndex !== -1) {
+            const updatedContext = t.context ? { ...t.context } : {};
+            updatedContext.position = itemIndex;
+            return { ...t, context: updatedContext };
+        }
+        return t;
+    });
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+
+    // Não re-renderiza aqui — o DOM já está na ordem correta após o drag.
+    // Re-renderizar causaria um flash (piscar) porque tasksListEl.innerHTML é zerado.
 }
 
 function renderChecklistWithAnimation() {
@@ -1489,9 +2081,8 @@ function updateProgress() {
 // State Management & Storage
 // ----------------------------------------------------
 async function toggleTask(id) {
+    localDataVersion++;
     if (isHistoryMode) return;
-    
-    // Prevent duplicate triggers if request is already in progress
     if (pendingToggles.has(id)) return;
     pendingToggles.add(id);
 
@@ -1513,33 +2104,25 @@ async function toggleTask(id) {
         return;
     }
 
-    if (supabaseClient) {
-        try {
-            if (task.completed) {
-                const { error } = await supabaseClient
-                    .from('completions')
-                    .upsert({
-                        task_id: id,
-                        date: selectedDate,
-                        completed: true
-                    }, { onConflict: 'task_id,date' });
-                if (error) throw error;
-            } else {
-                const { error } = await supabaseClient
-                    .from('completions')
-                    .delete()
-                    .eq('task_id', id)
-                    .eq('date', selectedDate);
-                if (error) throw error;
+    // Salva sempre no LocalStorage primeiro para resiliência e velocidade
+    saveCompletionOffline(id, selectedDate, task.completed);
+
+    // Se estiver conectado, envia para a nuvem em segundo plano sem bloquear a interface
+    if (supabaseClient && currentUser && isNaN(id) === false) {
+        const query = task.completed
+            ? supabaseClient.from('completions').upsert({ task_id: id, date: selectedDate, completed: true }, { onConflict: 'task_id,date' })
+            : supabaseClient.from('completions').delete().eq('task_id', id).eq('date', selectedDate);
+
+        query.then(({ error }) => {
+            if (error) {
+                console.warn("Erro ao salvar conclusão no Supabase. Mantido offline.", error.message);
             }
-        } catch (error) {
-            console.error("Erro ao atualizar conclusão no Supabase. Salvando offline.", error);
-            saveCompletionOffline(id, selectedDate, task.completed);
-        } finally {
             pendingToggles.delete(id);
-        }
+        }).catch(err => {
+            console.error("Erro assíncrono ao salvar conclusão:", err);
+            pendingToggles.delete(id);
+        });
     } else {
-        saveCompletionOffline(id, selectedDate, task.completed);
         pendingToggles.delete(id);
     }
 }
@@ -1558,7 +2141,7 @@ function saveCompletionOffline(taskId, date, completed) {
     localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
 }
 
-async function addTask(title, category, recurrenceMode, customDate, repeatDays, assignedTo) {
+async function addTask(title, category, recurrenceMode, customDate, repeatDays, assignedTo, shifts) {
     if (!title) return;
     const isRecurring = recurrenceMode !== "once";
     const tempId = Date.now();
@@ -1567,7 +2150,10 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
     const createdAtDate = customDate ? new Date(customDate + "T12:00:00") : new Date();
     const createdAt = createdAtDate.toISOString();
 
-    const context = analyzeTaskContext(title, category, tasks);
+    const context = analyzeTaskContext(title, category, tasks) || {};
+    if (shifts && shifts.length > 0) {
+        context.turnos = shifts;
+    }
     console.log(`%c[Motor de Contexto] Tarefa: "${title}" na guia "${category}"`, "color: #8b5cf6; font-weight: bold;", context);
 
     const newTask = {
@@ -1577,79 +2163,51 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
         is_active: true,
         created_at: createdAt
     };
-    if (repeatDays) {
-        newTask.repeat_days = repeatDays;
-    }
-    if (context) {
-        newTask.context = context;
-    }
-    if (assignedTo) {
-        newTask.assigned_to = assignedTo;
-    }
-    if (currentUser) {
-        newTask.user_id = currentUser.id;
-    }
+    if (repeatDays) newTask.repeat_days = repeatDays;
+    if (context && Object.keys(context).length > 0) newTask.context = context;
+    if (assignedTo) newTask.assigned_to = assignedTo;
+    if (currentUser) newTask.user_id = currentUser.id;
 
-    if (supabaseClient) {
-        try {
-            let { error } = await supabaseClient
-                .from('tasks')
-                .insert(newTask);
-            
-            if (error) {
-                console.warn("Falha ao inserir tarefa completa no Supabase. Tentando fallbacks...", error.message);
-                const fallbackTask = { ...newTask };
-                
-                // 1. Tenta sem o campo assigned_to (se ele existia)
-                if (fallbackTask.assigned_to !== undefined) {
-                    delete fallbackTask.assigned_to;
-                    const res = await supabaseClient.from('tasks').insert(fallbackTask);
-                    error = res.error;
-                }
+    // Salva no local storage offline_tasks
+    let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    localTasks.push({ ...newTask, id: tempId });
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
 
-                // 2. Tenta sem o campo context (se ele existia)
-                if (error && fallbackTask.context) {
-                    delete fallbackTask.context;
-                    const res = await supabaseClient.from('tasks').insert(fallbackTask);
-                    error = res.error;
+    // Renderiza IMEDIATAMENTE (usando a lógica centralizada para respeitar data atual, recorrência, etc)
+    loadDataOffline();
+
+    // Renderiza e atualiza progresso IMEDIATAMENTE (super responsivo)
+    renderChecklist();
+    updateProgress();
+
+    // 2. ENVIA PARA A NUVEM EM SEGUNDO PLANO (Sem bloquear a interface do usuário!)
+    if (supabaseClient && currentUser) {
+        supabaseClient.from('tasks').insert(newTask).select()
+            .then(({ data, error }) => {
+                if (error) {
+                    console.warn("Falha ao salvar tarefa na nuvem. Mantendo localmente.", error.message);
+                    return;
                 }
-                
-                // 3. Se ainda falhar e tiver repeat_days, tenta sem repeat_days
-                if (error && fallbackTask.repeat_days) {
-                    delete fallbackTask.repeat_days;
-                    const res = await supabaseClient.from('tasks').insert(fallbackTask);
-                    error = res.error;
+                if (data && data.length > 0) {
+                    const realTask = data[0];
+                    // Atualiza ID na memória
+                    tasks = tasks.map(t => String(t.id) === String(tempId) ? { ...t, id: realTask.id } : t);
+                    allActiveTasks = allActiveTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
+                    // Atualiza local storage removendo o temporário e salvando o real
+                    let currentLocalTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+                    currentLocalTasks = currentLocalTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
+                    localStorage.setItem("offline_tasks", JSON.stringify(currentLocalTasks));
                 }
-                
-                if (error) throw error;
-            }
-            
-            await loadChecklistAndProgress();
-        } catch (error) {
-            console.error("Erro ao inserir no Supabase.", error);
-            // Adicionar à lista em memória SEM substituir as tarefas existentes
-            const inMemoryTask = {
-                id: tempId,
-                title: title,
-                category: category,
-                is_recurring: isRecurring,
-                repeat_days: repeatDays || null,
-                context: context || null,
-                completed: false
-            };
-            if (assignedTo) {
-                inMemoryTask.assigned_to = assignedTo;
-            }
-            tasks.push(inMemoryTask);
-            renderChecklist();
-            updateProgress();
-        }
-    } else {
-        addTaskOffline(title, category, isRecurring, tempId, createdAt, repeatDays, context, assignedTo);
+            })
+            .catch(err => {
+                console.error("Erro assíncrono ao adicionar tarefa:", err);
+            });
     }
 }
 
-function addTaskOffline(title, category, isRecurring, id, createdAt, repeatDays, context, assignedTo) {
+async function addTaskOffline(title, category, isRecurring, id, createdAt, repeatDays, context, assignedTo) {
+    localDataVersion++;
+    const now = new Date();
     let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
     const task = {
         id: id,
@@ -1676,47 +2234,44 @@ function addTaskOffline(title, category, isRecurring, id, createdAt, repeatDays,
     updateProgress();
 }
 
-async function renameTask(id, newTitle) {
+async function renameTask(id, newTitle, context) {
+    localDataVersion++;
     if (!newTitle) return;
 
     const existingTask = tasks.find(t => String(t.id) === String(id));
     const category = existingTask ? existingTask.category : "";
-    const context = analyzeTaskContext(newTitle, category, tasks);
+    const nlpContext = analyzeTaskContext(newTitle, category, tasks);
+    const finalContext = context || nlpContext;
 
-    // Atualização otimista local imediata
+    // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
     tasks = tasks.map(t => {
-        if (String(t.id) === String(id)) return { ...t, title: newTitle, context: context || null };
+        if (String(t.id) === String(id)) return { ...t, title: newTitle, context: finalContext || null };
         return t;
     });
+    allActiveTasks = allActiveTasks.map(t => {
+        if (String(t.id) === String(id)) return { ...t, title: newTitle, context: finalContext || null };
+        return t;
+    });
+    
+    // Salva no LocalStorage
+    renameTaskOffline(id, newTitle, finalContext);
+
     renderChecklist();
 
-    if (supabaseClient) {
-        try {
-            const updates = { title: newTitle };
-            if (context) updates.context = context;
-            
-            let { error } = await supabaseClient
-                .from('tasks')
-                .update(updates)
-                .eq('id', id);
-            
-            if (error) {
-                // Se falhar com context, tentar sem
-                if (updates.context) {
-                    delete updates.context;
-                    const res = await supabaseClient.from('tasks').update(updates).eq('id', id);
-                    error = res.error;
+    // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
+    if (supabaseClient && currentUser && isNaN(id) === false) {
+        const updates = { title: newTitle };
+        if (finalContext) updates.context = finalContext;
+
+        supabaseClient.from('tasks').update(updates).eq('id', id)
+            .then(({ error }) => {
+                if (error) {
+                    console.warn("Erro ao renomear no Supabase. Mantido localmente.", error.message);
                 }
-                if (error) throw error;
-            }
-            
-            await loadChecklistAndProgress();
-        } catch (error) {
-            console.error("Erro ao renomear no Supabase. Renomeando offline.", error);
-            renameTaskOffline(id, newTitle, context);
-        }
-    } else {
-        renameTaskOffline(id, newTitle, context);
+            })
+            .catch(err => {
+                console.error("Erro assíncrono ao renomear:", err);
+            });
     }
 }
 
@@ -1738,84 +2293,51 @@ function renameTaskOffline(id, newTitle, context) {
 
 // Full task update (title, date, recurrence, repeat_days)
 async function updateTask(id, updates) {
+    localDataVersion++;
     const existingTask = tasks.find(t => String(t.id) === String(id));
     
     // Analyze new context if title is being updated
     if (updates.title !== undefined) {
         const category = existingTask ? existingTask.category : "";
-        const context = analyzeTaskContext(updates.title, category, tasks);
-        console.log(`%c[Motor de Contexto] Edição da Tarefa: "${updates.title}" na guia "${category}"`, "color: #10b981; font-weight: bold;", context);
-        if (context) {
-            updates.context = context;
-        }
+        const nlpContext = analyzeTaskContext(updates.title, category, tasks) || {};
+        // Mescla o contexto analisado com o que já foi enviado (como os turnos selecionados)
+        updates.context = { ...(updates.context || {}), ...nlpContext };
     }
 
-    // Otimista local
-    tasks = tasks.map(t => {
+    // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
+    // Salva no LocalStorage primeiro
+    let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    localTasks = localTasks.map(t => {
         if (String(t.id) === String(id)) return { ...t, ...updates };
         return t;
     });
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+
+    // Reconstrói a memória através do fluxo central que aplica as regras de data e filtro corretamente
+    loadDataOffline();
+
     renderChecklist();
     updateProgress();
 
-    if (supabaseClient) {
-        try {
-            const dbUpdates = {};
-            if (updates.title !== undefined) dbUpdates.title = updates.title;
-            if (updates.is_recurring !== undefined) dbUpdates.is_recurring = updates.is_recurring;
-            if (updates.repeat_days !== undefined) dbUpdates.repeat_days = updates.repeat_days;
-            if (updates.created_at !== undefined) dbUpdates.created_at = updates.created_at;
-            if (updates.context !== undefined) dbUpdates.context = updates.context;
-            if (updates.assigned_to !== undefined) dbUpdates.assigned_to = updates.assigned_to;
+    // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
+    if (supabaseClient && currentUser && isNaN(id) === false) {
+        const dbUpdates = {};
+        if (updates.title !== undefined) dbUpdates.title = updates.title;
+        if (updates.is_recurring !== undefined) dbUpdates.is_recurring = updates.is_recurring;
+        if (updates.repeat_days !== undefined) dbUpdates.repeat_days = updates.repeat_days;
+        if (updates.created_at !== undefined) dbUpdates.created_at = updates.created_at;
+        if (updates.context !== undefined) dbUpdates.context = updates.context;
+        if (updates.assigned_to !== undefined) dbUpdates.assigned_to = updates.assigned_to;
 
-            let { error } = await supabaseClient
-                .from('tasks')
-                .update(dbUpdates)
-                .eq('id', id);
-            
-            if (error) {
-                console.warn("Falha ao atualizar com todos os campos. Tentando fallbacks...", error.message);
-                const dbUpdatesFallback = { ...dbUpdates };
-                
-                // 1. Tenta sem o campo assigned_to se ele existia
-                if (dbUpdatesFallback.assigned_to !== undefined) {
-                    delete dbUpdatesFallback.assigned_to;
-                    const res = await supabaseClient.from('tasks').update(dbUpdatesFallback).eq('id', id);
-                    error = res.error;
+        supabaseClient.from('tasks').update(dbUpdates).eq('id', id)
+            .then(({ error }) => {
+                if (error) {
+                    console.warn("Erro ao atualizar tarefa no Supabase. Mantido localmente.", error.message);
                 }
-
-                // 2. Tenta sem o campo context se ele existia
-                if (error && dbUpdatesFallback.context !== undefined) {
-                    delete dbUpdatesFallback.context;
-                    const res = await supabaseClient.from('tasks').update(dbUpdatesFallback).eq('id', id);
-                    error = res.error;
-                }
-                
-                // 3. Se ainda falhar e tiver repeat_days, tenta sem repeat_days
-                if (error && dbUpdatesFallback.repeat_days !== undefined) {
-                    delete dbUpdatesFallback.repeat_days;
-                    const res = await supabaseClient.from('tasks').update(dbUpdatesFallback).eq('id', id);
-                    error = res.error;
-                }
-                
-                if (error) throw error;
-            }
-            
-            await loadChecklistAndProgress();
-        } catch (error) {
-            console.error("Erro ao atualizar tarefa no Supabase.", error);
-            // A atualização otimista já mantém o estado visual correto
-        }
-    } else {
-        let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
-        localTasks = localTasks.map(t => {
-            if (String(t.id) === String(id)) return { ...t, ...updates };
-            return t;
-        });
-        localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
-        loadDataOffline();
-        renderChecklist();
-        updateProgress();
+            })
+            .catch(err => {
+                console.error("Erro assíncrono ao editar tarefa:", err);
+            });
     }
 }
 
@@ -1868,6 +2390,22 @@ function openEditTaskModal(task) {
     // For now use selectedDate as fallback
     editDate.value = selectedDate;
 
+    // Configura a categoria
+    if (selectEditTaskCategory) {
+        selectEditTaskCategory.value = task.category || "";
+    }
+
+    // Configura os turnos selecionados
+    document.querySelectorAll("#edit-shift-selector .shift-toggle-btn").forEach(btn => {
+        const shiftVal = btn.dataset.shift;
+        const taskShifts = (task.context && task.context.turnos) ? task.context.turnos : [];
+        if (taskShifts.includes(shiftVal)) {
+            btn.classList.add("active");
+        } else {
+            btn.classList.remove("active");
+        }
+    });
+
     // Configura e pré-seleciona a atribuição do colaborador
     updateTaskAssigneeDropdown(task.category, selectEditTaskAssignedTo, editTaskAssigneeGroup);
     if (selectEditTaskAssignedTo) {
@@ -1879,35 +2417,40 @@ function openEditTaskModal(task) {
 }
 
 async function deleteTask(id) {
+    localDataVersion++;
     if (pendingDeletes.has(id)) return;
     pendingDeletes.add(id);
 
-    // Atualização otimista local imediata (remove da lista local antes de bater no banco)
+    // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
     tasks = tasks.filter(t => String(t.id) !== String(id));
+    allActiveTasks = allActiveTasks.filter(t => String(t.id) !== String(id));
+    
+    // Salva no LocalStorage
+    deleteTaskOffline(id);
+
+    renderChecklist();
     updateProgress();
 
-    if (supabaseClient) {
-        try {
-            const { error } = await supabaseClient
-                .from('tasks')
-                .update({ is_active: false })
-                .eq('id', id);
-            if (error) throw error;
-            
-            await loadChecklistAndProgress();
-        } catch (error) {
-            console.error("Erro ao deletar no Supabase. Deletando offline.", error);
-            deleteTaskOffline(id);
-        } finally {
-            pendingDeletes.delete(id);
-        }
+    // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
+    if (supabaseClient && currentUser && isNaN(id) === false) {
+        supabaseClient.from('tasks').update({ is_active: false }).eq('id', id)
+            .then(({ error }) => {
+                if (error) {
+                    console.warn("Erro ao deletar no Supabase. Mantido localmente.", error.message);
+                }
+                pendingDeletes.delete(id);
+            })
+            .catch(err => {
+                console.error("Erro assíncrono ao deletar:", err);
+                pendingDeletes.delete(id);
+            });
     } else {
-        deleteTaskOffline(id);
         pendingDeletes.delete(id);
     }
 }
 
 function deleteTaskOffline(id) {
+    localDataVersion++;
     let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
     localTasks = localTasks.map(t => {
         if (String(t.id) === String(id)) return { ...t, is_active: false };
@@ -1921,39 +2464,43 @@ function deleteTaskOffline(id) {
 }
 
 async function excludeTaskForToday(id) {
+    localDataVersion++;
     if (pendingDeletes.has(id)) return;
     pendingDeletes.add(id);
 
-    // Atualização otimista local imediata
+    // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
     tasks = tasks.filter(t => String(t.id) !== String(id));
+    
+    // Salva no LocalStorage
+    excludeTaskForTodayOffline(id);
+
+    renderChecklist();
     updateProgress();
 
-    if (supabaseClient) {
-        try {
-            // Insere na tabela 'completions' um registro com completed: false para marcar como excluído hoje
-            const { error } = await supabaseClient
-                .from('completions')
-                .upsert({
-                    task_id: id,
-                    date: selectedDate,
-                    completed: false
-                }, { onConflict: 'task_id,date' });
-            if (error) throw error;
-            
-            await loadChecklistAndProgress();
-        } catch (error) {
-            console.error("Erro ao excluir do dia atual no Supabase. Fazendo offline.", error);
-            excludeTaskForTodayOffline(id);
-        } finally {
-            pendingDeletes.delete(id);
-        }
+    // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
+    if (supabaseClient && currentUser && isNaN(id) === false) {
+        supabaseClient.from('completions').upsert({
+            task_id: id,
+            date: selectedDate,
+            completed: false
+        }, { onConflict: 'task_id,date' })
+            .then(({ error }) => {
+                if (error) {
+                    console.warn("Erro ao excluir do dia no Supabase. Mantido localmente.", error.message);
+                }
+                pendingDeletes.delete(id);
+            })
+            .catch(err => {
+                console.error("Erro assíncrono ao excluir do dia:", err);
+                pendingDeletes.delete(id);
+            });
     } else {
-        excludeTaskForTodayOffline(id);
         pendingDeletes.delete(id);
     }
 }
 
 function excludeTaskForTodayOffline(id) {
+    localDataVersion++;
     let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
     localCompletions = localCompletions.filter(c => !(String(c.task_id) === String(id) && c.date === selectedDate));
     
@@ -2403,7 +2950,10 @@ function updateTaskAssigneeDropdown(categoryName, selectEl, groupEl) {
 async function addCategory(name) {
     if (!name) return;
 
+    // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
+    const tempId = Date.now();
     const newCat = {
+        id: tempId,
         name: name,
         is_active: true
     };
@@ -2411,24 +2961,43 @@ async function addCategory(name) {
         newCat.user_id = currentUser.id;
     }
 
-    if (supabaseClient) {
-        try {
-            const { error } = await supabaseClient
-                .from('categories')
-                .insert(newCat);
-            if (error) throw error;
-            
-            await loadChecklistAndProgress();
-        } catch (e) {
-            console.error("Erro ao inserir categoria no Supabase: ", e);
-            addCategoryOffline(name);
-        }
-    } else {
-        addCategoryOffline(name);
+    // Adiciona na memória e local storage
+    let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+    if (localCats.some(c => c.name.toLowerCase() === name.toLowerCase() && c.is_active)) {
+        alert("Este local/categoria já existe.");
+        return;
+    }
+    categories.push(newCat);
+    localCats.push(newCat);
+    localStorage.setItem("offline_categories", JSON.stringify(localCats));
+
+    renderCategories();
+
+    // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
+    if (supabaseClient && currentUser) {
+        supabaseClient.from('categories').insert({ name: name, is_active: true }).select()
+            .then(({ data, error }) => {
+                if (error) {
+                    console.warn("Erro ao sincronizar nova categoria no Supabase:", error.message);
+                    return;
+                }
+                if (data && data.length > 0) {
+                    const realCat = data[0];
+                    // Atualiza ID temporário para o real na memória
+                    categories = categories.map(c => String(c.id) === String(tempId) ? realCat : c);
+                    let currentLocalCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+                    currentLocalCats = currentLocalCats.map(c => String(c.id) === String(tempId) ? realCat : c);
+                    localStorage.setItem("offline_categories", JSON.stringify(currentLocalCats));
+                }
+            })
+            .catch(err => {
+                console.error("Erro assíncrono ao adicionar categoria:", err);
+            });
     }
 }
 
 function addCategoryOffline(name) {
+    localDataVersion++;
     let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
     if (localCats.some(c => c.name.toLowerCase() === name.toLowerCase() && c.is_active)) {
         alert("Este local/categoria já existe.");
@@ -2441,32 +3010,48 @@ function addCategoryOffline(name) {
     });
     localStorage.setItem("offline_categories", JSON.stringify(localCats));
     
-    loadCategoriesOffline();
+    loadDataOffline();
     renderCategories();
 }
 
 async function deleteCategory(id) {
+    localDataVersion++;
     if (confirm("Deseja mesmo excluir este local? As tarefas dele não aparecerão hoje. O histórico passado será mantido.")) {
-        if (supabaseClient) {
-            try {
-                const { error } = await supabaseClient
-                    .from('categories')
-                    .update({ is_active: false })
-                    .eq('id', id);
-                if (error) throw error;
-                
-                await loadChecklistAndProgress();
-            } catch (e) {
-                console.error("Erro ao deletar categoria no Supabase: ", e);
-                deleteCategoryOffline(id);
-            }
-        } else {
-            deleteCategoryOffline(id);
+        // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
+        const cat = categories.find(c => String(c.id) === String(id));
+        categories = categories.filter(c => String(c.id) !== String(id));
+        
+        let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+        localCats = localCats.map(c => {
+            if (String(c.id) === String(id)) return { ...c, is_active: false };
+            return c;
+        });
+        localStorage.setItem("offline_categories", JSON.stringify(localCats));
+
+        if (cat && currentFilter === cat.name) {
+            currentFilter = "all";
+        }
+        renderCategories();
+        renderChecklist();
+        updateProgress();
+
+        // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
+        if (supabaseClient && currentUser && isNaN(id) === false) {
+            supabaseClient.from('categories').update({ is_active: false }).eq('id', id)
+                .then(({ error }) => {
+                    if (error) {
+                        console.warn("Erro ao deletar categoria no Supabase:", error.message);
+                    }
+                })
+                .catch(err => {
+                    console.error("Erro assíncrono ao deletar categoria:", err);
+                });
         }
     }
 }
 
 function deleteCategoryOffline(id) {
+    localDataVersion++;
     let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
     localCats = localCats.map(c => {
         if (String(c.id) === String(id)) return { ...c, is_active: false };
@@ -2474,7 +3059,7 @@ function deleteCategoryOffline(id) {
     });
     localStorage.setItem("offline_categories", JSON.stringify(localCats));
     
-    loadCategoriesOffline();
+    loadDataOffline();
     renderCategories();
     
     const cat = categories.find(c => String(c.id) === String(id));
@@ -2482,25 +3067,26 @@ function deleteCategoryOffline(id) {
         currentFilter = "all";
     }
     
-    loadChecklistAndProgress();
+    loadDataOffline();
+    renderChecklist();
+    updateProgress();
 }
 
 async function resetChecklistProgress() {
-    if (supabaseClient) {
-        try {
-            const { error } = await supabaseClient
-                .from('completions')
-                .delete()
-                .eq('date', selectedDate);
-            if (error) throw error;
-            
-            await loadChecklistAndProgress();
-        } catch (e) {
-            console.error("Erro ao resetar progresso no Supabase.", e);
-            resetChecklistProgressOffline();
-        }
-    } else {
-        resetChecklistProgressOffline();
+    localDataVersion++;
+    // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
+    tasks = tasks.map(t => ({ ...t, completed: false }));
+    resetChecklistProgressOffline();
+
+    // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
+    if (supabaseClient && currentUser) {
+        supabaseClient.from('completions').delete().eq('date', selectedDate)
+            .then(({ error }) => {
+                if (error) console.error("Erro ao resetar progresso no Supabase:", error);
+            })
+            .catch(err => {
+                console.error("Erro assíncrono ao resetar progresso:", err);
+            });
     }
 }
 
@@ -2591,16 +3177,20 @@ function restoreDefaultSettingsOffline() {
 }
 
 async function clearAllTasks() {
-    if (supabaseClient) {
-        try {
-            await supabaseClient.from('tasks').update({ is_active: false }).eq('is_active', true);
-            await loadChecklistAndProgress();
-        } catch (e) {
-            console.error("Erro ao limpar tarefas online. Limpando offline.", e);
-            clearAllTasksOffline();
-        }
-    } else {
-        clearAllTasksOffline();
+    // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
+    tasks = [];
+    allActiveTasks = allActiveTasks.map(t => ({ ...t, is_active: false }));
+    clearAllTasksOffline();
+
+    // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
+    if (supabaseClient && currentUser) {
+        supabaseClient.from('tasks').update({ is_active: false }).eq('is_active', true)
+            .then(({ error }) => {
+                if (error) console.error("Erro ao limpar tarefas no Supabase:", error);
+            })
+            .catch(err => {
+                console.error("Erro assíncrono ao limpar tarefas:", err);
+            });
     }
 }
 
@@ -2676,17 +3266,25 @@ function shareReport() {
         }
     });
 
-    navigator.clipboard.writeText(reportText).then(() => {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(reportText).then(() => {
+            const encodedText = encodeURIComponent(reportText);
+            const whatsappUrl = `https://api.whatsapp.com/send?text=${encodedText}`;
+            alert("Relatório copiado para a área de transferência! Abrindo o WhatsApp...");
+            window.location.href = whatsappUrl;
+        }).catch(err => {
+            console.error("Falha ao copiar relatório: ", err);
+            const encodedText = encodeURIComponent(reportText);
+            const whatsappUrl = `https://api.whatsapp.com/send?text=${encodedText}`;
+            window.location.href = whatsappUrl;
+        });
+    } else {
+        // Fallback direto se o clipboard não for suportado ou não estiver em contexto seguro (HTTPS)
+        console.warn("Clipboard API indisponível (HTTP ou restrição). Abrindo WhatsApp direto.");
         const encodedText = encodeURIComponent(reportText);
         const whatsappUrl = `https://api.whatsapp.com/send?text=${encodedText}`;
-        alert("Relatório copiado para a área de transferência! Abrindo o WhatsApp...");
-        window.open(whatsappUrl, "_blank");
-    }).catch(err => {
-        console.error("Falha ao copiar relatório: ", err);
-        const encodedText = encodeURIComponent(reportText);
-        const whatsappUrl = `https://api.whatsapp.com/send?text=${encodedText}`;
-        window.open(whatsappUrl, "_blank");
-    });
+        window.location.href = whatsappUrl;
+    }
 }
 
 function createConfettiBurst(x, y) {
@@ -2863,6 +3461,13 @@ function setupSupabaseAuth() {
 
     supabaseClient.auth.onAuthStateChange(async (event, session) => {
         console.log("Supabase Auth Change:", event, session);
+
+        // Ignora renovações de token e eventos secundários para evitar re-renderizações desnecessárias
+        if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+            if (session) currentUser = session.user;
+            return;
+        }
+
         if (session) {
             currentUser = session.user;
             document.getElementById("auth-container").style.display = "none";
@@ -3002,17 +3607,6 @@ function renderCalendarGrid() {
 
         btn.addEventListener("click", async () => {
             selectedDate = dateStr;
-            
-            // Check if viewing history
-            isHistoryMode = (selectedDate !== todayStr);
-            
-            if (isHistoryMode) {
-                appContainer.classList.add("history-mode");
-                toggleEditMode(false); // Turn off editing when viewing history
-            } else {
-                appContainer.classList.remove("history-mode");
-            }
-
             updateDateDisplay();
             await loadChecklistAndProgress();
             closeModal(modalCalendar);
@@ -3036,21 +3630,22 @@ function renderCalendarGrid() {
 
 // Drag & Drop Category Reordering logic
 let draggedElement = null;
+let isDraggingTask = false; // Lock global: bloqueia re-renders durante drag de tarefa
+window.wasCategoryDragged = false; // Bloqueia clique indesejado após arrastar
 
 function setupDragAndDrop(chip, cat) {
-    // Mouse dragging
+    let pressTimer = null;
+    let isDragging = false;
+
+    // Mouse dragging (HTML5 native)
     chip.addEventListener("dragstart", (e) => {
-        if (!isEditMode) {
-            e.preventDefault();
-            return;
-        }
         draggedElement = chip;
         chip.classList.add("dragging");
         e.dataTransfer.effectAllowed = "move";
     });
 
     chip.addEventListener("dragover", (e) => {
-        if (!isEditMode || !draggedElement) return;
+        if (!draggedElement) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
         
@@ -3065,24 +3660,66 @@ function setupDragAndDrop(chip, cat) {
     });
 
     chip.addEventListener("dragend", () => {
-        if (!isEditMode) return;
         chip.classList.remove("dragging");
         draggedElement = null;
         saveCategoryOrder();
     });
 
-    // Touch support for mobile dragging
+    // Touch support para mobile - long-press de 350ms para iniciar drag
+    let touchStartX = 0;
+    let touchStartY = 0;
+
     chip.addEventListener("touchstart", (e) => {
-        if (!isEditMode) return;
-        draggedElement = chip;
-        chip.classList.add("dragging");
-    });
+        const touch = e.touches[0];
+        touchStartX = touch.clientX;
+        touchStartY = touch.clientY;
+
+        pressTimer = setTimeout(() => {
+            isDragging = true;
+            draggedElement = chip;
+            chip.classList.add("dragging");
+            if (navigator.vibrate) navigator.vibrate(20);
+
+            // Agora que o drag começou, escuta movimentos na window toda
+            window.addEventListener("touchmove", onWindowTouchMove, { passive: false });
+            window.addEventListener("touchend", onWindowTouchEnd, { passive: true });
+            window.addEventListener("touchcancel", onWindowTouchEnd, { passive: true });
+        }, 350);
+    }, { passive: true });
 
     chip.addEventListener("touchmove", (e) => {
-        if (!isEditMode || !draggedElement) return;
+        if (isDragging) return; // Já está gerenciado pelo listener da window
         
+        // Cancela o timer apenas se o dedo se mover mais de 8px (tolerância para tremor)
         const touch = e.touches[0];
+        const dx = Math.abs(touch.clientX - touchStartX);
+        const dy = Math.abs(touch.clientY - touchStartY);
+        if (dx > 8 || dy > 8) {
+            cancelPress();
+        }
+    }, { passive: true });
+
+    chip.addEventListener("touchend", () => {
+        cancelPress();
+        isDragging = false;
+    });
+
+    chip.addEventListener("touchcancel", () => {
+        cancelPress();
+        isDragging = false;
+    });
+
+    function onWindowTouchMove(e) {
+        if (!isDragging || !draggedElement) return;
+        e.preventDefault();
+
+        const touch = e.touches[0];
+        
+        // Esconde temporariamente o chip arrastado para achar o elemento por baixo
+        draggedElement.style.pointerEvents = 'none';
         const elementUnderTouch = document.elementFromPoint(touch.clientX, touch.clientY);
+        draggedElement.style.pointerEvents = '';
+
         if (!elementUnderTouch) return;
 
         const targetChip = elementUnderTouch.closest(".category-chip");
@@ -3095,19 +3732,38 @@ function setupDragAndDrop(chip, cat) {
             } else {
                 targetChip.parentNode.insertBefore(draggedElement, targetChip.nextSibling);
             }
-            e.preventDefault(); // Prevent scroll while dragging
         }
-    });
+    }
 
-    chip.addEventListener("touchend", () => {
-        if (!isEditMode || !draggedElement) return;
-        draggedElement.classList.remove("dragging");
-        draggedElement = null;
-        saveCategoryOrder();
-    });
+    function onWindowTouchEnd() {
+        window.removeEventListener("touchmove", onWindowTouchMove);
+        window.removeEventListener("touchend", onWindowTouchEnd);
+        window.removeEventListener("touchcancel", onWindowTouchEnd);
+
+        if (isDragging && draggedElement) {
+            draggedElement.classList.remove("dragging");
+            draggedElement = null;
+            saveCategoryOrder();
+            
+            // Ativa o bloqueio de clique e remove após 100ms
+            window.wasCategoryDragged = true;
+            setTimeout(() => {
+                window.wasCategoryDragged = false;
+            }, 100);
+        }
+        isDragging = false;
+    }
+
+    const cancelPress = () => {
+        if (pressTimer) {
+            clearTimeout(pressTimer);
+            pressTimer = null;
+        }
+    };
 }
 
 async function saveCategoryOrder() {
+    localDataVersion++;
     const bar = document.getElementById("categories-bar");
     const chips = Array.from(bar.querySelectorAll(".category-chip"));
     
