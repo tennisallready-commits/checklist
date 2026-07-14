@@ -1336,12 +1336,12 @@ async function loadData() {
                 }
             });
 
-            const completedTodayIds = new Set(dbCompletionsToday.filter(c => c.completed === true).map(c => c.task_id));
-            const excludedTodayIds = new Set(dbCompletionsToday.filter(c => c.completed === false).map(c => c.task_id));
+            const completedTodayIds = new Set(dbCompletionsToday.filter(c => c.completed === true).map(c => String(c.task_id)));
+            const excludedTodayIds = new Set(dbCompletionsToday.filter(c => c.completed === false).map(c => String(c.task_id)));
 
             // Map tasks with Rollover and Recurrence
             tasks = dbTasks.filter(task => {
-                if (excludedTodayIds.has(task.id)) return false;
+                if (excludedTodayIds.has(String(task.id))) return false;
                 
                 const taskCreatedDate = extractDateFromTimestamp(task.created_at);
                 
@@ -1367,7 +1367,7 @@ async function loadData() {
                 repeat_days: task.repeat_days || null,
                 context: task.context || null,
                 assigned_to: task.assigned_to || null,
-                completed: completedTodayIds.has(task.id)
+                completed: completedTodayIds.has(String(task.id))
             }));
 
             // Salva os dados mais recentes carregados do Supabase no cache local.
@@ -1468,19 +1468,19 @@ function loadDataOffline() {
     let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
 
     const completedBeforeIds = new Set(
-        localCompletions.filter(c => c.date < selectedDate && c.completed === true).map(c => c.task_id)
+        localCompletions.filter(c => c.date < selectedDate && c.completed === true).map(c => String(c.task_id))
     );
     const completedTodayIds = new Set(
-        localCompletions.filter(c => c.date === selectedDate && c.completed === true).map(c => c.task_id)
+        localCompletions.filter(c => c.date === selectedDate && c.completed === true).map(c => String(c.task_id))
     );
     const excludedTodayIds = new Set(
-        localCompletions.filter(c => c.date === selectedDate && c.completed === false).map(c => c.task_id)
+        localCompletions.filter(c => c.date === selectedDate && c.completed === false).map(c => String(c.task_id))
     );
 
     // Map tasks
     tasks = localTasks.filter(task => {
         if (!task.is_active) return false;
-        if (excludedTodayIds.has(task.id)) return false;
+        if (excludedTodayIds.has(String(task.id))) return false;
         
         const taskCreatedDate = extractDateFromTimestamp(task.created_at);
         
@@ -1503,7 +1503,7 @@ function loadDataOffline() {
         repeat_days: task.repeat_days || null,
         context: task.context || null,
         assigned_to: task.assigned_to || null,
-        completed: completedTodayIds.has(task.id)
+        completed: completedTodayIds.has(String(task.id))
     }));
 }
 
