@@ -1315,6 +1315,18 @@ async function loadData() {
                 return false;
             }
 
+            // Applica as atualizações offline na listagem do Supabase antes de renderizar
+            let taskUpdatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+            if (dbTasks) {
+                Object.keys(taskUpdatesQueue).forEach(id => {
+                    const dbUpdates = taskUpdatesQueue[id];
+                    const taskIndex = dbTasks.findIndex(t => String(t.id) === String(id));
+                    if (taskIndex !== -1) {
+                        dbTasks[taskIndex] = { ...dbTasks[taskIndex], ...dbUpdates };
+                    }
+                });
+            }
+
             categories = dbCats;
             allActiveTasks = dbTasks || [];
 
@@ -2336,10 +2348,18 @@ async function renameTask(id, newTitle, context) {
         const updates = { title: newTitle };
         if (finalContext) updates.context = finalContext;
 
+        let updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+        updatesQueue[id] = { ...(updatesQueue[id] || {}), ...updates };
+        localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
+
         supabaseClient.from('tasks').update(updates).eq('id', id)
             .then(({ error }) => {
                 if (error) {
                     console.warn("Erro ao renomear no Supabase. Mantido localmente.", error.message);
+                } else {
+                    let queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+                    delete queue[id];
+                    localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
                 }
             })
             .catch(err => {
@@ -2400,10 +2420,18 @@ async function updateTask(id, updates) {
         if (updates.context !== undefined) dbUpdates.context = updates.context;
         if (updates.assigned_to !== undefined) dbUpdates.assigned_to = updates.assigned_to;
 
+        let updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+        updatesQueue[id] = { ...(updatesQueue[id] || {}), ...dbUpdates };
+        localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
+
         supabaseClient.from('tasks').update(dbUpdates).eq('id', id)
             .then(({ error }) => {
                 if (error) {
                     console.warn("Erro ao atualizar tarefa no Supabase. Mantido localmente.", error.message);
+                } else {
+                    let queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+                    delete queue[id];
+                    localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
                 }
             })
             .catch(err => {
@@ -3587,6 +3615,26 @@ async function syncOfflineDataToCloud() {
     }
     if (hasChanges) {
         localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
+    }
+
+    // Sync task updates
+    let taskUpdatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+    let hasTaskUpdates = false;
+    for (const id of Object.keys(taskUpdatesQueue)) {
+        if (isTemporaryId(id)) continue;
+        const dbUpdates = taskUpdatesQueue[id];
+        try {
+            const { error } = await supabaseClient.from('tasks').update(dbUpdates).eq('id', id);
+            if (!error) {
+                delete taskUpdatesQueue[id];
+                hasTaskUpdates = true;
+            }
+        } catch(e) {
+            console.warn("Erro ao sync updateTask", e);
+        }
+    }
+    if (hasTaskUpdates) {
+        localStorage.setItem("offline_task_updates_queue", JSON.stringify(taskUpdatesQueue));
     }
 }
 
