@@ -1319,6 +1319,23 @@ async function loadData() {
             allActiveTasks = dbTasks || [];
 
             const completedBeforeIds = new Set(dbCompletionsBefore.map(c => c.task_id));
+            
+            let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+            Object.keys(queue).forEach(key => {
+                const [taskIdStr, dateStr] = key.split('_');
+                if (dateStr === selectedDate) {
+                    const completed = queue[key];
+                    const existing = dbCompletionsToday.find(c => String(c.task_id) === taskIdStr);
+                    if (existing) {
+                        existing.completed = completed;
+                    } else if (completed) {
+                        dbCompletionsToday.push({ task_id: taskIdStr, date: selectedDate, completed: true });
+                    } else {
+                        dbCompletionsToday.push({ task_id: taskIdStr, date: selectedDate, completed: false });
+                    }
+                }
+            });
+
             const completedTodayIds = new Set(dbCompletionsToday.filter(c => c.completed === true).map(c => c.task_id));
             const excludedTodayIds = new Set(dbCompletionsToday.filter(c => c.completed === false).map(c => c.task_id));
 
@@ -1373,8 +1390,9 @@ async function loadData() {
             // Remove conclusões locais obsoletas para a data de hoje e as datas do histórico recebido
             const dbCompBeforeIds = new Set(dbCompletionsBefore.map(c => String(c.task_id)));
             localCompletions = localCompletions.filter(c => {
+                const qKey = `${c.task_id}_${c.date}`;
                 // Preserva o estado local se esta tarefa estiver com sincronização pendente para a nuvem
-                if (pendingToggles.has(c.task_id) || pendingToggles.has(String(c.task_id)) || pendingToggles.has(Number(c.task_id))) {
+                if (pendingToggles.has(c.task_id) || pendingToggles.has(String(c.task_id)) || pendingToggles.has(Number(c.task_id)) || queue.hasOwnProperty(qKey)) {
                     return true;
                 }
                 if (c.date === selectedDate) return false;
@@ -1384,7 +1402,8 @@ async function loadData() {
 
             // Adiciona as conclusões do Supabase para hoje (ignorando as que estão com sync pendente localmente)
             dbCompletionsToday.forEach(c => {
-                const isPending = pendingToggles.has(c.task_id) || pendingToggles.has(String(c.task_id)) || pendingToggles.has(Number(c.task_id));
+                const qKey = `${c.task_id}_${c.date}`;
+                const isPending = pendingToggles.has(c.task_id) || pendingToggles.has(String(c.task_id)) || pendingToggles.has(Number(c.task_id)) || queue.hasOwnProperty(qKey);
                 if (!isPending) {
                     localCompletions.push({
                         task_id: c.task_id,
@@ -2169,6 +2188,10 @@ async function toggleTask(id) {
         query.then(({ error }) => {
             if (error) {
                 console.warn("Erro ao salvar conclusão no Supabase. Mantido offline.", error.message);
+            } else {
+                let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+                delete queue[`${id}_${selectedDate}`];
+                localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
             }
             pendingToggles.delete(id);
         }).catch(err => {
@@ -2192,6 +2215,10 @@ function saveCompletionOffline(taskId, date, completed) {
         });
     }
     localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
+
+    let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+    queue[`${taskId}_${date}`] = completed;
+    localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
 }
 
 async function addTask(title, category, recurrenceMode, customDate, repeatDays, assignedTo, shifts) {
@@ -3531,9 +3558,31 @@ function setupSupabaseAuth() {
 }
 
 async function syncOfflineDataToCloud() {
-    // Desativada: addTask já sincroniza direto com Supabase no momento da criação.
-    // Re-sincronizar pelo localStorage causava race conditions e duplicações.
-    return;
+    if (!supabaseClient || !currentUser) return;
+    let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+    let hasChanges = false;
+    for (const key of Object.keys(queue)) {
+        const [taskId, date] = key.split('_');
+        if (isTemporaryId(taskId)) continue; // Can't sync yet
+
+        const completed = queue[key];
+        const query = completed
+            ? supabaseClient.from('completions').upsert({ task_id: taskId, date: date, completed: true }, { onConflict: 'task_id,date' })
+            : supabaseClient.from('completions').delete().eq('task_id', taskId).eq('date', date);
+        
+        try {
+            const { error } = await query;
+            if (!error) {
+                delete queue[key];
+                hasChanges = true;
+            }
+        } catch(e) {
+            console.warn("Erro ao sync", e);
+        }
+    }
+    if (hasChanges) {
+        localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
+    }
 }
 
 function renderCalendarGrid() {
