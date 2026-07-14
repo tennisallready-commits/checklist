@@ -171,6 +171,34 @@ async function initApp() {
     // Initialize Lucide Icons
     lucide.createIcons();
 
+    // ONE-TIME CLEANUP: Remove duplicates of "teste"
+    if (!localStorage.getItem("cleanup_done_v1")) {
+        setTimeout(async () => {
+            if (!supabaseClient) return;
+            try {
+                const { data, error } = await supabaseClient
+                    .from('tasks')
+                    .select('id')
+                    .ilike('title', 'teste')
+                    .order('created_at', { ascending: true });
+
+                if (error || !data || data.length <= 1) {
+                    localStorage.setItem("cleanup_done_v1", "true");
+                    return;
+                }
+
+                // Keep first, delete the rest
+                const toDelete = data.slice(1).map(t => t.id);
+                await supabaseClient.from('tasks').delete().in('id', toDelete);
+                localStorage.setItem("cleanup_done_v1", "true");
+                alert(`Limpeza concluída! Mantive 1 "teste" e removi ${toDelete.length} cópias extras.`);
+                loadChecklistAndProgress();
+            } catch(e) {
+                console.error("Cleanup error:", e);
+            }
+        }, 3000);
+    }
+
     // Check notifications badge read status
     if (localStorage.getItem("notifications_badge_read") === "true") {
         if (notificationsBadge) notificationsBadge.style.display = "none";
@@ -178,6 +206,11 @@ async function initApp() {
 }
 
 // ----------------------------------------------------
+
+function isTemporaryId(id) {
+    const str = String(id);
+    return /^\d+$/.test(str);
+}
 // Event Listeners Setup
 // ----------------------------------------------------
 function setupEventListeners() {
@@ -718,8 +751,8 @@ function setupEventListeners() {
             // Reset day toggles
             document.querySelectorAll("#repeat-days-group .day-toggle").forEach(b => b.classList.remove("active"));
             document.getElementById("repeat-days-group").style.display = "none";
-            // Reset shifts to all selected by default for new tasks
-            document.querySelectorAll("#add-shift-selector .shift-toggle-btn").forEach(b => b.classList.add("active"));
+            // Limpa seleção de turnos
+            document.querySelectorAll("#add-shift-selector .shift-toggle-btn").forEach(b => b.classList.remove("active"));
             selectTaskRecurring.value = "once";
             closeModal(modalAddTask);
         } catch (error) {
@@ -1320,28 +1353,45 @@ async function loadData() {
                 completed: completedTodayIds.has(task.id)
             }));
 
-            // Salva os dados mais recentes carregados do Supabase no cache local (LocalStorage)
-            // Isso garante que mudanças de data e reinicializações futuras sejam instantâneas
+            // Salva os dados mais recentes carregados do Supabase no cache local.
+            // MERGE: Preserva tarefas com tempId pendentes (ainda não confirmadas pelo Supabase)
+            // para evitar race condition onde loadData sobrescreve o localStorage antes
+            // do addTask background insert concluir e atualizar o tempId para UUID real.
             localStorage.setItem("offline_categories", JSON.stringify(dbCats));
-            localStorage.setItem("offline_tasks", JSON.stringify(dbTasks));
+            const existingLocal = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+            const pendingLocalTasks = existingLocal.filter(t => isTemporaryId(t.id) && t.is_active !== false);
+            const mergedTasks = [...dbTasks];
+            for (const pending of pendingLocalTasks) {
+                // Só inclui se não existe uma tarefa idêntica (mesmo titulo+categoria) já no Supabase
+                const alreadyExists = dbTasks.some(d => d.title === pending.title && d.category === pending.category);
+                if (!alreadyExists) mergedTasks.push(pending);
+            }
+            localStorage.setItem("offline_tasks", JSON.stringify(mergedTasks));
 
             let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
             
             // Remove conclusões locais obsoletas para a data de hoje e as datas do histórico recebido
             const dbCompBeforeIds = new Set(dbCompletionsBefore.map(c => String(c.task_id)));
             localCompletions = localCompletions.filter(c => {
+                // Preserva o estado local se esta tarefa estiver com sincronização pendente para a nuvem
+                if (pendingToggles.has(c.task_id) || pendingToggles.has(String(c.task_id)) || pendingToggles.has(Number(c.task_id))) {
+                    return true;
+                }
                 if (c.date === selectedDate) return false;
                 if (dbCompBeforeIds.has(String(c.task_id)) && c.date < selectedDate) return false;
                 return true;
             });
 
-            // Adiciona as conclusões do Supabase para hoje
+            // Adiciona as conclusões do Supabase para hoje (ignorando as que estão com sync pendente localmente)
             dbCompletionsToday.forEach(c => {
-                localCompletions.push({
-                    task_id: c.task_id,
-                    date: c.date,
-                    completed: c.completed
-                });
+                const isPending = pendingToggles.has(c.task_id) || pendingToggles.has(String(c.task_id)) || pendingToggles.has(Number(c.task_id));
+                if (!isPending) {
+                    localCompletions.push({
+                        task_id: c.task_id,
+                        date: c.date,
+                        completed: c.completed
+                    });
+                }
             });
 
             // Adiciona as conclusões do Supabase para o histórico
@@ -1562,6 +1612,9 @@ function renderCategories() {
             manageList.appendChild(item);
         });
     }
+    
+    // Atualiza os ícones após renderizar as guias e listas
+    lucide.createIcons();
 }
 
 function renderChecklist() {
@@ -1983,7 +2036,7 @@ function saveNewTasksOrder(container) {
         });
 
         // Envia para o Supabase em segundo plano de forma assíncrona
-        if (supabaseClient && currentUser && isNaN(id) === false) {
+        if (supabaseClient && currentUser && !isTemporaryId(id)) {
             const task = tasks.find(t => String(t.id) === String(id));
             if (task && task.context) {
                 supabaseClient.from('tasks').update({ context: task.context }).eq('id', id)
@@ -2108,7 +2161,7 @@ async function toggleTask(id) {
     saveCompletionOffline(id, selectedDate, task.completed);
 
     // Se estiver conectado, envia para a nuvem em segundo plano sem bloquear a interface
-    if (supabaseClient && currentUser && isNaN(id) === false) {
+    if (supabaseClient && currentUser && !isTemporaryId(id)) {
         const query = task.completed
             ? supabaseClient.from('completions').upsert({ task_id: id, date: selectedDate, completed: true }, { onConflict: 'task_id,date' })
             : supabaseClient.from('completions').delete().eq('task_id', id).eq('date', selectedDate);
@@ -2173,10 +2226,8 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
     localTasks.push({ ...newTask, id: tempId });
     localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
 
-    // Renderiza IMEDIATAMENTE (usando a lógica centralizada para respeitar data atual, recorrência, etc)
+    // Reconstrói tasks[] via fluxo centralizado (respeita data, recorrência, filtros)
     loadDataOffline();
-
-    // Renderiza e atualiza progresso IMEDIATAMENTE (super responsivo)
     renderChecklist();
     updateProgress();
 
@@ -2243,23 +2294,13 @@ async function renameTask(id, newTitle, context) {
     const nlpContext = analyzeTaskContext(newTitle, category, tasks);
     const finalContext = context || nlpContext;
 
-    // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
-    tasks = tasks.map(t => {
-        if (String(t.id) === String(id)) return { ...t, title: newTitle, context: finalContext || null };
-        return t;
-    });
-    allActiveTasks = allActiveTasks.map(t => {
-        if (String(t.id) === String(id)) return { ...t, title: newTitle, context: finalContext || null };
-        return t;
-    });
-    
-    // Salva no LocalStorage
+    // Salva no LocalStorage e reconstrói memória via fluxo central
     renameTaskOffline(id, newTitle, finalContext);
-
+    loadDataOffline();
     renderChecklist();
 
     // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
-    if (supabaseClient && currentUser && isNaN(id) === false) {
+    if (supabaseClient && currentUser && !isTemporaryId(id)) {
         const updates = { title: newTitle };
         if (finalContext) updates.context = finalContext;
 
@@ -2286,9 +2327,7 @@ function renameTaskOffline(id, newTitle, context) {
         return t;
     });
     localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
-    
-    loadDataOffline();
-    renderChecklist();
+    // Não chama loadDataOffline nem render aqui — renameTask já faz isso
 }
 
 // Full task update (title, date, recurrence, repeat_days)
@@ -2320,7 +2359,7 @@ async function updateTask(id, updates) {
     updateProgress();
 
     // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
-    if (supabaseClient && currentUser && isNaN(id) === false) {
+    if (supabaseClient && currentUser && !isTemporaryId(id)) {
         const dbUpdates = {};
         if (updates.title !== undefined) dbUpdates.title = updates.title;
         if (updates.is_recurring !== undefined) dbUpdates.is_recurring = updates.is_recurring;
@@ -2432,7 +2471,7 @@ async function deleteTask(id) {
     updateProgress();
 
     // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
-    if (supabaseClient && currentUser && isNaN(id) === false) {
+    if (supabaseClient && currentUser) {
         supabaseClient.from('tasks').update({ is_active: false }).eq('id', id)
             .then(({ error }) => {
                 if (error) {
@@ -2450,17 +2489,13 @@ async function deleteTask(id) {
 }
 
 function deleteTaskOffline(id) {
-    localDataVersion++;
     let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
     localTasks = localTasks.map(t => {
         if (String(t.id) === String(id)) return { ...t, is_active: false };
         return t;
     });
     localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
-    
-    loadDataOffline();
-    renderChecklist();
-    updateProgress();
+    // Não chama loadDataOffline nem render aqui — deleteTask já faz isso
 }
 
 async function excludeTaskForToday(id) {
@@ -2478,7 +2513,7 @@ async function excludeTaskForToday(id) {
     updateProgress();
 
     // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
-    if (supabaseClient && currentUser && isNaN(id) === false) {
+    if (supabaseClient && currentUser) {
         supabaseClient.from('completions').upsert({
             task_id: id,
             date: selectedDate,
@@ -2500,7 +2535,6 @@ async function excludeTaskForToday(id) {
 }
 
 function excludeTaskForTodayOffline(id) {
-    localDataVersion++;
     let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
     localCompletions = localCompletions.filter(c => !(String(c.task_id) === String(id) && c.date === selectedDate));
     
@@ -2510,10 +2544,7 @@ function excludeTaskForTodayOffline(id) {
         completed: false
     });
     localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
-    
-    loadDataOffline();
-    renderChecklist();
-    updateProgress();
+    // Não chama loadDataOffline nem render aqui — excludeTaskForToday já faz isso
 }
 
 function showConfirmDelete(task, onChoice) {
@@ -3036,7 +3067,7 @@ async function deleteCategory(id) {
         updateProgress();
 
         // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
-        if (supabaseClient && currentUser && isNaN(id) === false) {
+        if (supabaseClient && currentUser && !isTemporaryId(id)) {
             supabaseClient.from('categories').update({ is_active: false }).eq('id', id)
                 .then(({ error }) => {
                     if (error) {
@@ -3500,56 +3531,9 @@ function setupSupabaseAuth() {
 }
 
 async function syncOfflineDataToCloud() {
-    if (!supabaseClient || !currentUser) return;
-    
-    const offlineCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
-    const offlineTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
-    
-    if (offlineCats.length === 0 && offlineTasks.length === 0) return;
-    
-    try {
-        console.log("Sincronizando dados locais com o Supabase Auth...");
-        
-        for (const cat of offlineCats) {
-            const { data } = await supabaseClient
-                .from('categories')
-                .select('id')
-                .eq('name', cat.name)
-                .maybeSingle();
-                
-            if (!data) {
-                await supabaseClient
-                    .from('categories')
-                    .insert({ name: cat.name, is_active: cat.is_active });
-            }
-        }
-        
-        for (const task of offlineTasks) {
-            const { data } = await supabaseClient
-                .from('tasks')
-                .select('id')
-                .eq('title', task.title)
-                .eq('category', task.category)
-                .maybeSingle();
-                
-            if (!data) {
-                await supabaseClient
-                    .from('tasks')
-                    .insert({
-                        title: task.title,
-                        category: task.category,
-                        is_recurring: task.is_recurring,
-                        is_active: task.is_active
-                    });
-            }
-        }
-        
-        localStorage.removeItem("offline_categories");
-        localStorage.removeItem("offline_tasks");
-        console.log("Sincronização concluída.");
-    } catch (e) {
-        console.error("Erro na sincronização:", e);
-    }
+    // Desativada: addTask já sincroniza direto com Supabase no momento da criação.
+    // Re-sincronizar pelo localStorage causava race conditions e duplicações.
+    return;
 }
 
 function renderCalendarGrid() {
@@ -3684,29 +3668,30 @@ function setupDragAndDrop(chip, cat) {
             window.addEventListener("touchmove", onWindowTouchMove, { passive: false });
             window.addEventListener("touchend", onWindowTouchEnd, { passive: true });
             window.addEventListener("touchcancel", onWindowTouchEnd, { passive: true });
-        }, 350);
+        }, 500);
     }, { passive: true });
 
     chip.addEventListener("touchmove", (e) => {
         if (isDragging) return; // Já está gerenciado pelo listener da window
         
-        // Cancela o timer apenas se o dedo se mover mais de 8px (tolerância para tremor)
+        // Cancela o timer apenas se o dedo se mover mais de 18px (distância euclidiana)
+        // 8px era muito sensível — o iOS deriva naturalmente ao segurar quieto
         const touch = e.touches[0];
-        const dx = Math.abs(touch.clientX - touchStartX);
-        const dy = Math.abs(touch.clientY - touchStartY);
-        if (dx > 8 || dy > 8) {
+        const dx = touch.clientX - touchStartX;
+        const dy = touch.clientY - touchStartY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 18) {
             cancelPress();
         }
     }, { passive: true });
 
+    // Cancela o timer num tap rápido (sem iniciar drag)
+    // Se o drag já começou (isDragging=true), não faz nada — onWindowTouchEnd cuida disso
     chip.addEventListener("touchend", () => {
-        cancelPress();
-        isDragging = false;
+        if (!isDragging) cancelPress();
     });
-
     chip.addEventListener("touchcancel", () => {
-        cancelPress();
-        isDragging = false;
+        if (!isDragging) cancelPress();
     });
 
     function onWindowTouchMove(e) {
@@ -3740,16 +3725,21 @@ function setupDragAndDrop(chip, cat) {
         window.removeEventListener("touchend", onWindowTouchEnd);
         window.removeEventListener("touchcancel", onWindowTouchEnd);
 
+        // Cancela timer se ainda não disparou
+        cancelPress();
+
         if (isDragging && draggedElement) {
             draggedElement.classList.remove("dragging");
+            // Remove foco/borda residual do iOS
+            if (draggedElement.blur) draggedElement.blur();
             draggedElement = null;
             saveCategoryOrder();
             
-            // Ativa o bloqueio de clique e remove após 100ms
+            // Bloqueia clique indesejado logo após arrastar
             window.wasCategoryDragged = true;
             setTimeout(() => {
                 window.wasCategoryDragged = false;
-            }, 100);
+            }, 200);
         }
         isDragging = false;
     }

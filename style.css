@@ -1625,7 +1625,7 @@ body.theme-girly select:focus {
 
 /* Category Drag & Drop Style indicator */
 .app-container.edit-mode-active .category-chip:not([data-category="all"]) {
-    border: 1px dashed rgba(139, 92, 246, 0.5) !important;
+    outline: 1.5px dashed rgba(139, 92, 246, 0.5);
     cursor: grab !important;
     animation: chip-wiggle 0.25s ease infinite alternate;
 }
@@ -1634,11 +1634,23 @@ body.theme-girly select:focus {
     cursor: grabbing !important;
 }
 
+/* Remove qualquer borda/outline residual de foco iOS após soltar o chip */
+.category-chip:focus,
+.category-chip:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+}
+
 .category-chip.dragging {
-    opacity: 0.4 !important;
+    opacity: 0.45 !important;
     transform: scale(0.95) !important;
-    border: 2px dashed var(--primary) !important;
+    outline: 2px dashed var(--primary) !important;
     z-index: 100 !important;
+}
+
+/* Garante que chip sem a classe dragging nunca mostre borda de arrastar */
+.category-chip:not(.dragging) {
+    border-style: solid !important;
 }
 
 .category-chip:hover {
