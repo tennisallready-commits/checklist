@@ -99,10 +99,6 @@
                     <span class="organization-tag" id="org-tag">Checklist Organizacional</span>
                 </div>
                 <h1 id="app-title" style="margin: 0;">Checklist Diário</h1>
-                <div id="header-mini-date-container" style="display: none; align-items: center; gap: 6px; margin-top: 4px;">
-                    <span id="header-mini-date-status-dot" style="width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; background: var(--primary);"></span>
-                    <span id="header-mini-date-text" style="font-size: 0.8rem; font-weight: 700; color: var(--text-secondary); white-space: nowrap;"></span>
-                </div>
             </div>
             <div class="header-actions">
                 <button id="btn-toggle-summary" class="icon-button" title="Mostrar/Ocultar Resumo">
@@ -120,6 +116,11 @@
                 </button>
             </div>
         </header>
+
+        <div id="header-mini-date-container" style="display: none; align-items: center; justify-content: space-between; margin-top: -2px; margin-bottom: 10px; width: 100%; min-height: 24px;">
+            <span id="header-mini-date-text" style="font-size: 0.82rem; font-weight: 700; color: var(--text-secondary); white-space: nowrap;"></span>
+            <span id="header-mini-date-badge" class="history-badge">Hoje</span>
+        </div>
 
         <!-- Compact Top Redesign (Square side-by-side blocks) -->
         <section class="progress-card-container compact-header-section">
@@ -351,7 +352,7 @@
                         <i data-lucide="log-out"></i> Sair da Conta
                     </button>
                     <div style="text-align: center; font-size: 0.65rem; color: var(--text-muted); margin-top: 8px;">
-                        Versão 7.91
+                        Versão 7.95
                     </div>
                 </div>
             </div>
@@ -777,6 +778,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=7.91"></script>
+    <script src="app.js?v=7.95"></script>
 </body>
 </html>

@@ -1569,8 +1569,7 @@ function updateDateState() {
     const now = new Date();
     const todayStr = getLocalDateString(now);
     const historyBadge = document.getElementById("history-badge");
-    const statusDot = document.getElementById("header-mini-date-status-dot");
-    const activeTheme = localStorage.getItem("checklist_theme") || "default";
+    const miniDateBadge = document.getElementById("header-mini-date-badge");
 
     if (selectedDate < todayStr) {
         isHistoryMode = true;
@@ -1578,27 +1577,19 @@ function updateDateState() {
         appContainer.classList.remove("planning-mode", "today-mode");
         toggleEditMode(false);
         if (historyBadge) historyBadge.innerHTML = "Histórico";
-        if (statusDot) statusDot.style.background = "#d97706"; // orange
+        if (miniDateBadge) miniDateBadge.innerHTML = "Histórico";
     } else if (selectedDate > todayStr) {
         isHistoryMode = false;
         appContainer.classList.add("planning-mode");
         appContainer.classList.remove("history-mode", "today-mode");
         if (historyBadge) historyBadge.innerHTML = "Planejamento";
-        if (statusDot) {
-            if (activeTheme === "girly") {
-                statusDot.style.background = "#7c3aed"; // violet
-            } else if (activeTheme === "light") {
-                statusDot.style.background = "#1d4ed8"; // light theme blue
-            } else {
-                statusDot.style.background = "#3b82f6"; // dark theme blue
-            }
-        }
+        if (miniDateBadge) miniDateBadge.innerHTML = "Planejamento";
     } else {
         isHistoryMode = false;
         appContainer.classList.add("today-mode");
         appContainer.classList.remove("history-mode", "planning-mode");
         if (historyBadge) historyBadge.innerHTML = '<span class="pulse-dot"></span>Hoje';
-        if (statusDot) statusDot.style.background = (activeTheme === "girly") ? "#db2777" : "#10b981"; // pink/green
+        if (miniDateBadge) miniDateBadge.innerHTML = '<span class="pulse-dot"></span>Hoje';
     }
 }
 
