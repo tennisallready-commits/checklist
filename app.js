@@ -26,18 +26,41 @@ const idb = {
     
     init() {
         return new Promise((resolve, reject) => {
-            const request = indexedDB.open(DB_NAME, DB_VERSION);
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => {
-                this._db = request.result;
+            const timeout = setTimeout(() => {
+                console.warn("[idb] Timeout de 800ms ao inicializar IndexedDB. Continuando com localStorage...");
                 resolve();
-            };
-            request.onupgradeneeded = (e) => {
-                const database = request.result;
-                if (!database.objectStoreNames.contains("key_value")) {
-                    database.createObjectStore("key_value", { keyPath: "key" });
-                }
-            };
+            }, 800);
+
+            try {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                
+                request.onblocked = () => {
+                    console.warn("[idb] Conexão com IndexedDB bloqueada por outra aba.");
+                    clearTimeout(timeout);
+                    resolve();
+                };
+                
+                request.onerror = () => {
+                    clearTimeout(timeout);
+                    reject(request.error);
+                };
+                
+                request.onsuccess = () => {
+                    clearTimeout(timeout);
+                    this._db = request.result;
+                    resolve();
+                };
+                
+                request.onupgradeneeded = (e) => {
+                    const database = request.result;
+                    if (!database.objectStoreNames.contains("key_value")) {
+                        database.createObjectStore("key_value", { keyPath: "key" });
+                    }
+                };
+            } catch (err) {
+                clearTimeout(timeout);
+                reject(err);
+            }
         });
     },
     
