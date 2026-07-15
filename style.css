@@ -2209,3 +2209,45 @@ body.theme-light .manual-task-item.completed {
     background: transparent !important;
     border-color: var(--text-muted) !important;
 }
+
+/* Balão de notificação discreto para o relatório no sábado */
+.report-tooltip-bubble {
+    position: absolute;
+    background: var(--primary) !important;
+    color: #ffffff !important;
+    padding: 10px 14px !important;
+    border-radius: var(--radius-md) !important;
+    font-size: 0.82rem !important;
+    font-weight: 700 !important;
+    white-space: normal !important;
+    max-width: 250px !important;
+    box-shadow: 0 10px 25px rgba(139, 92, 246, 0.4) !important;
+    z-index: 1000 !important;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(-8px) scale(0.95);
+    transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    line-height: 1.4 !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.report-tooltip-bubble.active {
+    opacity: 1 !important;
+    transform: translateY(0) scale(1) !important;
+    animation: tooltip-pulse 2.2s infinite ease-in-out !important;
+}
+
+.report-tooltip-bubble::after {
+    content: '';
+    position: absolute;
+    top: -6px;
+    right: 18px;
+    border-width: 0 6px 6px 6px;
+    border-style: solid;
+    border-color: transparent transparent var(--primary) transparent;
+}
+
+@keyframes tooltip-pulse {
+    0%, 100% { transform: translateY(0) scale(1); }
+    50% { transform: translateY(3px) scale(1.02); }
+}

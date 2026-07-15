@@ -349,6 +349,9 @@ async function initApp() {
     if (localStorage.getItem("notifications_badge_read") === "true") {
         if (notificationsBadge) notificationsBadge.style.display = "none";
     }
+    
+    // Check if we need to show Saturday notification animation
+    checkSaturdayAnimation();
 }
 
 // ----------------------------------------------------
@@ -4995,20 +4998,26 @@ async function loadAndRenderReport(days, containerEl) {
         return;
     }
 
-    containerEl.innerHTML = `<span style="font-size: 0.8rem; color: var(--text-secondary);"><span class="loading-spinner" style="display:inline-block; vertical-align:middle; margin-right:6px; width:12px; height:12px; border:2px solid var(--primary); border-top-color:transparent; border-radius:50%; animation:spin 1s linear infinite;"></span> Carregando resumo...</span>`;
+    containerEl.innerHTML = `<span style="font-size: 0.8rem; color: var(--text-secondary);"><span class="loading-spinner" style="display:inline-block; vertical-align:middle; margin-right:6px; width:12px; height:12px; border:2px solid var(--primary); border-top-color:transparent; border-radius:50%; animation:spin 1s linear infinite;"></span> Analisando histórico...</span>`;
 
+    // 1. Calcular datas dos períodos
+    const totalDays = 2 * days;
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
     const startDateStr = getLocalDateString(startDate);
 
+    const prevStartDate = new Date();
+    prevStartDate.setDate(prevStartDate.getDate() - totalDays);
+    const prevStartDateStr = getLocalDateString(prevStartDate);
+
+    // 2. Carregar conclusões do Supabase ou Local
     let completionsList = [];
     if (supabaseClient && currentUser) {
         try {
             const { data, error } = await supabaseClient
                 .from('completions')
                 .select('*')
-                .gte('date', startDateStr)
-                .eq('completed', true);
+                .gte('date', prevStartDateStr);
             if (!error && data) {
                 completionsList = data;
             }
@@ -5017,88 +5026,186 @@ async function loadAndRenderReport(days, containerEl) {
         }
     }
     
-    // Fallback offline or merged
+    // Fallback local
     if (completionsList.length === 0) {
         let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
-        completionsList = localCompletions.filter(c => c.date >= startDateStr && c.completed);
+        completionsList = localCompletions.filter(c => c.date >= prevStartDateStr);
     }
 
-    const completionCounts = {};
-    completionsList.forEach(c => {
-        completionCounts[c.task_id] = (completionCounts[c.task_id] || 0) + 1;
+    // 3. Separar conclusões em períodos
+    const currentCompletions = completionsList.filter(c => c.date >= startDateStr && c.completed === true);
+    const prevCompletions = completionsList.filter(c => c.date >= prevStartDateStr && c.date < startDateStr && c.completed === true);
+    const skippedCompletions = completionsList.filter(c => c.date >= startDateStr && c.completed === false);
+
+    const currentCount = currentCompletions.length;
+    const prevCount = prevCompletions.length;
+
+    // 4. Análise de evolução do período
+    let evolutionText = "";
+    if (prevCount > 0) {
+        const diff = currentCount - prevCount;
+        if (diff > 0) {
+            const pct = Math.round((diff / prevCount) * 100);
+            evolutionText = `Você completou **${currentCount}** tarefas, representando um aumento de **+${pct}%** em comparação com o período anterior (onde realizou ${prevCount} tarefas).`;
+        } else if (diff < 0) {
+            const pct = Math.round((Math.abs(diff) / prevCount) * 100);
+            evolutionText = `Você completou **${currentCount}** tarefas, representando uma redução de **-${pct}%** em relação ao período anterior (onde realizou ${prevCount} tarefas).`;
+        } else {
+            evolutionText = `Você completou **${currentCount}** tarefas, mantendo exatamente o mesmo nível de produtividade do período anterior.`;
+        }
+    } else {
+        evolutionText = `Você completou **${currentCount}** tarefas neste período. Não há dados suficientes do período anterior para realizar uma comparação direta de progresso.`;
+    }
+
+    // 5. Agrupar por Categorias
+    const catCompletions = {};
+    const catTotals = {};
+    
+    allActiveTasks.forEach(t => {
+        catTotals[t.category] = (catTotals[t.category] || 0) + 1;
     });
 
-    let storiesCount = 0;
-    let collegeWorksCount = 0;
-    let studiesCount = 0;
-    let deliveriesCount = 0;
-    let financialCount = 0;
-    let meetingsCount = 0;
-    let cleaningCount = 0;
+    currentCompletions.forEach(c => {
+        const task = allActiveTasks.find(t => String(t.id) === String(c.task_id));
+        if (task) {
+            catCompletions[task.category] = (catCompletions[task.category] || 0) + 1;
+        }
+    });
+
+    let majorProgressArea = "Nenhuma";
+    let minorProgressArea = "Nenhuma";
+    let maxAreaComps = -1;
+    let minAreaComps = 99999;
+    
+    categories.forEach(cat => {
+        const comps = catCompletions[cat.name] || 0;
+        if (comps > maxAreaComps) {
+            maxAreaComps = comps;
+            majorProgressArea = cat.name;
+        }
+        if (comps < minAreaComps) {
+            minAreaComps = comps;
+            minorProgressArea = cat.name;
+        }
+    });
+
+    // 6. Agrupar por Turno
+    const shiftCompletions = { "Manhã": 0, "Tarde": 0, "Noite": 0, "Geral/Sem Turno": 0 };
+    currentCompletions.forEach(c => {
+        const task = allActiveTasks.find(t => String(t.id) === String(c.task_id));
+        if (task) {
+            const turnos = (task.context && task.context.turnos) ? task.context.turnos : [];
+            if (turnos.length === 0) {
+                shiftCompletions["Geral/Sem Turno"]++;
+            } else {
+                turnos.forEach(t => {
+                    if (shiftCompletions.hasOwnProperty(t)) {
+                        shiftCompletions[t]++;
+                    }
+                });
+            }
+        }
+    });
+
+    let bestShift = "Nenhum";
+    let maxShiftComps = -1;
+    Object.entries(shiftCompletions).forEach(([shift, count]) => {
+        if (count > maxShiftComps) {
+            maxShiftComps = count;
+            bestShift = shift;
+        }
+    });
+
+    // 7. Produtividade por Dia da Semana
+    const weekdayCompletions = Array(7).fill(0);
+    currentCompletions.forEach(c => {
+        const d = new Date(c.date + "T12:00:00");
+        weekdayCompletions[d.getDay()]++;
+    });
+    const weekdayNames = ["Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"];
+    
+    let bestDayIdx = 0;
+    let worstDayIdx = 0;
+    let maxDayComps = -1;
+    let minDayComps = 99999;
+    weekdayCompletions.forEach((count, idx) => {
+        if (count > maxDayComps) { maxDayComps = count; bestDayIdx = idx; }
+        if (count < minDayComps) { minDayComps = count; worstDayIdx = idx; }
+    });
+
+    // 8. Extração dinâmica de termos em alta (Frequência de Assuntos)
+    const wordCounts = {};
+    currentCompletions.forEach(c => {
+        const task = allActiveTasks.find(t => String(t.id) === String(c.task_id));
+        if (task) {
+            const words = task.title.toLowerCase()
+                .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "")
+                .split(/\s+/);
+            words.forEach(w => {
+                const stopWords = ["para", "com", "uma", "uns", "das", "dos", "pelo", "pela", "seus", "suas", "como", "mais", "fazer", "cada", "toda", "todo"];
+                if (w.length > 3 && !stopWords.includes(w)) {
+                    wordCounts[w] = (wordCounts[w] || 0) + 1;
+                }
+            });
+        }
+    });
+    const hotTopics = Object.entries(wordCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([word, count]) => `**${word}** (${count}x)`);
+
+    // 9. Classificação genérica baseada em radicais de palavras comuns
+    let studyCount = 0;
+    let workCount = 0;
     let fitnessCount = 0;
+    let financeCount = 0;
 
-    Object.entries(completionCounts).forEach(([taskId, count]) => {
-        const task = allActiveTasks.find(t => String(t.id) === String(taskId));
-        if (!task) return;
-        
-        const ctx = task.context || analyzeTaskContext(task.title, task.category, allActiveTasks);
-        if (!ctx) return;
+    currentCompletions.forEach(c => {
+        const task = allActiveTasks.find(t => String(t.id) === String(c.task_id));
+        if (task) {
+            const titleLower = task.title.toLowerCase();
+            const catLower = task.category.toLowerCase();
+            
+            const matchStudy = titleLower.match(/estud|faculd|aula|curs|prov|leit|livr/) || catLower.match(/estud|faculd|aula|curs|prov|leit|livr/);
+            const matchWork = titleLower.match(/trabalh|reunia|meet|post|client|entreg|relator/) || catLower.match(/trabalh|reunia|meet|post|client|entreg|relator/);
+            const matchFitness = titleLower.match(/trein|academ|exercic|corr|saud|medic/) || catLower.match(/trein|academ|exercic|corr|saud|medic/);
+            const matchFinance = titleLower.match(/pag|receb|financ|dinheir|compr|limp|organiz/) || catLower.match(/pag|receb|financ|dinheir|compr|limp|organiz/);
 
-        const titleLower = task.title.toLowerCase();
-        const categoryLower = task.category.toLowerCase();
-
-        if ((titleLower.includes("storie") || titleLower.includes("video") || titleLower.includes("stories") || titleLower.includes("post")) 
-            && (categoryLower.includes("tio nan") || titleLower.includes("tio nan") || categoryLower.includes("marketing"))) {
-            storiesCount += count;
-        }
-        else if (titleLower.includes("trein") || titleLower.includes("musculac") || titleLower.includes("academia") || titleLower.includes("gym") || titleLower.includes("corrida") || titleLower.includes("correr") || titleLower.includes("futebol")) {
-            fitnessCount += count;
-        }
-        else if (ctx.activity_type === "trabalho_academico" || categoryLower.includes("pucrs") || categoryLower.includes("faculdade")) {
-            collegeWorksCount += count;
-        }
-        else if (ctx.activity_type === "estudo") {
-            studiesCount += count;
-        }
-        else if (ctx.activity_type === "entrega") {
-            deliveriesCount += count;
-        }
-        else if (ctx.activity_type === "financeiro") {
-            financialCount += count;
-        }
-        else if (ctx.activity_type === "reuniao") {
-            meetingsCount += count;
-        }
-        else if (ctx.activity_type === "limpeza") {
-            cleaningCount += count;
+            if (matchStudy) studyCount++;
+            if (matchWork) workCount++;
+            if (matchFitness) fitnessCount++;
+            if (matchFinance) financeCount++;
         }
     });
 
-    const summarySentences = [];
-    if (storiesCount > 0) {
-        summarySentences.push(`Subiu <strong>${storiesCount}</strong> stories para o Tio Nan.`);
-    }
-    if (collegeWorksCount > 0) {
-        summarySentences.push(`Fez <strong>${collegeWorksCount}</strong> trabalhos da faculdade.`);
-    }
-    if (fitnessCount > 0) {
-        summarySentences.push(`Realizou <strong>${fitnessCount}</strong> treinos / exercícios físicos.`);
-    }
-    if (studiesCount > 0) {
-        summarySentences.push(`Realizou <strong>${studiesCount}</strong> sessões de estudo.`);
-    }
-    if (deliveriesCount > 0) {
-        summarySentences.push(`Concluiu <strong>${deliveriesCount}</strong> entregas ou envios.`);
-    }
-    if (financialCount > 0) {
-        summarySentences.push(`Lançou/pagou <strong>${financialCount}</strong> movimentações financeiras.`);
-    }
-    if (meetingsCount > 0) {
-        summarySentences.push(`Participou de <strong>${meetingsCount}</strong> reuniões.`);
-    }
-    if (cleaningCount > 0) {
-        summarySentences.push(`Completou <strong>${cleaningCount}</strong> tarefas de limpeza e organização.`);
-    }
+    const categoryBreakdown = [];
+    if (studyCount > 0) categoryBreakdown.push(`Estudos/Aprendizado: **${studyCount}** atividades`);
+    if (workCount > 0) categoryBreakdown.push(`Trabalho/Profissional: **${workCount}** atividades`);
+    if (fitnessCount > 0) categoryBreakdown.push(`Saúde/Bem-estar: **${fitnessCount}** atividades`);
+    if (financeCount > 0) categoryBreakdown.push(`Rotina/Organização: **${financeCount}** atividades`);
+
+    // 10. Tarefas puladas/adiadas (excluídas ativamente pelo usuário)
+    const skippedTaskCounts = {};
+    skippedCompletions.forEach(c => {
+        skippedTaskCounts[c.task_id] = (skippedTaskCounts[c.task_id] || 0) + 1;
+    });
+    
+    const skippedTasksList = Object.entries(skippedTaskCounts)
+        .map(([id, count]) => {
+            const task = allActiveTasks.find(t => String(t.id) === String(id));
+            return task ? { title: task.title, count: count } : null;
+        })
+        .filter(t => t !== null)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 3);
+
+    // 11. Pendências importantes (Importantes não concluídas)
+    const importantPending = allActiveTasks.filter(task => {
+        const isImportant = task.context && (task.context.important === true || task.context.important === "true");
+        if (!isImportant) return false;
+        const wasCompleted = currentCompletions.some(c => String(c.task_id) === String(task.id));
+        return !wasCompleted;
+    });
 
     const labelPeriod = days === 7 ? "esta semana" : days === 30 ? "este mês" : "este ano";
     const warningLabel = daysRemaining === 1 ? "amanhã" : `em ${daysRemaining} dias`;
@@ -5110,21 +5217,138 @@ async function loadAndRenderReport(days, containerEl) {
         </div>
     `;
 
-    if (summarySentences.length > 0) {
+    if (currentCount === 0) {
         containerEl.innerHTML = `
             ${warningHtml}
-            <p style="margin: 0 0 12px 0; font-weight: bold; color: var(--text-primary);">Aqui está o que você concluiu ${labelPeriod}:</p>
-            <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px;">
-                ${summarySentences.map(s => `<li>${s}</li>`).join("")}
-            </ul>
+            <div style="padding: 16px 8px; text-align: center; color: var(--text-secondary); font-style: italic;">
+                Nenhuma rotina ou tarefa concluída ${labelPeriod} para gerar o relatório de contexto. Continue preenchendo seu checklist para ativar a análise inteligente!
+            </div>
         `;
-    } else {
-        containerEl.innerHTML = `
-            ${warningHtml}
-            <p style="margin: 0; color: var(--text-secondary); font-style: italic;">Nenhuma rotina ou tarefa concluída ${labelPeriod}.</p>
-        `;
+        lucide.createIcons();
+        return;
     }
+
+    // 12. Construir o relatório final em 5 blocos detalhados e humanos
+    let contentHtml = `
+        ${warningHtml}
+        
+        <div class="smart-report-container" style="display: flex; flex-direction: column; gap: 20px; text-align: left; line-height: 1.5; color: var(--text-primary); font-size: 0.88rem;">
+            
+            <!-- 1. RESUMO GERAL -->
+            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px;">
+                <h6 style="margin: 0 0 10px 0; color: var(--primary); font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
+                    <i data-lucide="activity" style="width: 16px; height: 16px;"></i> 1. Resumo Geral do Período
+                </h6>
+                <p style="margin: 0; color: var(--text-secondary);">
+                    ${evolutionText} A sua dedicação resultou em um fluxo contínuo de atividades concluídas em diferentes esferas.
+                    ${categoryBreakdown.length > 0 ? ` As áreas focadas cobriram principalmente: ${categoryBreakdown.join(", ")}.` : ""}
+                </p>
+            </section>
+
+            <!-- 2. PRINCIPAIS CONQUISTAS -->
+            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px;">
+                <h6 style="margin: 0 0 10px 0; color: #10b981; font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
+                    <i data-lucide="trophy" style="width: 16px; height: 16px;"></i> 2. Principais Conquistas
+                </h6>
+                <p style="margin: 0; color: var(--text-secondary);">
+                    O maior volume de tarefas concluídas concentrou-se na categoria **${majorProgressArea}** com **${maxAreaComps}** atividades realizadas.
+                    ${hotTopics.length > 0 ? ` Os assuntos mais trabalhados e resolvidos de forma recorrente foram: ${hotTopics.join(", ")}.` : ""}
+                    ${maxShiftComps > 0 ? ` Esse rendimento demonstra excelente foco, em especial durante o turno da **${bestShift}**, que registrou o maior volume de resoluções.` : ""}
+                </p>
+            </section>
+
+            <!-- 3. PONTOS QUE PRECISAM DE ATENÇÃO -->
+            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px;">
+                <h6 style="margin: 0 0 10px 0; color: #f59e0b; font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
+                    <i data-lucide="alert-triangle" style="width: 16px; height: 16px;"></i> 3. Pontos que Precisam de Atenção
+                </h6>
+                <div style="color: var(--text-secondary); display: flex; flex-direction: column; gap: 8px;">
+                    <p style="margin: 0;">
+                        A categoria **${minorProgressArea}** teve menor índice de engajamento, somando apenas **${minAreaComps}** tarefas executadas no período. 
+                    </p>
+                    ${skippedTasksList.length > 0 ? `
+                        <p style="margin: 0;">
+                            Identificamos tarefas recorrentes que foram repetidamente adiadas ou puladas:
+                            <ul style="margin: 4px 0 0 16px; padding: 0;">
+                                ${skippedTasksList.map(t => `<li>**${t.title}** (pulada ${t.count}x)</li>`).join("")}
+                            </ul>
+                        </p>
+                    ` : ""}
+                    ${importantPending.length > 0 ? `
+                        <p style="margin: 0;">
+                            Existem **${importantPending.length}** pendências prioritárias não resolvidas, marcadas como importantes:
+                            <ul style="margin: 4px 0 0 16px; padding: 0;">
+                                ${importantPending.slice(0, 3).map(t => `<li>**${t.title}** (Categoria: ${t.category})</li>`).join("")}
+                            </ul>
+                        </p>
+                    ` : ""}
+                </div>
+            </section>
+
+            <!-- 4. PADRÕES IDENTIFICADOS -->
+            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px;">
+                <h6 style="margin: 0 0 10px 0; color: #3b82f6; font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
+                    <i data-lucide="bar-chart-2" style="width: 16px; height: 16px;"></i> 4. Padrões Identificados
+                </h6>
+                <p style="margin: 0; color: var(--text-secondary);">
+                    Seu ritmo de produtividade indica que o dia **${weekdayNames[bestDayIdx]}** foi o mais consistente, registrando o pico de **${maxDayComps}** tarefas realizadas. 
+                    Em contrapartida, o dia **${weekdayNames[worstDayIdx]}** apresentou menor atividade, acumulando **${minDayComps === 99999 ? 0 : minDayComps}** tarefas concluídas.
+                    A distribuição de energia diária aponta maior concentração de conclusões na **${bestShift}**, sugerindo um padrão de melhor rendimento nesse período.
+                </p>
+            </section>
+
+            <!-- 5. RECOMENDAÇÃO PRÁTICA -->
+            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px;">
+                <h6 style="margin: 0 0 10px 0; color: #8b5cf6; font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
+                    <i data-lucide="lightbulb" style="width: 16px; height: 16px;"></i> 5. Recomendação Prática
+                </h6>
+                <p style="margin: 0; color: var(--text-secondary);">
+                    Para o próximo período, sugerimos dedicar atenção prioritária à categoria **${minorProgressArea}** no início do seu dia para equilibrar o progresso.
+                    ${importantPending.length > 0 ? ` Tente programar e resolver a pendência **"${importantPending[0].title}"** como sua primeira atividade de amanhã.` : ""}
+                    ${skippedTasksList.length > 0 ? ` Avalie reestruturar ou quebrar a rotina **"${skippedTasksList[0].title}"** em passos menores para reduzir o atrito e evitar que seja adiada novamente.` : ""}
+                </p>
+            </section>
+            
+        </div>
+    `;
+
+    containerEl.innerHTML = contentHtml;
     lucide.createIcons();
+}
+
+function checkSaturdayAnimation() {
+    const now = new Date();
+    // 6 = Sábado
+    if (now.getDay() === 6) {
+        const todayStr = getLocalDateString(now);
+        const animKey = "saturday_anim_shown_" + todayStr;
+        if (localStorage.getItem(animKey) !== "true") {
+            localStorage.setItem(animKey, "true");
+            
+            // Exibir a notificação flutuante discreta após 2 segundos
+            setTimeout(() => {
+                const btnReport = document.getElementById("btn-smart-report");
+                if (btnReport) {
+                    const rect = btnReport.getBoundingClientRect();
+                    const tooltip = document.createElement("div");
+                    tooltip.className = "report-tooltip-bubble";
+                    tooltip.innerHTML = "Chegou sábado! Veja tudo o que você realizou nesta semana.";
+                    tooltip.style.position = "absolute";
+                    tooltip.style.top = (rect.bottom + window.scrollY + 10) + "px";
+                    tooltip.style.left = (rect.left + rect.width / 2 + window.scrollX - 220) + "px";
+                    document.body.appendChild(tooltip);
+                    
+                    setTimeout(() => tooltip.classList.add("active"), 100);
+                    
+                    // Sumir após 6 segundos
+                    setTimeout(() => {
+                        tooltip.classList.remove("active");
+                        setTimeout(() => tooltip.remove(), 300);
+                    }, 6000);
+                }
+            }, 2000);
+        }
+    }
 }
 
 function checkAutomaticReports() {
