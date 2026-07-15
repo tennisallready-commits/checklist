@@ -2256,7 +2256,8 @@ function getRecentUnclassifiedTerms() {
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     const startStr = getLocalDateString(sevenDaysAgo);
     
-    const recentCompletions = completions.filter(c => c.date >= startStr && c.completed === true);
+    let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+    const recentCompletions = localCompletions.filter(c => c.date >= startStr && c.completed === true);
     
     recentCompletions.forEach(c => {
         const task = allActiveTasks.find(t => String(t.id) === String(c.task_id));
