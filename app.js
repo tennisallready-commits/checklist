@@ -5043,6 +5043,13 @@ async function loadAndRenderReport(days, containerEl) {
         }
     }
 
+    // Bypass expirations if debug parameter is present in URL
+    const isDebugMode = new URLSearchParams(window.location.search).has("debug");
+    if (isDebugMode) {
+        isExpired = false;
+        daysRemaining = 999;
+    }
+
     if (isExpired) {
         const periodLabel = days === 7 ? "semanal" : days === 30 ? "mensal" : "anual";
         containerEl.innerHTML = `

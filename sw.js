@@ -1,9 +1,9 @@
-const CACHE_NAME = 'checklist-cache-v7.64';
+const CACHE_NAME = 'checklist-cache-v7.65';
 const ASSETS = [
   './',
   './index.html',
   './style.css?v=7.42',
-  './app.js?v=7.46',
+  './app.js?v=7.47',
   './manifest.json',
   'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap',
   'https://unpkg.com/lucide@latest',
