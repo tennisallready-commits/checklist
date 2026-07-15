@@ -448,6 +448,8 @@ function setupEventListeners() {
         openModal(modalCalendar);
     });
 
+
+
     btnCloseCalendar.addEventListener("click", () => {
         closeModal(modalCalendar);
     });
@@ -528,10 +530,16 @@ function setupEventListeners() {
     }
 
     if (btnPrevDay) {
-        btnPrevDay.addEventListener("click", () => changeDay(-1));
+        btnPrevDay.addEventListener("click", (e) => {
+            e.stopPropagation();
+            changeDay(-1);
+        });
     }
     if (btnNextDay) {
-        btnNextDay.addEventListener("click", () => changeDay(1));
+        btnNextDay.addEventListener("click", (e) => {
+            e.stopPropagation();
+            changeDay(1);
+        });
     }
 
     // Navegação por deslize em qualquer parte da barra de progresso
@@ -1499,6 +1507,15 @@ function updateDateDisplay() {
     // Formato: "Ter, 14 Jul 2026"
     const dateString = `${abbreviatedDay}, ${day} ${abbreviatedMonth} ${year}`;
     currentDateEl.textContent = dateString;
+    
+    // Novos elementos compactos quadrados
+    const dayNumEl = document.getElementById("current-date-day-num");
+    const dayMonthEl = document.getElementById("current-date-day-month");
+    const dayWeekdayEl = document.getElementById("current-date-day-weekday");
+    
+    if (dayNumEl) dayNumEl.textContent = day;
+    if (dayMonthEl) dayMonthEl.textContent = `${abbreviatedMonth} ${year}`;
+    if (dayWeekdayEl) dayWeekdayEl.textContent = abbreviatedDay;
     
     updateDateState();
 }
@@ -2874,7 +2891,12 @@ function updateProgress() {
 
     // Update text
     progressPercentageEl.textContent = `${percentage}%`;
-    progressTasksCountEl.textContent = `${completed} de ${total} concluídos`;
+    if (percentage >= 100) {
+        progressPercentageEl.classList.add("long-text");
+    } else {
+        progressPercentageEl.classList.remove("long-text");
+    }
+    progressTasksCountEl.innerHTML = `${completed} de ${total}<br>concluídos`;
 
     // Update Linear progress bar
     progressBarFill.style.width = `${percentage}%`;
@@ -2887,10 +2909,13 @@ function updateProgress() {
     const offset = circumference - (percentage / 100) * circumference;
     progressCircle.style.strokeDashoffset = offset;
 
+    const compactProgressBlock = document.querySelector(".compact-progress-block");
     if (percentage === 100 && total > 0) {
         progressRingWrapper.classList.add("completed");
+        if (compactProgressBlock) compactProgressBlock.classList.add("completed");
     } else {
         progressRingWrapper.classList.remove("completed");
+        if (compactProgressBlock) compactProgressBlock.classList.remove("completed");
     }
 }
 
@@ -5589,11 +5614,7 @@ async function loadAndRenderReport(days, containerEl) {
     });
     if (importantPending.length > 0) {
         const task = importantPending[0];
-        const createdTime = new Date(task.created_at || now);
-        const diffMs = now - createdTime;
-        const diffDays = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
-        const diffHours = Math.max(0, Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)));
-        attentions.push(`Pendência importante: a tarefa **"${task.title}"** (guia ${task.category}) não foi concluída (atrasada há **${diffDays} dias e ${diffHours} horas**).`);
+        attentions.push(`Pendência importante: a tarefa **"${task.title}"** (guia ${task.category}) não foi concluída.`);
     }
 
     // Ponto 3: Tarefas puladas
@@ -5606,11 +5627,7 @@ async function loadAndRenderReport(days, containerEl) {
         if (worstSkipped) {
             const task = allActiveTasks.find(t => String(t.id) === String(worstSkipped[0]));
             if (task) {
-                const createdTime = new Date(task.created_at || now);
-                const diffMs = now - createdTime;
-                const diffDays = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
-                const diffHours = Math.max(0, Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)));
-                attentions.push(`Tarefa adiada: **"${task.title}"** foi ignorada/pulada ${worstSkipped[1]}x (acumulando **${diffDays} dias e ${diffHours} horas** de pendência).`);
+                attentions.push(`Tarefa adiada: **"${task.title}"** foi ignorada/pulada ${worstSkipped[1]}x.`);
             }
         }
     }

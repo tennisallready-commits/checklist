@@ -138,8 +138,8 @@ body {
     top: 0;
     background-color: var(--bg-dark);
     padding-top: 4px;
-    padding-bottom: 12px;
-    margin-bottom: 8px;
+    padding-bottom: 8px;
+    margin-bottom: 4px;
     z-index: 100;
     display: flex;
     justify-content: space-between;
@@ -330,6 +330,300 @@ body {
     transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* Redesenho da Área Superior (Compact Header) */
+.progress-card-container.compact-header-section {
+    display: flex;
+    gap: 10px;
+    margin-top: 4px;
+    margin-bottom: 8px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.compact-progress-block,
+.compact-date-block {
+    flex: 1 1 0px;
+    width: calc(50% - 5px);
+    max-width: calc(50% - 5px);
+    aspect-ratio: 1 / 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 10px 8px;
+    min-width: 0;
+    box-sizing: border-box;
+    position: relative;
+}
+
+.compact-progress-block {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    backdrop-filter: var(--blur-glass);
+    box-shadow: var(--shadow-sm);
+}
+
+.compact-date-block.date-picker-wrapper {
+    border-radius: var(--radius-md) !important;
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
+
+.square-label {
+    font-size: 0.65rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+}
+
+.square-count {
+    font-size: 0.82rem;
+    color: var(--text-primary);
+    font-weight: 800;
+    margin-top: 6px;
+    text-align: center;
+    line-height: 1.15;
+}
+
+/* Circular Progress Ring in Square layout (centered vertically and horizontally) */
+.compact-progress-block .progress-ring-wrapper {
+    position: relative;
+    width: 86px;
+    height: 86px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.compact-progress-block .progress-ring {
+    width: 86px;
+    height: 86px;
+}
+
+.compact-progress-block .progress-ring-circle {
+    transform: rotate(-90deg);
+    transform-origin: 50% 50%;
+}
+
+.progress-ring-content {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 86px;
+    height: 86px;
+    z-index: 1;
+    pointer-events: none;
+}
+
+#progress-percentage {
+    font-size: 1.55rem;
+    font-weight: 800;
+    line-height: 1;
+    background: var(--progress-text-gradient);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    transition: font-size 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
+}
+
+#progress-percentage.long-text {
+    font-size: 1.25rem;
+}
+
+/* Keep 100% visible and turn it green when completed */
+.compact-progress-block .progress-ring-wrapper.completed #progress-percentage {
+    background: none !important;
+    -webkit-background-clip: initial !important;
+    -webkit-text-fill-color: #22c55e !important;
+    color: #22c55e !important;
+    font-size: 1.25rem;
+}
+
+/* Turn progress ring circle stroke to green when completed */
+.compact-progress-block .progress-ring-wrapper.completed #progress-circle {
+    stroke: #22c55e !important;
+}
+
+/* Success icon overlays are hidden */
+.compact-progress-block .progress-ring-icon {
+    display: none !important;
+}
+
+/* Entire progress block green completion identity */
+.compact-progress-block.completed {
+    background: linear-gradient(135deg, rgba(34, 197, 94, 0.15), rgba(16, 185, 129, 0.1)) !important;
+    border-color: rgba(34, 197, 94, 0.45) !important;
+    box-shadow: 0 0 12px rgba(34, 197, 94, 0.18) !important;
+    transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.compact-progress-block.completed .square-label {
+    color: rgba(34, 197, 94, 0.8) !important;
+    transition: color 0.3s ease;
+}
+
+.compact-progress-block.completed .square-count {
+    color: #22c55e !important;
+    transition: color 0.3s ease;
+}
+
+.square-date-display {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    text-align: center;
+    color: inherit; /* Inherits today/history/planning state-specific color */
+    margin: -10px 0 0 0;
+}
+
+.date-weekday {
+    font-size: 0.92rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: inherit;
+    line-height: 1.1;
+}
+
+.date-day-num {
+    font-size: 3.4rem;
+    font-weight: 800;
+    line-height: 0.85;
+    margin: 2px 0;
+    color: inherit;
+}
+
+.date-month {
+    font-size: 0.88rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: inherit;
+    opacity: 0.9;
+    line-height: 1.1;
+}
+
+.compact-date-block .lateral-arrow {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 10;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: 50%;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--transition-smooth);
+    flex-shrink: 0;
+}
+
+.compact-date-block .lateral-arrow:hover {
+    color: var(--primary);
+    background: rgba(255, 255, 255, 0.05);
+    transform: translateY(-50%) translateY(-1px) !important;
+}
+
+.compact-date-block .lateral-arrow:active {
+    transform: translateY(-50%) translateY(1px) scale(0.95) !important;
+}
+
+.compact-date-block .lateral-arrow.prev {
+    left: 6px;
+}
+
+.compact-date-block .lateral-arrow.next {
+    right: 6px;
+}
+
+.compact-date-block .lateral-arrow svg {
+    width: 18px;
+    height: 18px;
+}
+
+/* Align labels absolute in the top left corner of the square blocks */
+.compact-progress-block .square-label,
+.compact-date-block .history-badge {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    margin: 0;
+    z-index: 10;
+}
+
+/* Disable interactivity styling on the outer date card itself */
+.compact-date-block.date-picker-wrapper {
+    cursor: default !important;
+    pointer-events: auto;
+}
+
+.compact-date-block.date-picker-wrapper:hover {
+    transform: none !important;
+    box-shadow: var(--shadow-sm) !important;
+}
+
+.compact-date-block.date-picker-wrapper:active {
+    transform: none !important;
+}
+
+/* Inline calendar trigger button styling */
+.calendar-btn-inline {
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 4px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    transition: var(--transition-smooth);
+    z-index: 15;
+}
+
+.compact-date-block button.calendar-btn-inline:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--primary);
+    border-color: var(--primary-light);
+    transform: translateX(-50%) translateY(-1px) !important;
+}
+
+.compact-date-block button.calendar-btn-inline:active {
+    transform: translateX(-50%) translateY(1px) scale(0.96) !important;
+}
+
+.calendar-btn-inline svg {
+    width: 12px;
+    height: 12px;
+}
+
 /* Categories Filter Bar (Sticky below the sticky header) */
 .categories-bar {
     position: sticky;
@@ -339,15 +633,24 @@ body {
     gap: 8px;
     overflow-x: auto;
     padding-top: 8px;
-    margin-top: -8px;
-    padding-bottom: 8px;
+    margin-top: -4px;
+    padding-bottom: 12px;
     padding-left: 8px;
     padding-right: 8px;
     margin-left: -8px;
     margin-right: -8px;
-    margin-bottom: 20px;
+    margin-bottom: 0px;
     scrollbar-width: none; /* Hide scrollbar Firefox */
     z-index: 99;
+}
+
+/* Symmetric small spacing below categories bar (centered and aligned) */
+.tasks-list > .shift-group:first-child .shift-group-header {
+    margin-top: 0px !important;
+}
+
+.tasks-list > .task-item:first-child {
+    margin-top: 0px !important;
 }
 
 .categories-bar::-webkit-scrollbar {
@@ -1005,6 +1308,11 @@ body.theme-girly .modal-content::before {
     flex-direction: column;
 }
 
+.categories-modal-content {
+    height: 95vh !important;
+    max-height: 95vh !important;
+}
+
 .manage-tasks-body {
     flex: 1;
     overflow-y: auto;
@@ -1183,15 +1491,28 @@ body.theme-light .app-container.planning-mode #current-date {
 
 /* ─── Overrides para tema Girly (theme-girly) ─── */
 body.theme-girly .app-container:not(.history-mode):not(.planning-mode) .date-picker-wrapper {
-    background: linear-gradient(135deg, rgba(34, 197, 94, 0.12), rgba(16, 185, 129, 0.08));
-    border-color: rgba(34, 197, 94, 0.4);
-    box-shadow: 0 0 10px rgba(34, 197, 94, 0.12);
+    background: linear-gradient(135deg, rgba(219, 39, 119, 0.12), rgba(244, 63, 94, 0.08)) !important;
+    border-color: rgba(219, 39, 119, 0.45) !important;
+    box-shadow: 0 0 10px rgba(219, 39, 119, 0.15) !important;
+    color: #db2777 !important;
 }
 body.theme-girly .app-container:not(.history-mode):not(.planning-mode) #current-date {
-    color: #15803d; /* green-700 */
+    color: #db2777 !important;
 }
 body.theme-girly .app-container:not(.history-mode):not(.planning-mode) .date-picker-wrapper i {
-    color: rgba(21, 128, 61, 0.6);
+    color: rgba(219, 39, 119, 0.6) !important;
+}
+body.theme-girly .app-container:not(.history-mode):not(.planning-mode) .date-picker-wrapper .compact-nav-btn {
+    color: rgba(219, 39, 119, 0.7) !important;
+}
+body.theme-girly .app-container:not(.history-mode):not(.planning-mode) .date-picker-wrapper .calendar-btn-inline {
+    border-color: rgba(219, 39, 119, 0.25) !important;
+    color: rgba(219, 39, 119, 0.8) !important;
+}
+body.theme-girly .app-container:not(.history-mode):not(.planning-mode) .date-picker-wrapper .calendar-btn-inline:hover {
+    color: #db2777 !important;
+    border-color: #db2777 !important;
+    background: rgba(219, 39, 119, 0.08) !important;
 }
 body.theme-girly .app-container.history-mode .date-picker-wrapper {
     background: rgba(217, 119, 6, 0.08);

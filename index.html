@@ -97,7 +97,6 @@
             <div class="header-info">
                 <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                     <span class="organization-tag" id="org-tag">Checklist Organizacional</span>
-                    <span class="history-badge" id="history-badge">Histórico</span>
                 </div>
                 <h1 id="app-title">Checklist Diário</h1>
             </div>
@@ -115,49 +114,67 @@
             </div>
         </header>
 
-        <!-- Date Navigator (Arrows + Date Centered & Abbreviated) -->
-        <section class="date-navigator-section" style="display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 20px; width: 100%;">
-            <button id="btn-prev-day" class="icon-button" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); color: var(--text-primary); cursor: pointer; border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; transition: var(--transition-smooth);" title="Dia Anterior">
-                <i data-lucide="chevron-left" style="width: 20px; height: 20px;"></i>
-            </button>
-            <div class="date-picker-wrapper" id="btn-open-calendar">
-                <span id="current-date">Carregando data...</span>
-                <i data-lucide="calendar" style="width: 14px; height: 14px;"></i>
-            </div>
-            <button id="btn-next-day" class="icon-button" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); color: var(--text-primary); cursor: pointer; border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; transition: var(--transition-smooth);" title="Próximo Dia">
-                <i data-lucide="chevron-right" style="width: 20px; height: 20px;"></i>
-            </button>
-        </section>
+        <!-- Compact Top Redesign (Square side-by-side blocks) -->
+        <section class="progress-card-container compact-header-section">
+            <!-- Left Square: Progress -->
+            <div class="compact-progress-block">
+                <span class="square-label">Progresso</span>
+                
+                <!-- Circular Progress Ring (with percentage text inside) -->
+                <div class="progress-ring-wrapper">
+                    <svg class="progress-ring" viewBox="0 0 80 80">
+                        <circle class="progress-ring-bg" stroke="rgba(255,255,255,0.06)" stroke-width="8" fill="transparent" r="32" cx="40" cy="40"/>
+                        <circle class="progress-ring-circle" id="progress-circle" stroke="url(#gradient)" stroke-width="8" fill="transparent" r="32" cx="40" cy="40"/>
+                        <defs>
+                            <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#a855f7" />
+                                <stop offset="100%" stop-color="#3b82f6" />
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                    <!-- Percentage centered inside the ring -->
+                    <div class="progress-ring-content">
+                        <span id="progress-percentage">0%</span>
+                    </div>
+                    <!-- Success icon overlays when completed -->
+                    <div class="progress-ring-icon">
+                        <i data-lucide="check-check" class="success-icon"></i>
+                    </div>
+                </div>
 
-        <!-- Progress Card -->
-        <section class="progress-card-container">
-            <div class="progress-card">
-                <div class="progress-info">
-                    <div class="progress-text-group">
-                        <span class="progress-label">Progresso do Dia</span>
-                        <h2 id="progress-percentage">0%</h2>
-                        <p id="progress-tasks-count">0 de 0 concluídos</p>
-                    </div>
-                    <!-- Circular Progress bar or simple premium line. Circular works beautifully -->
-                    <div class="progress-ring-wrapper">
-                        <svg class="progress-ring" width="80" height="80">
-                            <circle class="progress-ring-bg" stroke="rgba(255,255,255,0.06)" stroke-width="8" fill="transparent" r="32" cx="40" cy="40"/>
-                            <circle class="progress-ring-circle" id="progress-circle" stroke="url(#gradient)" stroke-width="8" fill="transparent" r="32" cx="40" cy="40"/>
-                            <defs>
-                                <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                                    <stop offset="0%" stop-color="#a855f7" />
-                                    <stop offset="100%" stop-color="#3b82f6" />
-                                </linearGradient>
-                            </defs>
-                        </svg>
-                        <div class="progress-ring-icon">
-                            <i data-lucide="check-check" class="success-icon"></i>
-                        </div>
-                    </div>
+                <span id="progress-tasks-count" class="square-count">0 de 0<br>concluídos</span>
+            </div>
+
+            <!-- Right Square: Date & Navigation -->
+            <div class="date-picker-wrapper compact-date-block">
+                <span class="history-badge" id="history-badge">Hoje</span>
+                
+                <!-- This hidden span is updated by app.js so it doesn't break -->
+                <span id="current-date" style="display: none;">Carregando data...</span>
+                
+                <div class="square-date-display">
+                    <span id="current-date-day-weekday" class="date-weekday">---</span>
+                    <span id="current-date-day-num" class="date-day-num">--</span>
+                    <span id="current-date-day-month" class="date-month">---</span>
                 </div>
-                <div class="progress-bar-container">
-                    <div id="progress-bar-fill" class="progress-bar-fill"></div>
-                </div>
+
+                <!-- Calendar trigger button -->
+                <button id="btn-open-calendar" class="calendar-btn-inline" title="Abrir Calendário">
+                    <i data-lucide="calendar"></i> Calendário
+                </button>
+
+                <!-- Navigation Chevrons inside the card, positioned on the left/right sides -->
+                <button id="btn-prev-day" class="compact-nav-btn lateral-arrow prev" title="Dia Anterior">
+                    <i data-lucide="chevron-left"></i>
+                </button>
+                <button id="btn-next-day" class="compact-nav-btn lateral-arrow next" title="Próximo Dia">
+                    <i data-lucide="chevron-right"></i>
+                </button>
+            </div>
+
+            <!-- Hidden progress-bar-fill so app.js doesn't crash -->
+            <div style="display: none;">
+                <div id="progress-bar-fill" class="progress-bar-fill"></div>
             </div>
         </section>
 
@@ -327,7 +344,7 @@
                         <i data-lucide="log-out"></i> Sair da Conta
                     </button>
                     <div style="text-align: center; font-size: 0.65rem; color: var(--text-muted); margin-top: 8px;">
-                        Versão 7.59
+                        Versão 7.83
                     </div>
                 </div>
             </div>
@@ -683,9 +700,9 @@
     </div>
 
     <!-- Modal: Gerenciar Categorias -->
-    <div id="modal-manage-categories" class="modal" style="display: none;">
-        <div class="modal-overlay" id="overlay-manage-categories" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 1000;"></div>
-        <div class="modal-content manage-modal-content" style="max-width: 480px; width: 90%; max-height: 85vh; display: flex; flex-direction: column; z-index: 1001; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);">
+    <div id="modal-manage-categories" class="modal">
+        <div class="modal-overlay" id="overlay-manage-categories"></div>
+        <div class="modal-content manage-modal-content categories-modal-content">
             <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 16px;">
                 <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800; display: flex; align-items: center; gap: 8px;">
                     <i data-lucide="folder" style="color: var(--primary);"></i> Gerenciar Categorias
@@ -753,6 +770,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=7.60"></script>
+    <script src="app.js?v=7.83"></script>
 </body>
 </html>
