@@ -2033,6 +2033,8 @@ function renderCategories() {
                 gap: 8px;
                 box-shadow: 0 2px 8px rgba(0,0,0,0.1);
                 transition: border-color 0.2s, background-color 0.2s;
+                box-sizing: border-box;
+                width: 100%;
             `;
             if (!hasType) {
                 item.style.backgroundColor = "rgba(245, 158, 11, 0.02)";
