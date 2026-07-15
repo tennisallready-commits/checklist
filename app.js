@@ -2023,14 +2023,27 @@ function renderCategories() {
             item.className = "manage-item";
             
             const hasType = !!cat.type;
-            item.style.cssText = "background:rgba(255,255,255,0.02); border:1px solid " + (hasType ? "var(--border-color)" : "rgba(239, 68, 68, 0.4)") + "; padding:12px; border-radius:var(--radius-sm); display:flex; flex-direction:column; gap:8px;";
+            item.style.cssText = `
+                background: rgba(255, 255, 255, 0.02);
+                border: 1px solid ${hasType ? 'var(--border-color)' : 'rgba(245, 158, 11, 0.3)'};
+                padding: 12px;
+                border-radius: var(--radius-md);
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                transition: border-color 0.2s, background-color 0.2s;
+            `;
+            if (!hasType) {
+                item.style.backgroundColor = "rgba(245, 158, 11, 0.02)";
+            }
             
             const isOwner = currentUser && cat.user_id === currentUser.id;
             let collabBtnHtml = "";
             if (currentUser) {
                 collabBtnHtml = `
-                    <button class="btn-collab-cat" data-id="${cat.id}" style="background:transparent; border:none; color:var(--primary); cursor:pointer; padding:4px; border-radius:4px; transition:var(--transition-smooth); display:flex; align-items:center; justify-content:center; margin-right: 8px;" title="Colaboradores">
-                        <i data-lucide="users" style="width:14px; height:14px; color: var(--primary);"></i>
+                    <button class="btn-collab-cat" data-id="${cat.id}" style="background: transparent; border: none; color: var(--primary); cursor: pointer; padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; transition: background-color 0.2s, color 0.2s;" onmouseover="this.style.backgroundColor='rgba(139,92,246,0.1)';" onmouseout="this.style.backgroundColor='transparent';" title="Colaboradores">
+                        <i data-lucide="users" style="width: 14px; height: 14px; color: var(--primary);"></i>
                     </button>
                 `;
             }
@@ -2040,22 +2053,27 @@ function renderCategories() {
             const selectedType = isCustomType ? "Outro" : (cat.type || "");
 
             item.innerHTML = `
-                <div style="display: flex; gap: 8px; width: 100%; align-items: center;">
-                    <input type="text" class="input-edit-cat-name" value="${escapeHTML(cat.name)}" style="flex: 1; padding: 6px 10px; font-size: 0.82rem; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm);" placeholder="Nome da Categoria">
-                    <select class="select-edit-cat-type" style="width: 120px; padding: 6px 10px; font-size: 0.82rem; background: var(--bg-surface); color: var(--text-primary); border: 1px solid ${hasType ? "var(--border-color)" : "#ef4444"}; border-radius: var(--radius-sm);">
-                        <option value="" disabled ${!selectedType ? "selected" : ""}>Tipo...</option>
-                        ${typeOptions.map(t => `<option value="${t}" ${selectedType === t ? "selected" : ""}>${t}</option>`).join("")}
-                    </select>
-                    <div style="display:flex; align-items:center;">
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;">
+                    <input type="text" class="input-edit-cat-name" value="${escapeHTML(cat.name)}" style="flex: 1; min-width: 0; padding: 7px 10px; font-size: 0.82rem; font-weight: 600; background: rgba(0,0,0,0.15); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; outline: none; transition: border-color 0.2s;" placeholder="Nome da Categoria">
+                    <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
                         ${collabBtnHtml}
-                        <button class="btn-delete-cat" data-id="${cat.id}" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; padding:4px; border-radius:4px; transition:var(--transition-smooth); display:flex; align-items:center; justify-content:center;">
-                            <i data-lucide="trash-2" style="width:14px; height:14px;"></i>
+                        <button class="btn-delete-cat" data-id="${cat.id}" style="background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; transition: background-color 0.2s, color 0.2s;" onmouseover="this.style.color='#ef4444'; this.style.backgroundColor='rgba(239,68,68,0.1)';" onmouseout="this.style.color='var(--text-muted)'; this.style.backgroundColor='transparent';" title="Excluir">
+                            <i data-lucide="trash-2" style="width: 14px; height: 14px;"></i>
                         </button>
                     </div>
                 </div>
-                <div class="edit-custom-type-wrapper" style="display: ${selectedType === "Outro" ? "flex" : "none"}; flex-direction: column; gap: 4px; width: 100%;">
-                    <label style="font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);">Tipo Customizado</label>
-                    <input type="text" class="input-edit-cat-custom-type" value="${escapeHTML(isCustomType ? cat.type : "")}" placeholder="Ex: Viagens" style="width: 100%; padding: 6px 10px; font-size: 0.82rem; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
+                <div style="display: flex; gap: 8px; width: 100%; align-items: center;">
+                    <div style="display: flex; align-items: center; gap: 6px; flex: 1;">
+                        <span style="font-size: 0.65rem; font-weight: 800; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.02em;">Tipo:</span>
+                        <select class="select-edit-cat-type" style="flex: 1; padding: 6px 10px; font-size: 0.78rem; background: rgba(0,0,0,0.15); color: var(--text-primary); border: 1px solid ${hasType ? 'var(--border-color)' : '#f59e0b'}; border-radius: 6px; outline: none; cursor: pointer; font-weight: 500;">
+                            <option value="" disabled ${!selectedType ? "selected" : ""}>Escolha o tipo...</option>
+                            ${typeOptions.map(t => `<option value="${t}" ${selectedType === t ? "selected" : ""}>${t}</option>`).join("")}
+                        </select>
+                    </div>
+                </div>
+                <div class="edit-custom-type-wrapper" style="display: ${selectedType === "Outro" ? "flex" : "none"}; align-items: center; gap: 6px; width: 100%;">
+                    <span style="font-size: 0.65rem; font-weight: 800; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.02em;">Custom:</span>
+                    <input type="text" class="input-edit-cat-custom-type" value="${escapeHTML(isCustomType ? cat.type : "")}" placeholder="Ex: Viagens" style="flex: 1; padding: 6px 10px; font-size: 0.78rem; background: rgba(0,0,0,0.15); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; outline: none;">
                 </div>
             `;
             
@@ -2146,6 +2164,12 @@ function renderChecklist() {
             });
 
         if (currentFilter === "all") {
+            const now = new Date();
+            const yesterdayDate = new Date(now);
+            yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+            const yesterdayStr = getLocalDateString(yesterdayDate);
+            const isPastNightShiftExceptionPeriod = (selectedDate === yesterdayStr && now.getHours() < 12);
+
             // Separa tarefas por turnos para a aba "TODOS"
             const manhaTasks = [];
             const tardeTasks = [];
@@ -2174,10 +2198,17 @@ function renderChecklist() {
                 // Cabeçalho de divisão de Turno
                 const header = document.createElement("div");
                 header.className = "shift-group-header";
+                
+                let shiftLabelExtra = "";
+                if (title === "Noite" && isPastNightShiftExceptionPeriod) {
+                    shiftLabelExtra = ` <span style="font-size: 0.7rem; font-weight: 700; color: #eab308; background: rgba(234, 179, 8, 0.1); padding: 3px 8px; border-radius: 4px; margin-left: 8px; border: 1px solid rgba(234, 179, 8, 0.2); vertical-align: middle; display: inline-flex; align-items: center; gap: 4px;"><i data-lucide="clock" style="width: 10px; height: 10px;"></i> aberto para check até 12h</span>`;
+                }
+                
                 header.innerHTML = `
-                    <div class="shift-group-title">
+                    <div class="shift-group-title" style="display: flex; align-items: center; flex-wrap: wrap;">
                         <i data-lucide="${iconName}"></i>
                         <span>${title}</span>
+                        ${shiftLabelExtra}
                     </div>
                     <span class="shift-group-count">${groupTasks.length} ${groupTasks.length === 1 ? 'tarefa' : 'tarefas'}</span>
                 `;
@@ -2216,7 +2247,6 @@ function renderChecklist() {
             ];
 
             let orderedGroups = [];
-            const now = new Date();
             const todayStr = getLocalDateString(now);
             const isToday = (selectedDate === todayStr);
 
@@ -2236,11 +2266,22 @@ function renderChecklist() {
                     if (group) orderedGroups.push(group);
                 });
             } else {
-                // Ordem fixa (cronológica normal) para outros dias
-                ["Manhã", "Tarde", "Noite"].forEach(shiftName => {
-                    const group = groupDefinitions.find(g => g.name === shiftName);
-                    if (group) orderedGroups.push(group);
-                });
+                // Ordem fixa para outros dias
+                // EXCEÇÃO: Se for a manhã do dia seguinte e estivermos visualizando ontem, colocar Noite primeiro!
+                if (isPastNightShiftExceptionPeriod) {
+                    const nightGroup = groupDefinitions.find(g => g.name === "Noite");
+                    if (nightGroup) orderedGroups.push(nightGroup);
+                    
+                    ["Manhã", "Tarde"].forEach(shiftName => {
+                        const group = groupDefinitions.find(g => g.name === shiftName);
+                        if (group) orderedGroups.push(group);
+                    });
+                } else {
+                    ["Manhã", "Tarde", "Noite"].forEach(shiftName => {
+                        const group = groupDefinitions.find(g => g.name === shiftName);
+                        if (group) orderedGroups.push(group);
+                    });
+                }
             }
 
             const semTurnoGroup = groupDefinitions.find(g => g.name === "Sem Turno / Geral");
