@@ -270,6 +270,7 @@ const textareaManualNotes = document.getElementById("textarea-manual-notes");
 const btnToggleEdit = document.getElementById("btn-toggle-edit");
 const btnManageTasks = document.getElementById("btn-manage-tasks");
 const btnAddTaskModal = document.getElementById("btn-add-task-modal");
+const btnToggleSummary = document.getElementById("btn-toggle-summary");
 const btnShareReport = document.getElementById("btn-share-report");
 const btnCloseAddModal = document.getElementById("btn-close-add-modal");
 const btnCloseManageModal = document.getElementById("btn-close-manage-modal");
@@ -335,6 +336,7 @@ async function initApp() {
     renderCategories();
     renderChecklist();
     updateProgress();
+    updateSmartReportButtonVisibility();
 
     // Connect to Supabase
     connectSupabase();
@@ -437,6 +439,42 @@ function setupEventListeners() {
     if (btnCloseSmartReportModal) {
         btnCloseSmartReportModal.addEventListener("click", () => {
             closeModal(modalSmartReport);
+        });
+    }
+
+    // Toggle Summary blocks
+    const summaryBlockContainer = document.querySelector(".progress-card-container.compact-header-section");
+    const miniDateContainer = document.getElementById("header-mini-date-container");
+
+    const updateSummaryVisibility = (isCollapsed) => {
+        if (isCollapsed) {
+            if (summaryBlockContainer) summaryBlockContainer.classList.add("hidden");
+            if (miniDateContainer) miniDateContainer.style.display = "flex";
+            if (btnToggleSummary) {
+                btnToggleSummary.innerHTML = `<i data-lucide="eye-off"></i>`;
+                btnToggleSummary.title = "Mostrar Resumo";
+            }
+        } else {
+            if (summaryBlockContainer) summaryBlockContainer.classList.remove("hidden");
+            if (miniDateContainer) miniDateContainer.style.display = "none";
+            if (btnToggleSummary) {
+                btnToggleSummary.innerHTML = `<i data-lucide="eye"></i>`;
+                btnToggleSummary.title = "Ocultar Resumo";
+            }
+        }
+        if (window.lucide) window.lucide.createIcons();
+    };
+
+    // Load initial preference
+    const summaryCollapsed = localStorage.getItem("summary_collapsed") === "true";
+    updateSummaryVisibility(summaryCollapsed);
+
+    if (btnToggleSummary) {
+        btnToggleSummary.addEventListener("click", () => {
+            const currentlyCollapsed = summaryBlockContainer && summaryBlockContainer.classList.contains("hidden");
+            const newCollapsed = !currentlyCollapsed;
+            localStorage.setItem("summary_collapsed", newCollapsed);
+            updateSummaryVisibility(newCollapsed);
         });
     }
 
@@ -1517,6 +1555,13 @@ function updateDateDisplay() {
     if (dayMonthEl) dayMonthEl.textContent = `${abbreviatedMonth} ${year}`;
     if (dayWeekdayEl) dayWeekdayEl.textContent = abbreviatedDay;
     
+    const miniDateTextEl = document.getElementById("header-mini-date-text");
+    if (miniDateTextEl) {
+        const options = { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' };
+        const fullDateString = dateObj.toLocaleDateString('pt-BR', options);
+        miniDateTextEl.textContent = fullDateString.charAt(0).toUpperCase() + fullDateString.slice(1);
+    }
+    
     updateDateState();
 }
 
@@ -1524,6 +1569,8 @@ function updateDateState() {
     const now = new Date();
     const todayStr = getLocalDateString(now);
     const historyBadge = document.getElementById("history-badge");
+    const statusDot = document.getElementById("header-mini-date-status-dot");
+    const activeTheme = localStorage.getItem("checklist_theme") || "default";
 
     if (selectedDate < todayStr) {
         isHistoryMode = true;
@@ -1531,16 +1578,27 @@ function updateDateState() {
         appContainer.classList.remove("planning-mode", "today-mode");
         toggleEditMode(false);
         if (historyBadge) historyBadge.innerHTML = "Histórico";
+        if (statusDot) statusDot.style.background = "#d97706"; // orange
     } else if (selectedDate > todayStr) {
         isHistoryMode = false;
         appContainer.classList.add("planning-mode");
         appContainer.classList.remove("history-mode", "today-mode");
         if (historyBadge) historyBadge.innerHTML = "Planejamento";
+        if (statusDot) {
+            if (activeTheme === "girly") {
+                statusDot.style.background = "#7c3aed"; // violet
+            } else if (activeTheme === "light") {
+                statusDot.style.background = "#1d4ed8"; // light theme blue
+            } else {
+                statusDot.style.background = "#3b82f6"; // dark theme blue
+            }
+        }
     } else {
         isHistoryMode = false;
         appContainer.classList.add("today-mode");
         appContainer.classList.remove("history-mode", "planning-mode");
         if (historyBadge) historyBadge.innerHTML = '<span class="pulse-dot"></span>Hoje';
+        if (statusDot) statusDot.style.background = (activeTheme === "girly") ? "#db2777" : "#10b981"; // pink/green
     }
 }
 
@@ -4365,6 +4423,9 @@ function applyTheme(themeName) {
 
     // Salva o tema na nuvem se o usuário estiver logado
     saveUserThemeCloud(themeName);
+    
+    // Sincroniza a cor da bolinha de status do cabeçalho
+    updateDateState();
 }
 
 // Helper para gerenciar o estado global de edição das categorias
@@ -5983,6 +6044,38 @@ function showWebNotification(title, body, taskId) {
                 icon: './icon-192.png'
             });
         }
+    }
+}
+
+function updateSmartReportButtonVisibility() {
+    const btnReport = document.getElementById("btn-smart-report");
+    if (!btnReport) return;
+
+    // Check debug parameter in URL
+    const isDebugMode = new URLSearchParams(window.location.search).has("debug");
+    if (isDebugMode) {
+        btnReport.style.display = "inline-flex";
+        return;
+    }
+
+    const now = new Date();
+    
+    // Check Weekly (Saturday and Sunday)
+    const dayOfWeek = now.getDay();
+    const hasWeeklyReport = (dayOfWeek === 6 || dayOfWeek === 0);
+
+    // Check Monthly (first 3 days of the month)
+    const dayOfMonth = now.getDate();
+    const hasMonthlyReport = (dayOfMonth >= 1 && dayOfMonth <= 3);
+
+    // Check Yearly (first 3 days of January)
+    const isJanuary = now.getMonth() === 0;
+    const hasYearlyReport = (isJanuary && dayOfMonth >= 1 && dayOfMonth <= 3);
+
+    if (hasWeeklyReport || hasMonthlyReport || hasYearlyReport) {
+        btnReport.style.display = "inline-flex";
+    } else {
+        btnReport.style.display = "none";
     }
 }
 
