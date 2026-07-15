@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Checklist Diário Organizacional</title>
-    <link rel="stylesheet" href="style.css?v=7.34">
+    <link rel="stylesheet" href="style.css?v=7.42">
     
     <!-- iOS / PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -229,9 +229,18 @@
                         <option value="">Todos (Sem atribuição)</option>
                     </select>
                 </div>
-                <div class="form-group" style="margin-top: 16px; margin-bottom: 24px;">
+                <div class="form-group" style="margin-top: 16px; margin-bottom: 12px;">
                     <label for="task-date">Data da Tarefa</label>
                     <input type="date" id="task-date" required>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px; margin-top: 16px; margin-bottom: 24px; background: rgba(255,255,255,0.02); padding: 12px; border-radius: var(--radius-sm); border: 1px dashed var(--border-color);">
+                    <input type="checkbox" id="task-important" style="width: 18px; height: 18px; cursor: pointer; margin: 0;">
+                    <label for="task-important" style="margin: 0; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none;">
+                        Notificar
+                    </label>
+                    <button type="button" class="btn-notification-info" style="background: transparent; border: none; padding: 2px; color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;">
+                        <i data-lucide="alert-circle" style="width: 14px; height: 14px;"></i>
+                    </button>
                 </div>
                 <button type="submit" class="btn btn-primary btn-block">Adicionar Tarefa</button>
             </form>
@@ -295,6 +304,9 @@
                     <button id="btn-logout" class="btn btn-danger btn-block" style="background: var(--danger); color: #fff; border: none; font-weight: 700;">
                         <i data-lucide="log-out"></i> Sair da Conta
                     </button>
+                    <div style="text-align: center; font-size: 0.65rem; color: var(--text-muted); margin-top: 8px;">
+                        Versão 7.59
+                    </div>
                 </div>
             </div>
         </div>
@@ -386,9 +398,18 @@
                         <option value="">Todos (Sem atribuição)</option>
                     </select>
                 </div>
-                <div class="form-group" style="margin-top: 16px; margin-bottom: 24px;">
+                <div class="form-group" style="margin-top: 16px; margin-bottom: 12px;">
                     <label for="edit-task-date">Data da Tarefa</label>
                     <input type="date" id="edit-task-date" required>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px; margin-top: 16px; margin-bottom: 24px; background: rgba(255,255,255,0.02); padding: 12px; border-radius: var(--radius-sm); border: 1px dashed var(--border-color);">
+                    <input type="checkbox" id="edit-task-important" style="width: 18px; height: 18px; cursor: pointer; margin: 0;">
+                    <label for="edit-task-important" style="margin: 0; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none;">
+                        Notificar
+                    </label>
+                    <button type="button" class="btn-notification-info" style="background: transparent; border: none; padding: 2px; color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;">
+                        <i data-lucide="alert-circle" style="width: 14px; height: 14px;"></i>
+                    </button>
                 </div>
                 <button type="submit" class="btn btn-primary btn-block">Salvar Alterações</button>
             </form>
@@ -451,38 +472,101 @@
                 <button id="btn-close-notifications-modal" class="icon-button" style="padding: 6px;"><i data-lucide="x"></i></button>
             </div>
             
-            <div class="modal-body" id="notifications-list-container" style="padding-top: 16px; max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px;">
-                <!-- Notification Item 1 -->
-                <div style="display: flex; gap: 12px; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px;">
-                    <div style="background: rgba(16, 185, 129, 0.1); color: #10b981; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
-                        <i data-lucide="check-circle" style="width: 18px; height: 18px; color: #10b981;"></i>
+            <div class="modal-body" style="padding-top: 16px; display: flex; flex-direction: column; gap: 12px;">
+                <!-- Botão de Checklist Manual -->
+                <button id="btn-open-manual-checklist" class="btn btn-primary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; font-weight: 700; background: linear-gradient(135deg, var(--primary), #8b5cf6); border: none; padding: 12px; border-radius: 8px; cursor: pointer; color: white;">
+                    <i data-lucide="clipboard-list" style="width: 18px; height: 18px;"></i>
+                    Checklist Manual / Notas
+                </button>
+
+                <div id="notifications-list-container" style="max-height: 40vh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-top: 4px;">
+                    <!-- Notification Item 1 -->
+                    <div style="display: flex; gap: 12px; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px;">
+                        <div style="background: rgba(16, 185, 129, 0.1); color: #10b981; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                            <i data-lucide="check-circle" style="width: 18px; height: 18px; color: #10b981;"></i>
+                        </div>
+                        <div>
+                            <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">Sincronização Ativa</h4>
+                            <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">Seu checklist está sincronizado com segurança na nuvem do Supabase.</p>
+                        </div>
                     </div>
-                    <div>
-                        <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">Sincronização Ativa</h4>
-                        <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">Seu checklist está sincronizado com segurança na nuvem do Supabase.</p>
+
+                    <!-- Notification Item 2 -->
+                    <div style="display: flex; gap: 12px; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px;">
+                        <div style="background: rgba(139, 92, 246, 0.1); color: var(--primary); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                            <i data-lucide="brain-circuit" style="width: 18px; height: 18px; color: var(--primary);"></i>
+                        </div>
+                        <div>
+                            <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">Dica de Produtividade</h4>
+                            <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">Tente completar primeiro as tarefas mais pesadas da manhã para ativar o efeito Momentum.</p>
+                        </div>
+                    </div>
+
+                    <!-- Notification Item 3 -->
+                    <div style="display: flex; gap: 12px; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px;">
+                        <div style="background: rgba(59, 130, 246, 0.1); color: #3b82f6; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                            <i data-lucide="sparkles" style="width: 18px; height: 18px; color: #3b82f6;"></i>
+                        </div>
+                        <div>
+                            <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">Gestos de Deslizar</h4>
+                            <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">Agora você pode fechar qualquer janela do app deslizando-a para baixo! Experimente!</p>
+                        </div>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
 
-                <!-- Notification Item 2 -->
-                <div style="display: flex; gap: 12px; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px;">
-                    <div style="background: rgba(139, 92, 246, 0.1); color: var(--primary); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
-                        <i data-lucide="brain-circuit" style="width: 18px; height: 18px; color: var(--primary);"></i>
+    <!-- Modal: Checklist Manual -->
+    <div id="modal-manual-checklist" class="modal">
+        <div class="modal-overlay" id="overlay-manual-checklist"></div>
+        <div class="modal-content" style="max-width: 420px; padding: 24px; display: flex; flex-direction: column; gap: 16px; height: 95vh; max-height: 95vh;">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="background: rgba(139, 92, 246, 0.1); color: var(--primary); padding: 8px; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+                        <i data-lucide="clipboard-list" style="color: var(--primary);"></i>
                     </div>
                     <div>
-                        <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">Dica de Produtividade</h4>
-                        <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">Tente completar primeiro as tarefas mais pesadas da manhã para ativar o efeito Momentum.</p>
+                        <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800;">Checklist Manual</h3>
+                        <p style="margin: 0; font-size: 0.75rem; color: var(--text-secondary);">Um bloco de notas rápido para uso livre</p>
                     </div>
                 </div>
+                <button id="btn-close-manual-checklist-modal" class="icon-button" style="padding: 6px;"><i data-lucide="x"></i></button>
+            </div>
+            
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 16px; flex: 1; min-height: 0;">
+                <!-- Tabs for Checklist and Notepad -->
+                <div style="display: flex; gap: 8px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); padding: 4px; border-radius: 8px; flex-shrink: 0;">
+                    <button id="tab-manual-checklist" class="btn" style="flex: 1; padding: 8px; font-size: 0.8rem; font-weight: 700; background: var(--bg-surface-solid); border: none; border-radius: 6px; color: var(--text-primary); cursor: pointer;">
+                        Checklist
+                    </button>
+                    <button id="tab-manual-notepad" class="btn" style="flex: 1; padding: 8px; font-size: 0.8rem; font-weight: 700; background: transparent; border: none; border-radius: 6px; color: var(--text-secondary); cursor: pointer;">
+                        Bloco de Notas
+                    </button>
+                </div>
 
-                <!-- Notification Item 3 -->
-                <div style="display: flex; gap: 12px; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px;">
-                    <div style="background: rgba(59, 130, 246, 0.1); color: #3b82f6; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
-                        <i data-lucide="sparkles" style="width: 18px; height: 18px; color: #3b82f6;"></i>
+                <!-- Tab content: Checklist -->
+                <div id="content-manual-checklist" style="display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0;">
+                    <!-- Add item form -->
+                    <div style="display: flex; gap: 8px; flex-shrink: 0;">
+                        <input type="text" id="input-manual-item" placeholder="Novo item..." style="flex: 1; padding: 10px 14px; font-size: 0.85rem; border-radius: 8px; border: 1px solid var(--border-color); background: rgba(0,0,0,0.2); color: white; outline: none;" autocomplete="off">
+                        <button id="btn-add-manual-item" class="btn btn-primary" style="padding: 10px 14px; border-radius: 8px; cursor: pointer;"><i data-lucide="plus"></i></button>
                     </div>
-                    <div>
-                        <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">Gestos de Deslizar</h4>
-                        <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">Agora você pode fechar qualquer janela do app deslizando-a para baixo! Experimente!</p>
+                    
+                    <!-- Items list -->
+                    <div id="manual-items-list" style="display: flex; flex-direction: column; gap: 8px; flex: 1; overflow-y: auto; padding-right: 4px; min-height: 100px;">
+                        <!-- Dynamically populated checklist items -->
                     </div>
+                    
+                    <button id="btn-clear-completed-manual" class="btn" style="width: 100%; padding: 10px; font-size: 0.8rem; font-weight: 700; color: var(--text-secondary); background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px; cursor: pointer; flex-shrink: 0;">
+                        <i data-lucide="trash-2" style="width: 14px; height: 14px;"></i> Limpar Concluídos
+                    </button>
+                </div>
+
+                <!-- Tab content: Notepad -->
+                <div id="content-manual-notepad" style="display: none; flex-direction: column; gap: 8px; flex: 1; min-height: 0;">
+                    <textarea id="textarea-manual-notes" placeholder="Digite suas anotações livres aqui..." style="width: 100%; flex: 1; padding: 12px; font-size: 0.85rem; font-family: inherit; line-height: 1.5; resize: none; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 12px; color: var(--text-primary); outline: none;"></textarea>
+                    <div style="font-size: 0.7rem; color: var(--text-muted); text-align: right; margin-top: 2px; flex-shrink: 0;">Salvo automaticamente</div>
                 </div>
             </div>
         </div>
@@ -528,6 +612,23 @@
         </div>
     </div>
 
+    <!-- Modal: Info Notificar -->
+    <div id="modal-notification-info" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content" style="max-width: 320px; text-align: center; padding: 24px;">
+            <div style="display: flex; flex-direction: column; align-items: center; width: 100%;">
+                <div style="background: rgba(139, 92, 246, 0.1); color: var(--primary); width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 16px;">
+                    <i data-lucide="bell" style="width: 24px; height: 24px; color: var(--primary);"></i>
+                </div>
+                <h4 style="margin: 0 0 8px 0; font-size: 1.05rem; font-weight: 800; color: var(--text-primary);">Como funciona a Notificação?</h4>
+                <p style="margin: 0 0 20px 0; font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5;">
+                    Ao ativar a opção de notificação, você receberá alertas push na tela do seu dispositivo <strong>1 dia antes</strong> e <strong>1 turno antes</strong> do início desta tarefa.
+                </p>
+                <button id="btn-close-notification-info" type="button" class="btn btn-primary" style="width: 100%; padding: 10px; font-weight: 700; font-size: 0.8rem;">Entendi</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal: Custom Delete Confirmation -->
     <div id="modal-confirm-delete" class="modal">
         <div class="modal-overlay"></div>
@@ -559,6 +660,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=7.34"></script>
+    <script src="app.js?v=7.42"></script>
 </body>
 </html>

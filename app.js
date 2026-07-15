@@ -31,6 +31,7 @@ let pendingToggles = new Set();
 let currentUser = null;
 let isAuthModeLogin = true;
 let localDataVersion = 0; // Previne race conditions de sync
+let scrollPosition = 0;
 
 // Supabase Client instance
 let supabaseClient = null;
@@ -104,6 +105,18 @@ const modalNotifications = document.getElementById("modal-notifications");
 const btnCloseNotificationsModal = document.getElementById("btn-close-notifications-modal");
 const notificationsListContainer = document.getElementById("notifications-list-container");
 const notificationsBadge = document.getElementById("notifications-badge");
+const btnOpenManualChecklist = document.getElementById("btn-open-manual-checklist");
+const modalManualChecklist = document.getElementById("modal-manual-checklist");
+const btnCloseManualChecklistModal = document.getElementById("btn-close-manual-checklist-modal");
+const tabManualChecklist = document.getElementById("tab-manual-checklist");
+const tabManualNotepad = document.getElementById("tab-manual-notepad");
+const contentManualChecklist = document.getElementById("content-manual-checklist");
+const contentManualNotepad = document.getElementById("content-manual-notepad");
+const inputManualItem = document.getElementById("input-manual-item");
+const btnAddManualItem = document.getElementById("btn-add-manual-item");
+const manualItemsList = document.getElementById("manual-items-list");
+const btnClearCompletedManual = document.getElementById("btn-clear-completed-manual");
+const textareaManualNotes = document.getElementById("textarea-manual-notes");
 const btnToggleEdit = document.getElementById("btn-toggle-edit");
 const btnManageTasks = document.getElementById("btn-manage-tasks");
 const btnAddTaskModal = document.getElementById("btn-add-task-modal");
@@ -559,7 +572,7 @@ function setupEventListeners() {
             }
         }
         
-        const taskId = parseInt(item.dataset.id) || item.dataset.id; // handle uuid string or int
+        const taskId = String(item.dataset.id).match(/^\d+$/) ? parseInt(item.dataset.id, 10) : item.dataset.id; // handle uuid string or int
         toggleTask(taskId);
     });
 
@@ -716,6 +729,31 @@ function setupEventListeners() {
         });
     });
 
+    const requestNotificationPermission = async () => {
+        if ("Notification" in window) {
+            if (Notification.permission === "default") {
+                const permission = await Notification.requestPermission();
+                if (permission === "granted") {
+                    console.log("Permissão de notificação concedida.");
+                }
+            }
+        }
+    };
+
+    const chkImportant = document.getElementById("task-important");
+    if (chkImportant) {
+        chkImportant.addEventListener("change", () => {
+            if (chkImportant.checked) requestNotificationPermission();
+        });
+    }
+
+    const chkEditImportant = document.getElementById("edit-task-important");
+    if (chkEditImportant) {
+        chkEditImportant.addEventListener("change", () => {
+            if (chkEditImportant.checked) requestNotificationPermission();
+        });
+    }
+
     formAddTask.addEventListener("submit", async (e) => {
         e.preventDefault();
         const btnSubmit = formAddTask.querySelector("button[type='submit']");
@@ -746,13 +784,17 @@ function setupEventListeners() {
 
         try {
             const assignedTo = selectTaskAssignedTo ? selectTaskAssignedTo.value : null;
-            await addTask(inputTaskTitle.value.trim(), selectTaskCategory.value, selectTaskRecurring.value, taskDate, repeatDays, assignedTo, shifts);
+            const chkImp = document.getElementById("task-important");
+            const important = chkImp ? chkImp.checked : false;
+            
+            await addTask(inputTaskTitle.value.trim(), selectTaskCategory.value, selectTaskRecurring.value, taskDate, repeatDays, assignedTo, shifts, important);
             inputTaskTitle.value = "";
             // Reset day toggles
             document.querySelectorAll("#repeat-days-group .day-toggle").forEach(b => b.classList.remove("active"));
             document.getElementById("repeat-days-group").style.display = "none";
             // Limpa seleção de turnos
             document.querySelectorAll("#add-shift-selector .shift-toggle-btn").forEach(b => b.classList.remove("active"));
+            if (chkImp) chkImp.checked = false;
             selectTaskRecurring.value = "once";
             closeModal(modalAddTask);
         } catch (error) {
@@ -824,6 +866,10 @@ function setupEventListeners() {
             }
         }
         context.turnos = editShifts;
+        const chkEditImp = document.getElementById("edit-task-important");
+        if (chkEditImp) {
+            context.important = chkEditImp.checked;
+        }
 
         const updates = {
             title: newTitle,
@@ -836,7 +882,7 @@ function setupEventListeners() {
         if (createdAt) updates.created_at = createdAt;
 
         // Parse ID (handle uuid string or int)
-        const parsedId = parseInt(taskId) || taskId;
+        const parsedId = String(taskId).match(/^\d+$/) ? parseInt(taskId, 10) : taskId;
         await updateTask(parsedId, updates);
         closeModal(modalEditTask);
     });
@@ -856,6 +902,80 @@ function setupEventListeners() {
     if (btnCloseNotificationsModal) {
         btnCloseNotificationsModal.addEventListener("click", () => {
             closeModal(modalNotifications);
+        });
+    }
+
+    // Manual Checklist / Notepad Events
+    if (btnOpenManualChecklist) {
+        btnOpenManualChecklist.addEventListener("click", () => {
+            closeModal(modalNotifications);
+            openModal(modalManualChecklist);
+            loadManualChecklist();
+            loadManualNotes();
+        });
+    }
+
+    if (btnCloseManualChecklistModal) {
+        btnCloseManualChecklistModal.addEventListener("click", () => {
+            closeModal(modalManualChecklist);
+        });
+    }
+
+    // Tabs switcher for manual checklist
+    if (tabManualChecklist && tabManualNotepad) {
+        tabManualChecklist.addEventListener("click", () => {
+            tabManualChecklist.style.background = "var(--bg-surface-solid)";
+            tabManualChecklist.style.color = "var(--text-primary)";
+            tabManualNotepad.style.background = "transparent";
+            tabManualNotepad.style.color = "var(--text-secondary)";
+            contentManualChecklist.style.display = "flex";
+            contentManualNotepad.style.display = "none";
+        });
+        
+        tabManualNotepad.addEventListener("click", () => {
+            tabManualNotepad.style.background = "var(--bg-surface-solid)";
+            tabManualNotepad.style.color = "var(--text-primary)";
+            tabManualChecklist.style.background = "transparent";
+            tabManualChecklist.style.color = "var(--text-secondary)";
+            contentManualChecklist.style.display = "none";
+            contentManualNotepad.style.display = "flex";
+        });
+    }
+
+    // Add manual item
+    if (btnAddManualItem) {
+        btnAddManualItem.addEventListener("click", () => {
+            const text = inputManualItem.value.trim();
+            if (text) {
+                addManualItem(text);
+                inputManualItem.value = "";
+            }
+        });
+    }
+
+    if (inputManualItem) {
+        inputManualItem.addEventListener("keypress", (e) => {
+            if (e.key === "Enter") {
+                const text = inputManualItem.value.trim();
+                if (text) {
+                    addManualItem(text);
+                    inputManualItem.value = "";
+                }
+            }
+        });
+    }
+
+    // Clear completed manual items
+    if (btnClearCompletedManual) {
+        btnClearCompletedManual.addEventListener("click", () => {
+            clearCompletedManualItems();
+        });
+    }
+
+    // Notepad auto save
+    if (textareaManualNotes) {
+        textareaManualNotes.addEventListener("input", (e) => {
+            localStorage.setItem("checklist_manual_notes", e.target.value);
         });
     }
 
@@ -1067,7 +1187,7 @@ function setupEventListeners() {
 
     if (btnAddCollab) {
         btnAddCollab.addEventListener("click", () => {
-            const catId = parseInt(collabCategoryId.value) || collabCategoryId.value;
+            const catId = String(collabCategoryId.value).match(/^\d+$/) ? parseInt(collabCategoryId.value, 10) : collabCategoryId.value;
             const email = inputCollabEmail.value;
             inviteCollaborator(catId, email);
         });
@@ -1077,12 +1197,29 @@ function setupEventListeners() {
         inputCollabEmail.addEventListener("keypress", (e) => {
             if (e.key === "Enter") {
                 e.preventDefault();
-                const catId = parseInt(collabCategoryId.value) || collabCategoryId.value;
+                const catId = String(collabCategoryId.value).match(/^\d+$/) ? parseInt(collabCategoryId.value, 10) : collabCategoryId.value;
                 const email = inputCollabEmail.value;
                 inviteCollaborator(catId, email);
             }
         });
     }
+
+    // Info Notificar Modal Events
+    const modalNotificationInfo = document.getElementById("modal-notification-info");
+    const btnCloseNotificationInfo = document.getElementById("btn-close-notification-info");
+    if (btnCloseNotificationInfo) {
+        btnCloseNotificationInfo.addEventListener("click", () => {
+            closeModal(modalNotificationInfo);
+        });
+    }
+
+    document.querySelectorAll(".btn-notification-info").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openModal(modalNotificationInfo);
+        });
+    });
 
     // Habilita deslize para baixo (swipe-down-to-close) em todos os modais
     document.querySelectorAll(".modal").forEach(setupModalSwipeToClose);
@@ -1168,6 +1305,9 @@ async function loadChecklistAndProgress(skipOfflineReload = false) {
     renderChecklist();
     updateProgress();
     checkAutomaticReports();
+    if (typeof checkImportantTaskNotifications === "function") {
+        checkImportantTaskNotifications();
+    }
 
     if (pendingInvites.length > 0 && notificationsBadge) {
         notificationsBadge.style.display = "block";
@@ -1213,15 +1353,20 @@ async function loadData() {
                 tasksResult,
                 compTodayResult,
                 compBeforeResult,
-                sharesResult
+                sharesOwnerResult,
+                sharesCollabResult
             ] = await Promise.all([
                 supabaseClient.from('categories').select('*').eq('is_active', true),
                 supabaseClient.from('categories').select('*', { count: 'exact', head: true }),
                 supabaseClient.from('tasks').select('*').eq('is_active', true),
                 supabaseClient.from('completions').select('*').eq('date', selectedDate),
                 supabaseClient.from('completions').select('task_id, date, completed').lt('date', selectedDate),
-                supabaseClient.from('category_shares').select('*').or(`owner_id.eq.${currentUser.id},collaborator_email.eq.${currentUser.email}`).then(r => r, err => {
-                    console.warn("Tabela 'category_shares' não encontrada ou inacessível.", err);
+                supabaseClient.from('category_shares').select('*').eq('owner_id', currentUser.id).then(r => r, err => {
+                    console.warn("Tabela 'category_shares' não encontrada ou inacessível ao buscar proprietário.", err);
+                    return { data: [], error: null };
+                }),
+                supabaseClient.from('category_shares').select('*').ilike('collaborator_email', currentUser.email.trim()).then(r => r, err => {
+                    console.warn("Tabela 'category_shares' não encontrada ou inacessível ao buscar colaborador.", err);
                     return { data: [], error: null };
                 })
             ]);
@@ -1232,7 +1377,7 @@ async function loadData() {
             const count = countResult.count;
             const errCount = countResult.error;
             
-            const dbTasks = tasksResult.data || [];
+            let dbTasks = tasksResult.data || [];
             const errTasks = tasksResult.error;
             
             const dbCompletionsToday = compTodayResult.data || [];
@@ -1246,12 +1391,18 @@ async function loadData() {
             if (errCompToday) throw errCompToday;
             if (errCompBefore) throw errCompBefore;
 
-            // Salva os compartilhamentos carregados na sessão
-            categoryShares = (sharesResult && sharesResult.data) ? sharesResult.data : [];
+            // Mescla compartilhamentos únicos
+            const sharesOwner = sharesOwnerResult.data || [];
+            const sharesCollab = sharesCollabResult.data || [];
+            const mergedSharesMap = new Map();
+            sharesOwner.forEach(s => mergedSharesMap.set(String(s.id), s));
+            sharesCollab.forEach(s => mergedSharesMap.set(String(s.id), s));
+            categoryShares = Array.from(mergedSharesMap.values());
             localStorage.setItem("offline_category_shares", JSON.stringify(categoryShares));
 
             // Filtra os convites pendentes recebidos
             pendingInvites = categoryShares.filter(s => s.collaborator_email === currentUser.email && s.accepted !== true);
+            const collaboratorShares = categoryShares.filter(s => s.collaborator_email === currentUser.email && s.accepted === true);
 
             // Busca as categorias compartilhadas comigo (aceitas e pendentes)
             const allSharedShares = categoryShares.filter(s => s.collaborator_email === currentUser.email && s.owner_id !== currentUser.id);
@@ -1315,9 +1466,31 @@ async function loadData() {
                 return false;
             }
 
-            // Applica as atualizações offline na listagem do Supabase antes de renderizar
+            // Aplica as atualizações offline na listagem do Supabase antes de renderizar
             let taskUpdatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
             if (dbTasks) {
+                const existingLocal = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+                dbTasks = dbTasks.map(dbTask => {
+                    // Garantir que context seja um objeto se vier como string
+                    let currentContext = {};
+                    if (dbTask.context) {
+                        if (typeof dbTask.context === 'string') {
+                            try { currentContext = JSON.parse(dbTask.context); } catch (e) { currentContext = {}; }
+                        } else {
+                            currentContext = { ...dbTask.context };
+                        }
+                    }
+
+                    // Tenta recuperar a posição da versão local correspondente
+                    const localEquiv = existingLocal.find(lt => String(lt.id) === String(dbTask.id));
+                    if (localEquiv && localEquiv.context && typeof localEquiv.context.position === 'number') {
+                        currentContext.position = localEquiv.context.position;
+                    }
+                    
+                    return { ...dbTask, context: currentContext };
+                });
+
+                // Aplica a fila de atualizações pendentes por cima
                 Object.keys(taskUpdatesQueue).forEach(id => {
                     const dbUpdates = taskUpdatesQueue[id];
                     const taskIndex = dbTasks.findIndex(t => String(t.id) === String(id));
@@ -1382,7 +1555,7 @@ async function loadData() {
                 category: task.category,
                 is_recurring: task.is_recurring,
                 repeat_days: task.repeat_days || null,
-                context: task.context || null,
+                context: typeof task.context === 'string' ? ( () => { try { return JSON.parse(task.context); } catch(e) { return {}; } } )() : task.context || null,
                 assigned_to: task.assigned_to || null,
                 completed: completedTodayIds.has(String(task.id))
             }));
@@ -1394,10 +1567,12 @@ async function loadData() {
             localStorage.setItem("offline_categories", JSON.stringify(dbCats));
             const existingLocal = JSON.parse(localStorage.getItem("offline_tasks")) || [];
             const pendingLocalTasks = existingLocal.filter(t => isTemporaryId(t.id) && t.is_active !== false);
+            
+            // mergedTasks já é dbTasks com as posições locais mescladas
             const mergedTasks = [...dbTasks];
             for (const pending of pendingLocalTasks) {
                 // Só inclui se não existe uma tarefa idêntica (mesmo titulo+categoria) já no Supabase
-                const alreadyExists = dbTasks.some(d => d.title === pending.title && d.category === pending.category);
+                const alreadyExists = mergedTasks.some(d => d.title === pending.title && d.category === pending.category);
                 if (!alreadyExists) mergedTasks.push(pending);
             }
             localStorage.setItem("offline_tasks", JSON.stringify(mergedTasks));
@@ -1518,7 +1693,7 @@ function loadDataOffline() {
         category: task.category,
         is_recurring: task.is_recurring,
         repeat_days: task.repeat_days || null,
-        context: task.context || null,
+        context: typeof task.context === 'string' ? ( () => { try { return JSON.parse(task.context); } catch(e) { return {}; } } )() : task.context || null,
         assigned_to: task.assigned_to || null,
         completed: completedTodayIds.has(String(task.id))
     }));
@@ -1836,6 +2011,9 @@ function createTaskDOMElement(task) {
                 <div class="task-meta">
                     <span class="task-tag" style="${tagStyle}">${escapeHTML(task.category)}</span>
                     <span class="task-tag" style="background: rgba(255,255,255,0.02);">${getRecurrenceLabel(task)}</span>
+                    ${task.context && (task.context.important === true || task.context.important === "true") ? `
+                        <span class="task-tag" style="background: rgba(239, 68, 68, 0.12); color: #ef4444; font-weight: 800; display: inline-flex; align-items: center; gap: 3px; border: 1px solid rgba(239, 68, 68, 0.2);"><i data-lucide="star" style="width: 10px; height: 10px; fill: #ef4444;"></i> Importante</span>
+                    ` : ''}
                     ${task.context && task.context.turnos && task.context.turnos.length > 0 ? task.context.turnos.map(t => {
                         let iconName = 'sun';
                         if (t === 'Tarde') iconName = 'sunset';
@@ -2046,56 +2224,81 @@ function setupTaskDragAndDrop(container, shiftName) {
 
 // Salva a nova ordenação no cache local e dispara update para o banco
 function saveNewTasksOrder(container) {
-    localDataVersion++;
-    const items = [...container.querySelectorAll(".task-item")];
+    try {
+        localDataVersion++;
+        const items = [...container.querySelectorAll(".task-item")];
 
-    // Atualiza a posição em memória das tarefas reordenadas
-    items.forEach((item, index) => {
-        const id = parseInt(item.dataset.id) || item.dataset.id;
-
-        tasks = tasks.map(t => {
-            if (String(t.id) === String(id)) {
-                const updatedContext = t.context ? { ...t.context } : {};
-                updatedContext.position = index;
-                return { ...t, context: updatedContext };
-            }
-            return t;
+        // Cria um mapa rápido de realId -> index para este container
+        const positionMap = {};
+        items.forEach((item, index) => {
+            const idString = String(item.dataset.id);
+            const realId = idString.includes("_") ? idString.split("_")[0] : idString;
+            positionMap[realId] = index;
         });
 
-        allActiveTasks = allActiveTasks.map(t => {
-            if (String(t.id) === String(id)) {
-                const updatedContext = t.context ? { ...t.context } : {};
-                updatedContext.position = index;
-                return { ...t, context: updatedContext };
+        // Helper para atualizar o contexto de uma tarefa
+        const updateTaskContext = (t) => {
+            const realId = String(t.id);
+            if (positionMap[realId] !== undefined) {
+                let currentContext = {};
+                if (t.context) {
+                    if (typeof t.context === 'string') {
+                        try { currentContext = JSON.parse(t.context); } catch (e) { currentContext = {}; }
+                    } else {
+                        currentContext = { ...t.context };
+                    }
+                }
+                currentContext.position = positionMap[realId];
+                return { ...t, context: currentContext };
             }
             return t;
-        });
+        };
 
-        // Envia para o Supabase em segundo plano de forma assíncrona
-        if (supabaseClient && currentUser && !isTemporaryId(id)) {
-            const task = tasks.find(t => String(t.id) === String(id));
-            if (task && task.context) {
-                supabaseClient.from('tasks').update({ context: task.context }).eq('id', id)
-                    .catch(err => console.error("Erro assíncrono ao salvar nova ordenação no Supabase:", err));
-            }
+        // 1. Atualiza memória (tasks e allActiveTasks)
+        tasks = tasks.map(updateTaskContext);
+        allActiveTasks = allActiveTasks.map(updateTaskContext);
+
+        // 2. Atualiza offline_tasks (localStorage)
+        let localTasksFinal = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+        localTasksFinal = localTasksFinal.map(updateTaskContext);
+        localStorage.setItem("offline_tasks", JSON.stringify(localTasksFinal));
+
+        // 3. Atualiza banco de dados (Supabase) e fila offline
+        if (supabaseClient && currentUser) {
+            Object.keys(positionMap).forEach(realId => {
+                if (isTemporaryId(realId)) return;
+                
+                const task = tasks.find(t => String(t.id) === realId);
+                if (task && task.context) {
+                    const dbUpdates = { context: task.context };
+                    
+                    let updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+                    updatesQueue[realId] = { ...(updatesQueue[realId] || {}), ...dbUpdates };
+                    localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
+
+                    supabaseClient.from('tasks').update(dbUpdates).eq('id', realId)
+                        .then(({ error }) => {
+                            if (error) {
+                                console.warn("Erro ao reordenar tarefa " + realId, error);
+                            } else {
+                                let queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+                                delete queue[realId];
+                                localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
+                            }
+                        })
+                        .catch(err => console.error("Erro assíncrono ao salvar ordenação:", err));
+                }
+            });
         }
-    });
 
-    // Salva a nova ordenação no LocalStorage offline_tasks
-    let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
-    localTasks = localTasks.map(t => {
-        const itemIndex = items.findIndex(item => String(item.dataset.id) === String(t.id));
-        if (itemIndex !== -1) {
-            const updatedContext = t.context ? { ...t.context } : {};
-            updatedContext.position = itemIndex;
-            return { ...t, context: updatedContext };
+        // Tenta disparar uma sincronização silenciosa para garantir que o banco seja atualizado se possível
+        if (navigator.onLine && typeof syncOfflineData === 'function') {
+            setTimeout(syncOfflineData, 1000);
         }
-        return t;
-    });
-    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
 
-    // Não re-renderiza aqui — o DOM já está na ordem correta após o drag.
-    // Re-renderizar causaria um flash (piscar) porque tasksListEl.innerHTML é zerado.
+    } catch(err) { 
+        alert("Erro de ordenação: " + err.message); 
+    }
 }
 
 function renderChecklistWithAnimation() {
@@ -2238,7 +2441,7 @@ function saveCompletionOffline(taskId, date, completed) {
     localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
 }
 
-async function addTask(title, category, recurrenceMode, customDate, repeatDays, assignedTo, shifts) {
+async function addTask(title, category, recurrenceMode, customDate, repeatDays, assignedTo, shifts, important = false) {
     if (!title) return;
     const isRecurring = recurrenceMode !== "once";
     const tempId = Date.now();
@@ -2250,6 +2453,9 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
     const context = analyzeTaskContext(title, category, tasks) || {};
     if (shifts && shifts.length > 0) {
         context.turnos = shifts;
+    }
+    if (important) {
+        context.important = true;
     }
     console.log(`%c[Motor de Contexto] Tarefa: "${title}" na guia "${category}"`, "color: #8b5cf6; font-weight: bold;", context);
 
@@ -2509,6 +2715,11 @@ function openEditTaskModal(task) {
     updateTaskAssigneeDropdown(task.category, selectEditTaskAssignedTo, editTaskAssigneeGroup);
     if (selectEditTaskAssignedTo) {
         selectEditTaskAssignedTo.value = task.assigned_to || "";
+    }
+
+    const chkEditImp = document.getElementById("edit-task-important");
+    if (chkEditImp) {
+        chkEditImp.checked = task.context && (task.context.important === true || task.context.important === "true");
     }
     
     openModal(modalEditTask);
@@ -2787,14 +2998,23 @@ function renderCollaborators(cat) {
 }
 
 async function inviteCollaborator(catId, email) {
-    if (!email) return;
+    const btn = document.getElementById("btn-add-collab");
+    if (btn && btn.disabled) return; // Evita envio duplo em cliques rápidos
+    
+    if (!email || !email.trim()) {
+        alert("Por favor, digite um e-mail válido.");
+        return;
+    }
     if (!supabaseClient) {
         alert("Conexão online indisponível.");
         return;
     }
     
-    const cat = categories.find(c => c.id === catId);
-    if (!cat) return;
+    const cat = categories.find(c => String(c.id) === String(catId));
+    if (!cat) {
+        alert("Erro: Categoria não encontrada nas guias ativas.");
+        return;
+    }
     
     const cleanEmail = email.trim().toLowerCase();
     
@@ -2804,7 +3024,7 @@ async function inviteCollaborator(catId, email) {
         return;
     }
     
-    const exists = categoryShares.some(s => s.category_id === catId && s.collaborator_email === cleanEmail);
+    const exists = categoryShares.some(s => String(s.category_id) === String(catId) && String(s.collaborator_email).trim().toLowerCase() === cleanEmail);
     if (exists) {
         alert("Este e-mail já foi convidado para esta guia.");
         return;
@@ -2816,6 +3036,11 @@ async function inviteCollaborator(catId, email) {
         owner_email: currentUser.email,
         collaborator_email: cleanEmail
     };
+    
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Convidando...";
+    }
     
     try {
         const { error } = await supabaseClient
@@ -2831,6 +3056,11 @@ async function inviteCollaborator(catId, email) {
     } catch (err) {
         console.error("Erro ao convidar colaborador:", err);
         alert("Erro ao convidar: " + err.message);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = "Convidar";
+        }
     }
 }
 
@@ -3424,14 +3654,33 @@ function getCategoryColorStyle(categoryName) {
 // Modal Helpers
 function openModal(modalEl) {
     if (!modalEl) return;
+    
+    // Se não há nenhum modal ativo ainda, salva a posição do scroll e trava o body
+    const activeModals = document.querySelectorAll(".modal.active");
+    if (activeModals.length === 0) {
+        scrollPosition = window.pageYOffset || document.documentElement.scrollTop;
+        document.body.style.overflow = "hidden";
+        document.body.style.position = "fixed";
+        document.body.style.top = `-${scrollPosition}px`;
+        document.body.style.width = "100%";
+    }
+    
     modalEl.classList.add("active");
-    document.body.style.overflow = "hidden";
 }
 
 function closeModal(modalEl) {
     if (!modalEl) return;
     modalEl.classList.remove("active");
-    document.body.style.overflow = "";
+    
+    // Se não restou nenhum modal ativo, restaura o scroll
+    const activeModals = document.querySelectorAll(".modal.active");
+    if (activeModals.length === 0) {
+        document.body.style.removeProperty("position");
+        document.body.style.removeProperty("top");
+        document.body.style.removeProperty("width");
+        document.body.style.overflow = "";
+        window.scrollTo(0, scrollPosition);
+    }
 }
 
 // Theme Helper
@@ -3636,6 +3885,112 @@ async function syncOfflineDataToCloud() {
     if (hasTaskUpdates) {
         localStorage.setItem("offline_task_updates_queue", JSON.stringify(taskUpdatesQueue));
     }
+}
+
+// Functions for Manual Checklist & Notepad
+function loadManualNotes() {
+    if (textareaManualNotes) {
+        textareaManualNotes.value = localStorage.getItem("checklist_manual_notes") || "";
+    }
+}
+
+function loadManualChecklist() {
+    const items = JSON.parse(localStorage.getItem("checklist_manual_items")) || [];
+    renderManualChecklist(items);
+}
+
+function renderManualChecklist(items) {
+    if (!manualItemsList) return;
+    manualItemsList.innerHTML = "";
+
+    if (items.length === 0) {
+        manualItemsList.innerHTML = `
+            <div style="text-align: center; color: var(--text-muted); font-size: 0.8rem; padding: 20px 0;">
+                Nenhum item criado. Digite um item acima!
+            </div>
+        `;
+        return;
+    }
+
+    items.forEach(item => {
+        const itemEl = document.createElement("div");
+        itemEl.className = "manual-task-item";
+        if (item.completed) {
+            itemEl.classList.add("completed");
+        }
+
+        const checkboxWrapper = document.createElement("div");
+        checkboxWrapper.style.cssText = "display: flex; align-items: center; gap: 12px; flex: 1;";
+        
+        const customCheckbox = document.createElement("div");
+        customCheckbox.className = "task-checkbox";
+        if (item.completed) {
+            customCheckbox.innerHTML = '<i data-lucide="check" style="width: 12px; height: 12px; color: white;"></i>';
+        }
+
+        const textSpan = document.createElement("span");
+        textSpan.className = "task-text";
+        textSpan.textContent = item.text;
+
+        checkboxWrapper.appendChild(customCheckbox);
+        checkboxWrapper.appendChild(textSpan);
+        
+        itemEl.addEventListener("click", () => {
+            toggleManualItem(item.id);
+        });
+
+        const btnDelete = document.createElement("button");
+        btnDelete.className = "icon-button";
+        btnDelete.style.cssText = "padding: 6px; color: var(--text-muted); opacity: 0.7; z-index: 5;";
+        btnDelete.innerHTML = '<i data-lucide="trash-2" style="width: 14px; height: 14px;"></i>';
+        btnDelete.addEventListener("click", (e) => {
+            e.stopPropagation();
+            deleteManualItem(item.id);
+        });
+
+        itemEl.appendChild(checkboxWrapper);
+        itemEl.appendChild(btnDelete);
+        manualItemsList.appendChild(itemEl);
+    });
+
+    lucide.createIcons();
+}
+
+function addManualItem(text) {
+    const items = JSON.parse(localStorage.getItem("checklist_manual_items")) || [];
+    items.push({
+        id: Date.now(),
+        text: text,
+        completed: false
+    });
+    localStorage.setItem("checklist_manual_items", JSON.stringify(items));
+    renderManualChecklist(items);
+}
+
+function toggleManualItem(id) {
+    let items = JSON.parse(localStorage.getItem("checklist_manual_items")) || [];
+    items = items.map(item => {
+        if (item.id === id) {
+            return { ...item, completed: !item.completed };
+        }
+        return item;
+    });
+    localStorage.setItem("checklist_manual_items", JSON.stringify(items));
+    renderManualChecklist(items);
+}
+
+function deleteManualItem(id) {
+    let items = JSON.parse(localStorage.getItem("checklist_manual_items")) || [];
+    items = items.filter(item => item.id !== id);
+    localStorage.setItem("checklist_manual_items", JSON.stringify(items));
+    renderManualChecklist(items);
+}
+
+function clearCompletedManualItems() {
+    let items = JSON.parse(localStorage.getItem("checklist_manual_items")) || [];
+    items = items.filter(item => !item.completed);
+    localStorage.setItem("checklist_manual_items", JSON.stringify(items));
+    renderManualChecklist(items);
 }
 
 function renderCalendarGrid() {
@@ -4546,3 +4901,149 @@ function checkAutomaticReports() {
         }
     }
 }
+
+// ----------------------------------------------------
+// Sistema de Notificações de Tarefas Importantes ("Estilo iFood")
+// ----------------------------------------------------
+function checkImportantTaskNotifications() {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+
+    const now = new Date();
+    const todayStr = getLocalDateString(now);
+
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = getLocalDateString(tomorrow);
+
+    const shownAlerts = JSON.parse(localStorage.getItem("shown_notifications")) || {};
+    let updated = false;
+
+    // Helper para buscar tarefas ativas de uma data específica
+    const getActiveTasksForDate = (dateStr) => {
+        let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+        let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+        
+        const completedIds = new Set(
+            localCompletions.filter(c => c.date === dateStr && c.completed === true).map(c => String(c.task_id))
+        );
+        const excludedIds = new Set(
+            localCompletions.filter(c => c.date === dateStr && c.completed === false).map(c => String(c.task_id))
+        );
+
+        return localTasks.filter(task => {
+            if (!task.is_active) return false;
+            if (excludedIds.has(String(task.id))) return false;
+            if (completedIds.has(String(task.id))) return false; // Se já concluiu, ignora
+            
+            const taskCreatedDate = extractDateFromTimestamp(task.created_at);
+            
+            if (task.is_recurring) {
+                if (task.repeat_days && task.repeat_days.length > 0) {
+                    const viewDate = new Date(dateStr + 'T12:00:00');
+                    const dayOfWeek = viewDate.getDay();
+                    const repeatDaysNum = task.repeat_days.map(Number);
+                    return taskCreatedDate <= dateStr && repeatDaysNum.includes(dayOfWeek);
+                }
+                return taskCreatedDate <= dateStr;
+            } else {
+                return taskCreatedDate === dateStr;
+            }
+        });
+    };
+
+    const todayTasks = getActiveTasksForDate(todayStr);
+    const tomorrowTasks = getActiveTasksForDate(tomorrowStr);
+
+    const checkTask = (task, targetDateStr) => {
+        const isImportant = task.context && (task.context.important === true || task.context.important === "true");
+        if (!isImportant) return;
+
+        const turnos = task.context.turnos || [];
+        
+        // Horas de início dos turnos: Manhã (05h), Tarde (12h), Noite (18h), Geral (08h)
+        let earliestHour = 8;
+        if (turnos.includes("Manhã")) earliestHour = 5;
+        else if (turnos.includes("Tarde")) earliestHour = 12;
+        else if (turnos.includes("Noite")) earliestHour = 18;
+
+        const targetDateTime = new Date(`${targetDateStr}T${String(earliestHour).padStart(2, '0')}:00:00`);
+
+        // 1. Notificação de 1 dia antes
+        const oneDayBeforeTime = new Date(targetDateTime.getTime() - 24 * 60 * 60 * 1000);
+        const dayBeforeKey = `task_${task.id}_${targetDateStr}_dayBefore`;
+        
+        if (now >= oneDayBeforeTime && now < targetDateTime && !shownAlerts[dayBeforeKey]) {
+            showWebNotification(
+                "⚠️ Tarefa Importante Amanhã!",
+                `A tarefa "${task.title}" está agendada para amanhã no turno da ${turnos.join(', ') || 'Geral'}.`,
+                task.id
+            );
+            shownAlerts[dayBeforeKey] = true;
+            updated = true;
+        }
+
+        // 2. Notificação de 1 turno antes
+        let shiftBeforeTime;
+        if (turnos.includes("Tarde")) {
+            shiftBeforeTime = new Date(`${targetDateStr}T05:00:00`);
+        } else if (turnos.includes("Noite")) {
+            shiftBeforeTime = new Date(`${targetDateStr}T12:00:00`);
+        } else if (turnos.includes("Manhã")) {
+            const prevDay = new Date(targetDateTime);
+            prevDay.setDate(prevDay.getDate() - 1);
+            const prevDayStr = getLocalDateString(prevDay);
+            shiftBeforeTime = new Date(`${prevDayStr}T18:00:00`);
+        } else {
+            shiftBeforeTime = new Date(targetDateTime.getTime() - 4 * 60 * 60 * 1000); // 4h antes para Geral
+        }
+
+        const shiftBeforeKey = `task_${task.id}_${targetDateStr}_shiftBefore`;
+        if (now >= shiftBeforeTime && now < targetDateTime && !shownAlerts[shiftBeforeKey]) {
+            let shiftMsg = "";
+            if (turnos.includes("Tarde")) shiftMsg = "no turno da Tarde (próximo turno)";
+            else if (turnos.includes("Noite")) shiftMsg = "no turno da Noite (próximo turno)";
+            else if (turnos.includes("Manhã")) shiftMsg = "amanhã de Manhã (próximo turno)";
+            else shiftMsg = "em breve (daqui a 4 horas)";
+
+            showWebNotification(
+                "⏰ Próxima tarefa importante!",
+                `A tarefa "${task.title}" está agendada para ${shiftMsg}.`,
+                task.id
+            );
+            shownAlerts[shiftBeforeKey] = true;
+            updated = true;
+        }
+    };
+
+    todayTasks.forEach(task => checkTask(task, todayStr));
+    tomorrowTasks.forEach(task => checkTask(task, tomorrowStr));
+
+    if (updated) {
+        localStorage.setItem("shown_notifications", JSON.stringify(shownAlerts));
+    }
+}
+
+function showWebNotification(title, body, taskId) {
+    if (Notification.permission === "granted") {
+        if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+            navigator.serviceWorker.ready.then(registration => {
+                registration.showNotification(title, {
+                    body: body,
+                    icon: './icon-192.png',
+                    badge: './icon-192.png',
+                    vibrate: [200, 100, 200],
+                    data: { taskId: taskId },
+                    tag: `task-important-${taskId}`
+                });
+            });
+        } else {
+            new Notification(title, {
+                body: body,
+                icon: './icon-192.png'
+            });
+        }
+    }
+}
+
+// Verifica as notificações de tarefas importantes a cada 60 segundos
+setInterval(checkImportantTaskNotifications, 60000);
