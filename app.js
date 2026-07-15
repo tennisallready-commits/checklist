@@ -2068,7 +2068,7 @@ function renderCategories() {
                     <div style="display: flex; align-items: center; gap: 6px; flex: 1;">
                         <span style="font-size: 0.65rem; font-weight: 800; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.02em;">Tipo:</span>
                         <select class="select-edit-cat-type" style="flex: 1; padding: 6px 10px; font-size: 0.78rem; background: rgba(0,0,0,0.15); color: var(--text-primary); border: 1px solid ${hasType ? 'var(--border-color)' : '#f59e0b'}; border-radius: 6px; outline: none; cursor: pointer; font-weight: 500;">
-                            <option value="" disabled ${!selectedType ? "selected" : ""}>Escolha o tipo...</option>
+                            <option value="" disabled ${!selectedType ? "selected" : ""}>Não classificada</option>
                             ${typeOptions.map(t => `<option value="${t}" ${selectedType === t ? "selected" : ""}>${t}</option>`).join("")}
                         </select>
                     </div>
@@ -2125,9 +2125,156 @@ function renderCategories() {
             manageList.appendChild(item);
         });
     }
+
+    // 3.1. Render Classificar Categorias Antigas (if any unclassified)
+    const settingsClassifyWrapper = document.getElementById("settings-classify-unclassified-cats-wrapper");
+    const settingsClassifyList = document.getElementById("settings-unclassified-cats-list");
+    
+    if (settingsClassifyWrapper && settingsClassifyList) {
+        const unclassifiedCats = categories.filter(c => !c.type && c.is_active);
+        if (unclassifiedCats.length > 0) {
+            settingsClassifyWrapper.style.display = "block";
+            settingsClassifyList.innerHTML = unclassifiedCats.map(cat => `
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; background: rgba(0,0,0,0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(245, 158, 11, 0.2); box-sizing: border-box; width: 100%;">
+                    <span style="font-weight: 700; color: var(--text-primary); font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px;">"${escapeHTML(cat.name)}"</span>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <select class="settings-classify-cat-select" data-id="${cat.id}" style="background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); padding: 4px 6px; border-radius: 4px; font-size: 0.76rem;">
+                            <option value="Trabalho">Trabalho</option>
+                            <option value="Empresa">Empresa</option>
+                            <option value="Faculdade/Estudos">Faculdade/Estudos</option>
+                            <option value="Projeto">Projeto</option>
+                            <option value="Pessoal">Pessoal</option>
+                            <option value="Saúde">Saúde</option>
+                            <option value="Finanças">Finanças</option>
+                            <option value="Casa">Casa</option>
+                            <option value="Lazer">Lazer</option>
+                            <option value="Outro">Outro...</option>
+                        </select>
+                        <button class="btn-save-settings-cat-type" data-id="${cat.id}" style="background: #eab308; color: black; border: none; padding: 4px 8px; border-radius: 4px; font-size: 0.76rem; font-weight: bold; cursor: pointer;">Salvar</button>
+                    </div>
+                </div>
+            `).join("");
+            
+            // Add click listeners
+            settingsClassifyList.querySelectorAll(".btn-save-settings-cat-type").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    const catId = btn.dataset.id;
+                    const select = settingsClassifyList.querySelector(`.settings-classify-cat-select[data-id="${catId}"]`);
+                    if (select) {
+                        const typeVal = select.value;
+                        const cat = categories.find(c => String(c.id) === String(catId));
+                        if (cat) {
+                            updateCategoryFields(cat.id, cat.name, typeVal);
+                        }
+                    }
+                });
+            });
+        } else {
+            settingsClassifyWrapper.style.display = "none";
+        }
+    }
+
+    // 3.2. Render Ensine o App (if any unclassified terms)
+    const settingsTeachWrapper = document.getElementById("settings-teach-app-wrapper");
+    const settingsTeachList = document.getElementById("settings-teach-app-list");
+    
+    if (settingsTeachWrapper && settingsTeachList) {
+        const unclassifiedTerms = getRecentUnclassifiedTerms();
+        if (unclassifiedTerms.length > 0) {
+            settingsTeachWrapper.style.display = "block";
+            settingsTeachList.innerHTML = unclassifiedTerms.map(term => `
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; background: rgba(0,0,0,0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color); box-sizing: border-box; width: 100%;">
+                    <span style="font-weight: 700; color: var(--text-primary); font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px;">"${escapeHTML(term)}"</span>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <select class="settings-teach-term-select" data-term="${term.toLowerCase()}" style="background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); padding: 4px 6px; border-radius: 4px; font-size: 0.76rem;">
+                            <option value="Trabalho/Profissional">Trabalho/Profissional</option>
+                            <option value="Estudos/Aprendizado">Estudos/Aprendizado</option>
+                            <option value="Saúde/Bem-estar">Saúde/Bem-estar</option>
+                            <option value="Rotina/Organização">Rotina/Organização</option>
+                            <option value="Pessoal/Outros">Pessoal/Outros</option>
+                        </select>
+                        <button class="btn-save-settings-teach-term" data-term="${term.toLowerCase()}" style="background: var(--primary); color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 0.76rem; font-weight: bold; cursor: pointer;">Salvar</button>
+                    </div>
+                </div>
+            `).join("");
+            
+            // Add click listeners
+            settingsTeachList.querySelectorAll(".btn-save-settings-teach-term").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    const term = btn.dataset.term;
+                    const select = settingsTeachList.querySelector(`.settings-teach-term-select[data-term="${term}"]`);
+                    if (select) {
+                        const catVal = select.value;
+                        const associations = JSON.parse(localStorage.getItem("user_term_associations")) || {};
+                        associations[term] = catVal;
+                        localStorage.setItem("user_term_associations", JSON.stringify(associations));
+                        renderCategories(); // Re-render
+                    }
+                });
+            });
+        } else {
+            settingsTeachWrapper.style.display = "none";
+        }
+    }
     
     // Atualiza os ícones após renderizar as guias e listas
     lucide.createIcons();
+}
+
+function getRecentUnclassifiedTerms() {
+    const associations = JSON.parse(localStorage.getItem("user_term_associations")) || {};
+    const unclassifiedCandidates = new Set();
+    const stopWords = ["para", "com", "uma", "uns", "das", "dos", "pelo", "pela", "seus", "suas", "como", "mais", "fazer", "cada", "toda", "todo", "hoje", "ontem", "amanha", "amanhã"];
+    
+    // Get completions from the last 7 days
+    const now = new Date();
+    const sevenDaysAgo = new Date(now);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const startStr = getLocalDateString(sevenDaysAgo);
+    
+    const recentCompletions = completions.filter(c => c.date >= startStr && c.completed === true);
+    
+    recentCompletions.forEach(c => {
+        const task = allActiveTasks.find(t => String(t.id) === String(c.task_id));
+        if (task) {
+            const catClass = classifyWordContext(task.category, associations);
+            if (catClass) return; // Categoria já classificada
+            
+            const words = task.title.split(/\s+/);
+            let hasAutoClassification = false;
+            words.forEach(word => {
+                const cleaned = word.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+                if (cleaned.length > 3 && !stopWords.includes(cleaned)) {
+                    if (classifyWordContext(cleaned, {}) !== null) {
+                        hasAutoClassification = true;
+                    }
+                }
+            });
+            
+            if (!hasAutoClassification) {
+                words.forEach((word, idx) => {
+                    const cleaned = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+                    if (cleaned.length > 3 && !stopWords.includes(cleaned.toLowerCase())) {
+                        const isCapitalized = cleaned[0] === cleaned[0].toUpperCase() && cleaned[0] !== cleaned[0].toLowerCase();
+                        const wLower = cleaned.toLowerCase();
+                        
+                        // Não transforma verbos comuns terminados em 'ar', 'er', 'ir' em termos aprendidos
+                        if (wLower.match(/(ar|er|ir)$/) && wLower.length <= 8) {
+                            return;
+                        }
+                        
+                        if (!associations[wLower]) {
+                            if (isCapitalized || idx > 0) {
+                                unclassifiedCandidates.add(cleaned);
+                            }
+                        }
+                    }
+                });
+            }
+        }
+    });
+    
+    return Array.from(unclassifiedCandidates).slice(0, 3);
 }
 
 function renderChecklist() {
@@ -5318,374 +5465,192 @@ async function loadAndRenderReport(days, containerEl) {
     const prevCount = prevCompletions.length;
 
     // 4. Análise de evolução do período
-    let evolutionText = "";
-    if (prevCount > 0) {
-        const diff = currentCount - prevCount;
-        if (diff > 0) {
-            const pct = Math.round((diff / prevCount) * 100);
-            evolutionText = `Você completou **${currentCount}** tarefas, representando um aumento de **+${pct}%** em comparação com o período anterior (onde realizou ${prevCount} tarefas).`;
-        } else if (diff < 0) {
-            const pct = Math.round((Math.abs(diff) / prevCount) * 100);
-            evolutionText = `Você completou **${currentCount}** tarefas, representando uma redução de **-${pct}%** em relação ao período anterior (onde realizou ${prevCount} tarefas).`;
-        } else {
-            evolutionText = `Você completou **${currentCount}** tarefas, mantendo exatamente o mesmo nível de produtividade do período anterior.`;
-        }
-    } else {
-        evolutionText = `Você completou **${currentCount}** tarefas neste período. Não há dados suficientes do período anterior para realizar uma comparação direta de progresso.`;
-    }
-
-    // Carrega associações do usuário
     const associations = JSON.parse(localStorage.getItem("user_term_associations")) || {};
 
-    // 5. Agrupar por Categorias
+    // 5. Agrupar por Categorias e calcular planejadas vs concluídas
     const catCompletions = {};
-    const catTotals = {};
-    
-    allActiveTasks.forEach(t => {
-        catTotals[t.category] = (catTotals[t.category] || 0) + 1;
-    });
-
-    currentCompletions.forEach(c => {
-        const task = allActiveTasks.find(t => String(t.id) === String(c.task_id));
-        if (task) {
-            catCompletions[task.category] = (catCompletions[task.category] || 0) + 1;
-        }
-    });
-
-    let majorProgressArea = "Nenhuma";
-    let minorProgressArea = "Nenhuma";
-    let maxAreaComps = -1;
-    let minAreaComps = 99999;
+    const catPlanned = {};
     
     categories.forEach(cat => {
-        const comps = catCompletions[cat.name] || 0;
-        if (comps > maxAreaComps) {
-            maxAreaComps = comps;
-            majorProgressArea = cat.name;
-        }
-        if (comps < minAreaComps) {
-            minAreaComps = comps;
-            minorProgressArea = cat.name;
-        }
+        catCompletions[cat.name] = 0;
+        catPlanned[cat.name] = 0;
     });
 
-    // 6. Agrupar por Turno
-    const shiftCompletions = { "Manhã": 0, "Tarde": 0, "Noite": 0, "Geral/Sem Turno": 0 };
-    currentCompletions.forEach(c => {
+    const currentPeriodRecords = completionsList.filter(c => c.date >= startDateStr);
+    currentPeriodRecords.forEach(c => {
         const task = allActiveTasks.find(t => String(t.id) === String(c.task_id));
         if (task) {
-            const turnos = (task.context && task.context.turnos) ? task.context.turnos : [];
-            if (turnos.length === 0) {
-                shiftCompletions["Geral/Sem Turno"]++;
-            } else {
-                turnos.forEach(t => {
-                    if (shiftCompletions.hasOwnProperty(t)) {
-                        shiftCompletions[t]++;
-                    }
-                });
+            catPlanned[task.category] = (catPlanned[task.category] || 0) + 1;
+            if (c.completed === true) {
+                catCompletions[task.category] = (catCompletions[task.category] || 0) + 1;
             }
         }
     });
 
-    let bestShift = "Nenhum";
-    let maxShiftComps = -1;
-    Object.entries(shiftCompletions).forEach(([shift, count]) => {
-        if (count > maxShiftComps) {
-            maxShiftComps = count;
-            bestShift = shift;
-        }
+    // Valida se a soma das categorias corresponde ao total de tarefas
+    let sumCompletions = 0;
+    Object.values(catCompletions).forEach(val => {
+        sumCompletions += val;
     });
 
-    // 7. Produtividade por Dia da Semana
-    const weekdayCompletions = Array(7).fill(0);
-    currentCompletions.forEach(c => {
-        const d = new Date(c.date + "T12:00:00");
-        weekdayCompletions[d.getDay()]++;
-    });
-    const weekdayNames = ["Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"];
+    // 6. Principais destaques (Máximo 3)
+    const highlights = [];
+    const activeCats = categories.filter(cat => (catPlanned[cat.name] || 0) > 0);
     
-    let bestDayIdx = 0;
-    let worstDayIdx = 0;
-    let maxDayComps = -1;
-    let minDayComps = 99999;
-    weekdayCompletions.forEach((count, idx) => {
-        if (count > maxDayComps) { maxDayComps = count; bestDayIdx = idx; }
-        if (count < minDayComps) { minDayComps = count; worstDayIdx = idx; }
-    });
+    // Destaque 1: Conclusão perfeita
+    const perfectCat = activeCats.find(cat => catCompletions[cat.name] === catPlanned[cat.name]);
+    if (perfectCat) {
+        highlights.push(`Conclusão de 100% na guia **${perfectCat.name}** (${perfectCat.type || 'Não classificada'}), realizando todas as ${catPlanned[perfectCat.name]} tarefas.`);
+    }
 
-    // 8. Extração dinâmica de termos em alta (Frequência de Assuntos)
-    const wordCounts = {};
-    currentCompletions.forEach(c => {
-        const task = allActiveTasks.find(t => String(t.id) === String(c.task_id));
-        if (task) {
-            const words = task.title.toLowerCase()
-                .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "")
-                .split(/\s+/);
-            words.forEach(w => {
-                const stopWords = ["para", "com", "uma", "uns", "das", "dos", "pelo", "pela", "seus", "suas", "como", "mais", "fazer", "cada", "toda", "todo"];
-                if (w.length > 3 && !stopWords.includes(w)) {
-                    wordCounts[w] = (wordCounts[w] || 0) + 1;
-                }
-            });
+    // Destaque 2: Maior volume de conclusões
+    const maxVolumeCat = activeCats
+        .filter(cat => !perfectCat || cat.id !== perfectCat.id)
+        .sort((a, b) => catCompletions[b.name] - catCompletions[a.name])[0];
+    if (maxVolumeCat && catCompletions[maxVolumeCat.name] > 0) {
+        highlights.push(`Maior volume de atividades na guia **${maxVolumeCat.name}** (${maxVolumeCat.type || 'Não classificada'}), com ${catCompletions[maxVolumeCat.name]} conclusões.`);
+    }
+
+    // Destaque 3: Comparação com período anterior
+    if (prevCount > 0 && highlights.length < 3) {
+        const pctDiff = Math.round(((currentCount - prevCount) / prevCount) * 100);
+        if (pctDiff > 0) {
+            highlights.push(`Aumento de **+${pctDiff}%** na produtividade geral em relação ao período anterior (de ${prevCount} para ${currentCount} tarefas).`);
         }
-    });
-    const hotTopics = Object.entries(wordCounts)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3)
-        .map(([word, count]) => `**${word}** (${count}x)`);
-
-    // 9. Classificação dinâmica por tipo de categoria
-    const typeCounts = {};
-    const completedTasksDetails = [];
-
-    currentCompletions.forEach(c => {
-        const task = allActiveTasks.find(t => String(t.id) === String(c.task_id));
-        if (task) {
-            completedTasksDetails.push(task);
-            const contextCategory = classifyTaskContext(task.title, task.category, associations);
-            typeCounts[contextCategory] = (typeCounts[contextCategory] || 0) + 1;
-        }
-    });
-
-    const categoryBreakdown = Object.entries(typeCounts)
-        .filter(([type, count]) => count > 0)
-        .map(([type, count]) => `${type}: **${count}** atividades`);
-
-    // 10. Tarefas puladas/adiadas (excluídas ativamente pelo usuário)
-    const skippedTaskCounts = {};
-    skippedCompletions.forEach(c => {
-        skippedTaskCounts[c.task_id] = (skippedTaskCounts[c.task_id] || 0) + 1;
-    });
+    }
     
-    const skippedTasksList = Object.entries(skippedTaskCounts)
-        .map(([id, count]) => {
-            const task = allActiveTasks.find(t => String(t.id) === String(id));
-            return task ? { title: task.title, count: count } : null;
-        })
-        .filter(t => t !== null)
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 3);
+    if (highlights.length === 0) {
+        highlights.push("Consistência geral mantida nas tarefas planejadas.");
+    }
+    const finalHighlights = highlights.slice(0, 3);
 
-    // 11. Pendências importantes (Importantes não concluídas)
+    // 7. Pontos de atenção (Máximo 2)
+    const attentions = [];
+    
+    // Ponto 1: Baixo aproveitamento
+    const lowCompletionCat = activeCats
+        .filter(cat => catCompletions[cat.name] < catPlanned[cat.name])
+        .sort((a, b) => {
+            const rateA = catCompletions[a.name] / catPlanned[a.name];
+            const rateB = catCompletions[b.name] / catPlanned[b.name];
+            return rateA - rateB;
+        })[0];
+    if (lowCompletionCat) {
+        const rate = Math.round((catCompletions[lowCompletionCat.name] / catPlanned[lowCompletionCat.name]) * 100);
+        attentions.push(`Menor aproveitamento em **${lowCompletionCat.name}** (${lowCompletionCat.type || 'Não classificada'}): apenas **${rate}%** concluídas (${catCompletions[lowCompletionCat.name]} de ${catPlanned[lowCompletionCat.name]}).`);
+    }
+
+    // Ponto 2: Pendência importante
     const importantPending = allActiveTasks.filter(task => {
         const isImportant = task.context && (task.context.important === true || task.context.important === "true");
         if (!isImportant) return false;
         const wasCompleted = currentCompletions.some(c => String(c.task_id) === String(task.id));
         return !wasCompleted;
     });
+    if (importantPending.length > 0) {
+        const task = importantPending[0];
+        attentions.push(`Pendência importante: a tarefa **"${task.title}"** (guia ${task.category}) não foi concluída.`);
+    }
 
-    // 12. Identificar termos novos para classificar (Proper Nouns or Capitals)
-    const stopWords = ["para", "com", "uma", "uns", "das", "dos", "pelo", "pela", "seus", "suas", "como", "mais", "fazer", "cada", "toda", "todo", "hoje", "ontem", "amanha", "amanhã"];
-    const unclassifiedCandidates = new Set();
-
-    completedTasksDetails.forEach(task => {
-        const catClass = classifyWordContext(task.category, associations);
-        if (catClass) return; // Categoria já classificada
-        
-        let hasAutoClassification = false;
-        const words = task.title.split(/\s+/);
-        words.forEach(word => {
-            const cleaned = word.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
-            if (cleaned.length > 3 && !stopWords.includes(cleaned)) {
-                if (classifyWordContext(cleaned, {}) !== null) {
-                    hasAutoClassification = true;
-                }
-            }
+    // Ponto 3: Tarefas puladas
+    if (attentions.length < 2) {
+        const skippedTaskCounts = {};
+        skippedCompletions.forEach(c => {
+            skippedTaskCounts[c.task_id] = (skippedTaskCounts[c.task_id] || 0) + 1;
         });
-        
-        if (!hasAutoClassification) {
-            words.forEach((word, idx) => {
-                const cleaned = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
-                if (cleaned.length > 3 && !stopWords.includes(cleaned.toLowerCase())) {
-                    const isCapitalized = cleaned[0] === cleaned[0].toUpperCase() && cleaned[0] !== cleaned[0].toLowerCase();
-                    const wLower = cleaned.toLowerCase();
-                    if (!associations[wLower]) {
-                        if (isCapitalized || idx > 0) {
-                            unclassifiedCandidates.add(cleaned);
-                        }
-                    }
-                }
-            });
+        const worstSkipped = Object.entries(skippedTaskCounts).sort((a, b) => b[1] - a[1])[0];
+        if (worstSkipped) {
+            const task = allActiveTasks.find(t => String(t.id) === String(worstSkipped[0]));
+            if (task) {
+                attentions.push(`Tarefa adiada: **"${task.title}"** foi ignorada/pulada ${worstSkipped[1]}x.`);
+            }
         }
-    });
+    }
+    
+    if (attentions.length === 0) {
+        attentions.push("Nenhum desvio detectado. Todas as metas planejadas foram atendidas.");
+    }
+    const finalAttentions = attentions.slice(0, 2);
 
-    const labelPeriod = days === 7 ? "esta semana" : days === 30 ? "este mês" : "este ano";
-    const warningLabel = daysRemaining === 1 ? "amanhã" : `em ${daysRemaining} dias`;
+    // 8. Recomendação Prática (Exatamente 1)
+    let recommendation = "";
+    if (lowCompletionCat) {
+        recommendation = `Dedique atenção prioritária à guia **${lowCompletionCat.name}** no início do seu dia para equilibrar o progresso das atividades.`;
+    } else if (importantPending.length > 0) {
+        recommendation = `Priorize e conclua a pendência importante **"${importantPending[0].title}"** como a primeira ação do próximo ciclo.`;
+    } else {
+        recommendation = "Mantenha a consistência atual distribuindo uniformemente a conclusão das tarefas ao longo do dia.";
+    }
+
+    // Calcular prazo real de expiração
+    let expirationMessage = "";
+    if (days === 7) {
+        if (now.getDay() === 6) {
+            expirationMessage = "Este relatório expira no fim de domingo (amanhã).";
+        } else {
+            expirationMessage = "Este relatório expira no fim de hoje.";
+        }
+    } else if (days === 30) {
+        const remaining = 4 - now.getDate();
+        expirationMessage = `Este relatório expira no dia 4 do mês (em ${remaining} ${remaining === 1 ? 'dia' : 'dias'}).`;
+    } else {
+        const remaining = 4 - now.getDate();
+        expirationMessage = `Este relatório expira no dia 4 de janeiro (em ${remaining} ${remaining === 1 ? 'dia' : 'dias'}).`;
+    }
 
     const warningHtml = `
         <div style="background: rgba(245, 158, 11, 0.07); border: 1px solid rgba(245, 158, 11, 0.2); color: #eab308; padding: 12px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 0.82rem; font-weight: 600; display: flex; align-items: center; gap: 8px; line-height: 1.4;">
-            <i data-lucide="camera" style="width: 18px; height: 18px; flex-shrink: 0; color: #eab308;"></i>
-            <span>📸 Tire print! Este relatório expirará e sumirá do app ${warningLabel}.</span>
+            <i data-lucide="clock" style="width: 18px; height: 18px; flex-shrink: 0; color: #eab308;"></i>
+            <span>📸 Tire print! ${expirationMessage}</span>
         </div>
     `;
 
-    if (currentCount === 0) {
-        containerEl.innerHTML = `
-            ${warningHtml}
-            <div style="padding: 16px 8px; text-align: center; color: var(--text-secondary); font-style: italic;">
-                Nenhuma rotina ou tarefa concluída ${labelPeriod} para gerar o relatório de contexto. Continue preenchendo seu checklist para ativar a análise inteligente!
-            </div>
-        `;
-        lucide.createIcons();
-        return;
-    }
-
-    // 13. UI "Classificar Categorias Antigas" e "Ensine o App"
-    const unclassifiedCats = categories.filter(c => !c.type && c.is_active);
-    let classifyCatsHtml = "";
-    if (unclassifiedCats.length > 0) {
-        classifyCatsHtml = `
-            <section style="background: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.2); border-radius: 8px; padding: 16px; margin-top: 20px;">
-                <h6 style="margin: 0 0 10px 0; color: #f59e0b; font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <i data-lucide="alert-circle" style="width: 16px; height: 16px; color: #f59e0b;"></i> Classificar Categorias Antigas
-                </h6>
-                <p style="margin: 0 0 12px 0; font-size: 0.8rem; color: var(--text-secondary);">
-                    Algumas de suas categorias antigas não possuem um tipo de contexto associado. Defina-os abaixo para que o relatório as agrupe de forma precisa:
-                </p>
-                <div style="display: flex; flex-direction: column; gap: 10px;">
-                    ${unclassifiedCats.map(cat => `
-                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: rgba(255,255,255,0.02); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color);">
-                            <span style="font-weight: 700; color: var(--text-primary); font-size: 0.82rem;">"${cat.name}"</span>
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <select class="classify-cat-select" data-id="${cat.id}" style="background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); padding: 4px 8px; border-radius: 4px; font-size: 0.78rem;">
-                                    <option value="Trabalho">Trabalho</option>
-                                    <option value="Empresa">Empresa</option>
-                                    <option value="Faculdade/Estudos">Faculdade/Estudos</option>
-                                    <option value="Projeto">Projeto</option>
-                                    <option value="Pessoal">Pessoal</option>
-                                    <option value="Saúde">Saúde</option>
-                                    <option value="Finanças">Finanças</option>
-                                    <option value="Casa">Casa</option>
-                                    <option value="Lazer">Lazer</option>
-                                    <option value="Outro">Outro...</option>
-                                </select>
-                                <button onclick="saveCategoryType('${cat.id}', this.previousElementSibling.value, ${days})" style="background: #eab308; color: black; border: none; padding: 4px 10px; border-radius: 4px; font-size: 0.78rem; font-weight: bold; cursor: pointer;">Salvar</button>
-                            </div>
-                        </div>
-                    `).join("")}
-                </div>
-            </section>
-        `;
-    }
-
-    // 14. UI "Ensine o App" para termos desconhecidos
-    let teachSectionHtml = "";
-    if (unclassifiedCandidates.size > 0) {
-        teachSectionHtml = `
-            <section style="background: rgba(139, 92, 246, 0.05); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px; padding: 16px; margin-top: 20px;">
-                <h6 style="margin: 0 0 10px 0; color: var(--primary); font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <i data-lucide="brain" style="width: 16px; height: 16px;"></i> Ensine o App (Novos termos)
-                </h6>
-                <p style="margin: 0 0 12px 0; font-size: 0.8rem; color: var(--text-secondary);">
-                    Encontramos termos no seu checklist que não conseguimos classificar. Escolha a categoria abaixo para que o app aprenda e organize seus próximos relatórios:
-                </p>
-                <div style="display: flex; flex-direction: column; gap: 10px;">
-                    ${Array.from(unclassifiedCandidates).slice(0, 3).map(term => `
-                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: rgba(255,255,255,0.02); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color);">
-                            <span style="font-weight: 700; color: var(--text-primary); font-size: 0.82rem;">"${term}"</span>
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <select class="teach-term-select" style="background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); padding: 4px 8px; border-radius: 4px; font-size: 0.78rem;">
-                                    <option value="Trabalho/Profissional">Trabalho/Profissional</option>
-                                    <option value="Estudos/Aprendizado">Estudos/Aprendizado</option>
-                                    <option value="Saúde/Bem-estar">Saúde/Bem-estar</option>
-                                    <option value="Rotina/Organização">Rotina/Organização</option>
-                                    <option value="Pessoal/Outros">Pessoal/Outros</option>
-                                </select>
-                                <button onclick="saveTermAssociation('${term.toLowerCase()}', this.previousElementSibling.value, ${days})" style="background: var(--primary); color: white; border: none; padding: 4px 10px; border-radius: 4px; font-size: 0.78rem; font-weight: bold; cursor: pointer;">Salvar</button>
-                            </div>
-                        </div>
-                    `).join("")}
-                </div>
-            </section>
-        `;
-    }
-
-    // 14. Construir o relatório final em 5 blocos detalhados e humanos
+    // 9. Construir o relatório final em 4 blocos curtos e diretos
     let contentHtml = `
         ${warningHtml}
         
-        <div class="smart-report-container" style="display: flex; flex-direction: column; gap: 20px; text-align: left; line-height: 1.5; color: var(--text-primary); font-size: 0.88rem;">
+        <div class="smart-report-container" style="display: flex; flex-direction: column; gap: 16px; text-align: left; line-height: 1.5; color: var(--text-primary); font-size: 0.88rem;">
             
-            <!-- 1. RESUMO GERAL -->
-            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px;">
-                <h6 style="margin: 0 0 10px 0; color: var(--primary); font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <i data-lucide="activity" style="width: 16px; height: 16px;"></i> 1. Resumo Geral do Período
+            <!-- 1. RESUMO -->
+            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px;">
+                <h6 style="margin: 0 0 8px 0; color: var(--primary); font-size: 0.9rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
+                    <i data-lucide="activity" style="width: 14px; height: 14px;"></i> 1. Resumo do Período
                 </h6>
-                <p style="margin: 0; color: var(--text-secondary);">
-                    ${evolutionText} A sua dedicação resultou em um fluxo contínuo de atividades concluídas em diferentes esferas.
-                    ${categoryBreakdown.length > 0 ? ` As áreas focadas cobriram principalmente: ${categoryBreakdown.join(", ")}.` : ""}
+                <p style="margin: 0; color: var(--text-secondary); font-size: 0.82rem;">
+                    Neste ciclo, você completou **${currentCount}** tarefas no total (validadas com a soma de **${sumCompletions}** ocorrências concluídas nas guias).
+                    ${prevCount > 0 ? ` Comparado ao ciclo anterior (onde realizou ${prevCount} tarefas), você manteve um fluxo ativo de entregas.` : ""}
                 </p>
             </section>
 
-            <!-- 2. PRINCIPAIS CONQUISTAS -->
-            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px;">
-                <h6 style="margin: 0 0 10px 0; color: #10b981; font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <i data-lucide="trophy" style="width: 16px; height: 16px;"></i> 2. Principais Conquistas
+            <!-- 2. DESTAQUES -->
+            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px;">
+                <h6 style="margin: 0 0 8px 0; color: #10b981; font-size: 0.9rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
+                    <i data-lucide="trophy" style="width: 14px; height: 14px;"></i> 2. Principais Destaques
                 </h6>
-                <p style="margin: 0; color: var(--text-secondary);">
-                    O maior volume de tarefas concluídas concentrou-se na categoria **${majorProgressArea}** com **${maxAreaComps}** atividades realizadas.
-                    ${hotTopics.length > 0 ? ` Os assuntos mais trabalhados e resolvidos de forma recorrente foram: ${hotTopics.join(", ")}.` : ""}
-                    ${maxShiftComps > 0 ? ` Esse rendimento demonstra excelente foco, em especial durante o turno da **${bestShift}**, que registrou o maior volume de resoluções.` : ""}
+                <ul style="margin: 0; padding-left: 18px; color: var(--text-secondary); font-size: 0.82rem; display: flex; flex-direction: column; gap: 4px;">
+                    ${finalHighlights.map(h => `<li>${h}</li>`).join("")}
+                </ul>
+            </section>
+
+            <!-- 3. PONTOS DE ATENÇÃO -->
+            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px;">
+                <h6 style="margin: 0 0 8px 0; color: #ef4444; font-size: 0.9rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
+                    <i data-lucide="alert-triangle" style="width: 14px; height: 14px;"></i> 3. Pontos de Atenção
+                </h6>
+                <ul style="margin: 0; padding-left: 18px; color: var(--text-secondary); font-size: 0.82rem; display: flex; flex-direction: column; gap: 4px;">
+                    ${finalAttentions.map(a => `<li>${a}</li>`).join("")}
+                </ul>
+            </section>
+
+            <!-- 4. RECOMENDAÇÃO PRÁTICA -->
+            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px;">
+                <h6 style="margin: 0 0 8px 0; color: #8b5cf6; font-size: 0.9rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
+                    <i data-lucide="lightbulb" style="width: 14px; height: 14px;"></i> 4. Recomendação Prática
+                </h6>
+                <p style="margin: 0; color: var(--text-secondary); font-size: 0.82rem;">
+                    ${recommendation}
                 </p>
             </section>
-
-            <!-- 3. PONTOS QUE PRECISAM DE ATENÇÃO -->
-            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px;">
-                <h6 style="margin: 0 0 10px 0; color: #f59e0b; font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <i data-lucide="alert-triangle" style="width: 16px; height: 16px;"></i> 3. Pontos que Precisam de Atenção
-                </h6>
-                <div style="color: var(--text-secondary); display: flex; flex-direction: column; gap: 8px;">
-                    <p style="margin: 0;">
-                        A categoria **${minorProgressArea}** teve menor índice de engajamento, somando apenas **${minAreaComps}** tarefas executadas no período. 
-                    </p>
-                    ${skippedTasksList.length > 0 ? `
-                        <p style="margin: 0;">
-                            Identificamos tarefas recorrentes que foram repetidamente adiadas ou puladas:
-                            <ul style="margin: 4px 0 0 16px; padding: 0;">
-                                ${skippedTasksList.map(t => `<li>**${t.title}** (pulada ${t.count}x)</li>`).join("")}
-                            </ul>
-                        </p>
-                    ` : ""}
-                    ${importantPending.length > 0 ? `
-                        <p style="margin: 0;">
-                            Existem **${importantPending.length}** pendências prioritárias não resolvidas, marcadas como importantes:
-                            <ul style="margin: 4px 0 0 16px; padding: 0;">
-                                ${importantPending.slice(0, 3).map(t => `<li>**${t.title}** (Categoria: ${t.category})</li>`).join("")}
-                            </ul>
-                        </p>
-                    ` : ""}
-                </div>
-            </section>
-
-            <!-- 4. PADRÕES IDENTIFICADOS -->
-            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px;">
-                <h6 style="margin: 0 0 10px 0; color: #3b82f6; font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <i data-lucide="bar-chart-2" style="width: 16px; height: 16px;"></i> 4. Padrões Identificados
-                </h6>
-                <p style="margin: 0; color: var(--text-secondary);">
-                    Seu ritmo de produtividade indica que o dia **${weekdayNames[bestDayIdx]}** foi o mais consistente, registrando o pico de **${maxDayComps}** tarefas realizadas. 
-                    Em contrapartida, o dia **${weekdayNames[worstDayIdx]}** apresentou menor atividade, acumulando **${minDayComps === 99999 ? 0 : minDayComps}** tarefas concluídas.
-                    A distribuição de energia diária aponta maior concentração de conclusões na **${bestShift}**, sugerindo um padrão de melhor rendimento nesse período.
-                </p>
-            </section>
-
-            <!-- 5. RECOMENDAÇÃO PRÁTICA -->
-            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px;">
-                <h6 style="margin: 0 0 10px 0; color: #8b5cf6; font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <i data-lucide="lightbulb" style="width: 16px; height: 16px;"></i> 5. Recomendação Prática
-                </h6>
-                <p style="margin: 0; color: var(--text-secondary);">
-                    Para o próximo período, sugerimos dedicar atenção prioritária à categoria **${minorProgressArea}** no início do seu dia para equilibrar o progresso.
-                    ${importantPending.length > 0 ? ` Tente programar e resolver a pendência **"${importantPending[0].title}"** como sua primeira atividade de amanhã.` : ""}
-                    ${skippedTasksList.length > 0 ? ` Avalie reestruturar ou quebrar a rotina **"${skippedTasksList[0].title}"** em passos menores para reduzir o atrito e evitar que seja adiada novamente.` : ""}
-                </p>
-            </section>
-            
-            <!-- Bloco de Classificação de Categorias Antigas -->
-            ${classifyCatsHtml}
-
-            <!-- Bloco interativo de Ensino do App -->
-            ${teachSectionHtml}
             
         </div>
     `;

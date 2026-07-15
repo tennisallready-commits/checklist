@@ -343,8 +343,19 @@
                     </div>
                     
                     <!-- List of current categories -->
-                    <div class="manage-list" id="manage-categories-list" style="max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; scrollbar-width: thin;">
+                    <div class="manage-list" id="manage-categories-list" style="max-height: 280px; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; scrollbar-width: thin; box-sizing: border-box;">
                         <!-- Javascript will inject categories list here -->
+                    </div>
+
+                    <!-- Interactive Settings sections: Learn and Classify -->
+                    <div id="settings-classify-unclassified-cats-wrapper" style="margin-top: 16px; display: none; background: rgba(245, 158, 11, 0.03); padding: 12px; border-radius: var(--radius-md); border: 1px solid rgba(245, 158, 11, 0.15);">
+                        <label style="display:block; font-size:0.7rem; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; color:#f59e0b; margin-bottom:8px;">⚠️ Classificar Categorias Antigas</label>
+                        <div id="settings-unclassified-cats-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
+                    </div>
+                    
+                    <div id="settings-teach-app-wrapper" style="margin-top: 16px; display: none; background: rgba(139, 92, 246, 0.03); padding: 12px; border-radius: var(--radius-md); border: 1px solid rgba(139, 92, 246, 0.15);">
+                        <label style="display:block; font-size:0.7rem; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; color:var(--primary); margin-bottom:8px;">🧠 Ensine o App (Novos Termos)</label>
+                        <div id="settings-teach-app-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
                     </div>
                 </div>
                 <!-- Supabase credentials are kept fixed in code -->
@@ -715,6 +726,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=7.52"></script>
+    <script src="app.js?v=7.54"></script>
 </body>
 </html>
