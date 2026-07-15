@@ -5,6 +5,37 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Checklist Diário Organizacional</title>
+
+    <!-- Global Error Catcher for Debugging -->
+    <script>
+        window.addEventListener('error', function(e) {
+            const showError = () => {
+                const errorDiv = document.createElement('div');
+                errorDiv.style.position = 'fixed';
+                errorDiv.style.top = '10px';
+                errorDiv.style.left = '10px';
+                errorDiv.style.right = '10px';
+                errorDiv.style.background = '#ef4444';
+                errorDiv.style.color = '#fff';
+                errorDiv.style.padding = '16px';
+                errorDiv.style.borderRadius = '8px';
+                errorDiv.style.zIndex = '99999';
+                errorDiv.style.fontSize = '12px';
+                errorDiv.style.fontFamily = 'monospace';
+                errorDiv.style.whiteSpace = 'pre-wrap';
+                errorDiv.style.boxShadow = '0 10px 30px rgba(0,0,0,0.5)';
+                errorDiv.innerHTML = '<strong>Erro de JavaScript detectado:</strong><br><br>' + 
+                    e.message + '<br>Arquivo: ' + e.filename + '<br>Linha: ' + e.lineno + ':' + e.colno +
+                    '<br><br><button onclick="this.parentElement.remove()" style="background:#fff;color:#ef4444;border:none;padding:6px 12px;border-radius:4px;font-weight:bold;cursor:pointer;">Fechar</button>';
+                document.body.appendChild(errorDiv);
+            };
+            if (document.body) {
+                showError();
+            } else {
+                document.addEventListener('DOMContentLoaded', showError);
+            }
+        });
+    </script>
     <link rel="stylesheet" href="style.css?v=7.42">
     
     <!-- iOS / PWA Support -->
