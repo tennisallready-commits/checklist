@@ -1755,7 +1755,7 @@ async function loadData() {
             categories = dbCats;
             allActiveTasks = dbTasks || [];
 
-            const completedBeforeIds = new Set(dbCompletionsBefore.map(c => c.task_id));
+            const completedBeforeIds = new Set(dbCompletionsBefore.map(c => String(c.task_id)));
             
             let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
             Object.keys(queue).forEach(key => {
@@ -1781,6 +1781,8 @@ async function loadData() {
             const completedTodayIds = new Set(dbCompletionsToday.filter(c => c.completed === true).map(c => String(c.task_id)));
             const excludedTodayIds = new Set(dbCompletionsToday.filter(c => c.completed === false).map(c => String(c.task_id)));
 
+            const todayStr = getLocalDateString(new Date());
+
             // Map tasks with Rollover and Recurrence
             tasks = dbTasks.filter(task => {
                 if (excludedTodayIds.has(String(task.id))) return false;
@@ -1798,8 +1800,13 @@ async function loadData() {
                     // Tarefas diárias aparecem a partir da data de criação
                     return taskCreatedDate <= selectedDate;
                 } else {
-                    // Tarefas únicas aparecem estritamente no dia para o qual foram programadas
-                    return taskCreatedDate === selectedDate;
+                    if (selectedDate === todayStr) {
+                        return taskCreatedDate === selectedDate || (taskCreatedDate < selectedDate && !completedBeforeIds.has(String(task.id)));
+                    } else if (selectedDate < todayStr) {
+                        return completedTodayIds.has(String(task.id));
+                    } else {
+                        return taskCreatedDate === selectedDate;
+                    }
                 }
             }).map(task => ({
                 id: task.id,
@@ -1932,6 +1939,8 @@ function loadDataOffline() {
     );
 
     // Map tasks
+    const todayStr = getLocalDateString(new Date());
+
     tasks = localTasks.filter(task => {
         if (!task.is_active) return false;
         if (excludedTodayIds.has(String(task.id))) return false;
@@ -1947,7 +1956,13 @@ function loadDataOffline() {
             }
             return taskCreatedDate <= selectedDate;
         } else {
-            return taskCreatedDate === selectedDate;
+            if (selectedDate === todayStr) {
+                return taskCreatedDate === selectedDate || (taskCreatedDate < selectedDate && !completedBeforeIds.has(String(task.id)));
+            } else if (selectedDate < todayStr) {
+                return completedTodayIds.has(String(task.id));
+            } else {
+                return taskCreatedDate === selectedDate;
+            }
         }
     }).map(task => ({
         id: task.id,
@@ -5574,7 +5589,11 @@ async function loadAndRenderReport(days, containerEl) {
     });
     if (importantPending.length > 0) {
         const task = importantPending[0];
-        attentions.push(`Pendência importante: a tarefa **"${task.title}"** (guia ${task.category}) não foi concluída.`);
+        const createdTime = new Date(task.created_at || now);
+        const diffMs = now - createdTime;
+        const diffDays = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+        const diffHours = Math.max(0, Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)));
+        attentions.push(`Pendência importante: a tarefa **"${task.title}"** (guia ${task.category}) não foi concluída (atrasada há **${diffDays} dias e ${diffHours} horas**).`);
     }
 
     // Ponto 3: Tarefas puladas
@@ -5587,7 +5606,11 @@ async function loadAndRenderReport(days, containerEl) {
         if (worstSkipped) {
             const task = allActiveTasks.find(t => String(t.id) === String(worstSkipped[0]));
             if (task) {
-                attentions.push(`Tarefa adiada: **"${task.title}"** foi ignorada/pulada ${worstSkipped[1]}x.`);
+                const createdTime = new Date(task.created_at || now);
+                const diffMs = now - createdTime;
+                const diffDays = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+                const diffHours = Math.max(0, Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)));
+                attentions.push(`Tarefa adiada: **"${task.title}"** foi ignorada/pulada ${worstSkipped[1]}x (acumulando **${diffDays} dias e ${diffHours} horas** de pendência).`);
             }
         }
     }
