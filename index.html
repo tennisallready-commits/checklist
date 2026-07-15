@@ -310,53 +310,9 @@
                 
                 <!-- Manage Categories Section -->
                 <div style="margin-bottom: 24px;">
-                    <label style="display:block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); margin-bottom:8px;">Gerenciar Locais / Categorias</label>
-                    
-                    <!-- Quick Add Form -->
-                    <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; background: rgba(255,255,255,0.02); padding: 12px; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
-                        <div style="display: flex; flex-direction: column; gap: 4px;">
-                            <label style="font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);">Nome da Categoria</label>
-                            <input type="text" id="input-new-category" placeholder="Nome (ex: Unisinos)" autocomplete="off" style="width: 100%; padding: 8px 10px; font-size: 0.82rem;">
-                        </div>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-                            <div style="display: flex; flex-direction: column; gap: 4px;">
-                                <label style="font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);">Tipo de Contexto</label>
-                                <select id="select-new-category-type" style="width: 100%; padding: 8px 10px; font-size: 0.82rem; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
-                                    <option value="Trabalho">Trabalho</option>
-                                    <option value="Empresa">Empresa</option>
-                                    <option value="Faculdade/Estudos">Faculdade/Estudos</option>
-                                    <option value="Projeto">Projeto</option>
-                                    <option value="Pessoal">Pessoal</option>
-                                    <option value="Saúde">Saúde</option>
-                                    <option value="Finanças">Finanças</option>
-                                    <option value="Casa">Casa</option>
-                                    <option value="Lazer">Lazer</option>
-                                    <option value="Outro">Outro...</option>
-                                </select>
-                            </div>
-                            <div id="wrapper-custom-type" style="display: none; flex-direction: column; gap: 4px;">
-                                <label style="font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);">Tipo Personalizado</label>
-                                <input type="text" id="input-new-category-custom-type" placeholder="Ex: Viagens" style="width: 100%; padding: 8px 10px; font-size: 0.82rem;">
-                            </div>
-                        </div>
-                        <button id="btn-add-category" class="btn btn-primary" style="width: 100%; padding: 10px; font-weight: 700; font-size: 0.82rem;">Adicionar Categoria</button>
-                    </div>
-                    
-                    <!-- List of current categories -->
-                    <div class="manage-list" id="manage-categories-list" style="max-height: 280px; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; scrollbar-width: thin; box-sizing: border-box;">
-                        <!-- Javascript will inject categories list here -->
-                    </div>
-
-                    <!-- Interactive Settings sections: Learn and Classify -->
-                    <div id="settings-classify-unclassified-cats-wrapper" style="margin-top: 16px; display: none; background: rgba(245, 158, 11, 0.03); padding: 12px; border-radius: var(--radius-md); border: 1px solid rgba(245, 158, 11, 0.15);">
-                        <label style="display:block; font-size:0.7rem; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; color:#f59e0b; margin-bottom:8px;">⚠️ Classificar Categorias Antigas</label>
-                        <div id="settings-unclassified-cats-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
-                    </div>
-                    
-                    <div id="settings-teach-app-wrapper" style="margin-top: 16px; display: none; background: rgba(139, 92, 246, 0.03); padding: 12px; border-radius: var(--radius-md); border: 1px solid rgba(139, 92, 246, 0.15);">
-                        <label style="display:block; font-size:0.7rem; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; color:var(--primary); margin-bottom:8px;">🧠 Ensine o App (Novos Termos)</label>
-                        <div id="settings-teach-app-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
-                    </div>
+                    <button id="btn-open-manage-categories" class="btn btn-secondary btn-block" style="border: 1px solid var(--border-color); display: flex; align-items: center; justify-content: center; gap: 8px; font-weight: 700; padding: 12px; width: 100%;">
+                        <i data-lucide="folder"></i> Gerenciar Categorias
+                    </button>
                 </div>
                 <!-- Supabase credentials are kept fixed in code -->
                 
@@ -726,6 +682,77 @@
         </div>
     </div>
 
-    <script src="app.js?v=7.54"></script>
+    <!-- Modal: Gerenciar Categorias -->
+    <div id="modal-manage-categories" class="modal" style="display: none;">
+        <div class="modal-overlay" id="overlay-manage-categories" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 1000;"></div>
+        <div class="modal-content manage-modal-content" style="max-width: 480px; width: 90%; max-height: 85vh; display: flex; flex-direction: column; z-index: 1001; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);">
+            <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 16px;">
+                <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800; display: flex; align-items: center; gap: 8px;">
+                    <i data-lucide="folder" style="color: var(--primary);"></i> Gerenciar Categorias
+                </h3>
+                <button id="btn-close-manage-categories-modal" class="modal-close" style="background: transparent; border: none; color: var(--text-secondary); cursor: pointer; padding: 4px; display: flex; align-items: center; justify-content: center;"><i data-lucide="x"></i></button>
+            </div>
+            
+            <div class="modal-body-scroll" style="overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 20px; padding-right: 4px; scrollbar-width: thin; box-sizing: border-box;">
+                <!-- Seção 1: Criar Nova Categoria -->
+                <div style="background: rgba(255,255,255,0.01); border: 1px solid var(--border-color); padding: 14px; border-radius: var(--radius-md); display: flex; flex-direction: column; gap: 12px;">
+                    <h4 style="margin: 0; font-size: 0.85rem; font-weight: 800; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 6px;">
+                        <i data-lucide="plus-circle" style="width: 14px; height: 14px; color: var(--primary);"></i> Nova Categoria
+                    </h4>
+                    <div style="display: flex; flex-direction: column; gap: 4px;">
+                        <label style="font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);">Nome da Categoria</label>
+                        <input type="text" id="input-new-category" placeholder="Nome (ex: Unisinos)" autocomplete="off" style="width: 100%; padding: 8px 10px; font-size: 0.82rem;">
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                        <div style="display: flex; flex-direction: column; gap: 4px;">
+                            <label style="font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);">Tipo de Contexto</label>
+                            <select id="select-new-category-type" style="width: 100%; padding: 8px 10px; font-size: 0.82rem; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
+                                <option value="Trabalho">Trabalho</option>
+                                <option value="Empresa">Empresa</option>
+                                <option value="Faculdade/Estudos">Faculdade/Estudos</option>
+                                <option value="Projeto">Projeto</option>
+                                <option value="Pessoal">Pessoal</option>
+                                <option value="Saúde">Saúde</option>
+                                <option value="Finanças">Finanças</option>
+                                <option value="Casa">Casa</option>
+                                <option value="Lazer">Lazer</option>
+                                <option value="Outro">Outro...</option>
+                            </select>
+                        </div>
+                        <div id="wrapper-custom-type" style="display: none; flex-direction: column; gap: 4px;">
+                            <label style="font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);">Tipo Personalizado</label>
+                            <input type="text" id="input-new-category-custom-type" placeholder="Ex: Viagens" style="width: 100%; padding: 8px 10px; font-size: 0.82rem;">
+                        </div>
+                    </div>
+                    <button id="btn-add-category" class="btn btn-primary" style="width: 100%; padding: 10px; font-weight: 700; font-size: 0.82rem;">Adicionar Categoria</button>
+                </div>
+
+                <!-- Seção 2: Categorias Existentes -->
+                <div>
+                    <h4 style="margin: 0 0 10px 0; font-size: 0.85rem; font-weight: 800; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 6px;">
+                        <i data-lucide="list" style="width: 14px; height: 14px; color: var(--primary);"></i> Categorias Cadastradas
+                    </h4>
+                    <!-- List of current categories -->
+                    <div class="manage-list" id="manage-categories-list" style="max-height: 280px; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; scrollbar-width: thin; box-sizing: border-box;">
+                        <!-- Javascript will inject categories list here -->
+                    </div>
+                </div>
+
+                <!-- Seção 3: Classificar Categorias Antigas -->
+                <div id="settings-classify-unclassified-cats-wrapper" style="display: none; background: rgba(245, 158, 11, 0.03); padding: 12px; border-radius: var(--radius-md); border: 1px solid rgba(245, 158, 11, 0.15);">
+                    <label style="display:block; font-size:0.7rem; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; color:#f59e0b; margin-bottom:8px;">⚠️ Classificar Categorias Antigas</label>
+                    <div id="settings-unclassified-cats-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
+                </div>
+                
+                <!-- Seção 4: Ensine o App -->
+                <div id="settings-teach-app-wrapper" style="display: none; background: rgba(139, 92, 246, 0.03); padding: 12px; border-radius: var(--radius-md); border: 1px solid rgba(139, 92, 246, 0.15);">
+                    <label style="display:block; font-size:0.7rem; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; color:var(--primary); margin-bottom:8px;">🧠 Ensine o App (Novos Termos)</label>
+                    <div id="settings-teach-app-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=7.56"></script>
 </body>
 </html>

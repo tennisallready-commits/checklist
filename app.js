@@ -273,6 +273,9 @@ const btnAddTaskModal = document.getElementById("btn-add-task-modal");
 const btnShareReport = document.getElementById("btn-share-report");
 const btnCloseAddModal = document.getElementById("btn-close-add-modal");
 const btnCloseManageModal = document.getElementById("btn-close-manage-modal");
+const modalManageCategories = document.getElementById("modal-manage-categories");
+const btnOpenManageCategories = document.getElementById("btn-open-manage-categories");
+const btnCloseManageCategoriesModal = document.getElementById("btn-close-manage-categories-modal");
 
 const btnResetDefault = document.getElementById("btn-reset-default");
 const btnClearAll = document.getElementById("btn-clear-all");
@@ -781,6 +784,27 @@ function setupEventListeners() {
     // Settings Modal
     btnManageTasks.addEventListener("click", () => openModal(modalManageTasks));
     btnCloseManageModal.addEventListener("click", () => closeModal(modalManageTasks));
+
+    // Categories Management Modal
+    if (btnOpenManageCategories) {
+        btnOpenManageCategories.addEventListener("click", () => {
+            closeModal(modalManageTasks);
+            openModal(modalManageCategories);
+            renderCategories();
+        });
+    }
+    if (btnCloseManageCategoriesModal) {
+        btnCloseManageCategoriesModal.addEventListener("click", () => {
+            closeModal(modalManageCategories);
+            openModal(modalManageTasks);
+        });
+    }
+    const overlayManageCategories = document.getElementById("overlay-manage-categories");
+    if (overlayManageCategories) {
+        overlayManageCategories.addEventListener("click", () => {
+            closeModal(modalManageCategories);
+        });
+    }
 
     // Save Settings Inputs
     inputOrgName.addEventListener("input", (e) => {
@@ -5655,7 +5679,7 @@ async function loadAndRenderReport(days, containerEl) {
         </div>
     `;
 
-    containerEl.innerHTML = contentHtml;
+    containerEl.innerHTML = contentHtml.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
     lucide.createIcons();
 }
 
