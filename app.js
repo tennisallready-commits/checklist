@@ -1,3 +1,4 @@
+(function() {
 // ----------------------------------------------------
 // Supabase Configuration
 // ----------------------------------------------------
@@ -5555,3 +5556,4 @@ function showWebNotification(title, body, taskId) {
 
 // Verifica as notificações de tarefas importantes a cada 60 segundos
 setInterval(checkImportantTaskNotifications, 60000);
+})();

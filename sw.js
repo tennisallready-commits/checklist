@@ -1,10 +1,9 @@
-// Service Worker with Network-First strategy to ensure updates are delivered while online
-const CACHE_NAME = 'checklist-cache-v7.59';
+const CACHE_NAME = 'checklist-cache-v7.60';
 const ASSETS = [
   './',
   './index.html',
   './style.css?v=7.42',
-  './app.js?v=7.42',
+  './app.js?v=7.43',
   './manifest.json',
   'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap',
   'https://unpkg.com/lucide@latest',
