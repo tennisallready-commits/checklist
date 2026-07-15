@@ -690,9 +690,25 @@ function setupEventListeners() {
             return;
         }
 
-        const todayStr = getLocalDateString(new Date());
+        const now = new Date();
+        const todayStr = getLocalDateString(now);
         const isFutureDate = selectedDate > todayStr;
-        if (isEditMode || isHistoryMode || isFutureDate) return;
+        
+        let isPastNightShiftException = false;
+        const yesterdayDate = new Date(now);
+        yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+        const yesterdayStr = getLocalDateString(yesterdayDate);
+        
+        if (selectedDate === yesterdayStr && now.getHours() < 12) {
+            const taskId = String(item.dataset.id).match(/^\d+$/) ? parseInt(item.dataset.id, 10) : item.dataset.id;
+            const task = tasks.find(t => String(t.id) === String(taskId));
+            const turnos = (task && task.context && task.context.turnos) ? task.context.turnos : [];
+            if (turnos.includes("Noite")) {
+                isPastNightShiftException = true;
+            }
+        }
+
+        if (isEditMode || (isHistoryMode && !isPastNightShiftException) || isFutureDate) return;
         
         const isCompleting = !item.classList.contains("completed");
         if (isCompleting) {
@@ -2136,7 +2152,20 @@ function renderChecklist() {
 // Cria e configura o elemento DOM de um card de tarefa reutilizável
 function createTaskDOMElement(task) {
     const taskEl = document.createElement("div");
-    taskEl.className = `task-item ${task.completed ? 'completed' : ''}`;
+    
+    // Exception for completing night shift tasks of the previous day during the morning (before 12 PM)
+    const now = new Date();
+    const yesterdayDate = new Date(now);
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterdayStr = getLocalDateString(yesterdayDate);
+    
+    let isPastNightShiftException = false;
+    const turnos = (task.context && task.context.turnos) ? task.context.turnos : [];
+    if (selectedDate === yesterdayStr && now.getHours() < 12 && turnos.includes("Noite")) {
+        isPastNightShiftException = true;
+    }
+    
+    taskEl.className = `task-item ${task.completed ? 'completed' : ''} ${isPastNightShiftException ? 'editable-past-night' : ''}`;
     taskEl.dataset.id = task.id;
 
     // Estilo dinâmico da categoria
@@ -2528,7 +2557,23 @@ function updateProgress() {
 // ----------------------------------------------------
 async function toggleTask(id) {
     localDataVersion++;
-    if (isHistoryMode) return;
+    
+    // Exception for completing night shift tasks of the previous day during the morning (before 12 PM)
+    const now = new Date();
+    const todayStr = getLocalDateString(now);
+    const yesterdayDate = new Date(now);
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterdayStr = getLocalDateString(yesterdayDate);
+    
+    let isPastNightShiftException = false;
+    const task = tasks.find(t => String(t.id) === String(id));
+    const turnos = (task && task.context && task.context.turnos) ? task.context.turnos : [];
+    
+    if (selectedDate === yesterdayStr && now.getHours() < 12 && turnos.includes("Noite")) {
+        isPastNightShiftException = true;
+    }
+    
+    if (isHistoryMode && !isPastNightShiftException) return;
     if (pendingToggles.has(id)) return;
     pendingToggles.add(id);
 

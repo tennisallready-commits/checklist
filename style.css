@@ -2191,3 +2191,21 @@ body.theme-light .manual-task-item.completed {
     transform: scale(1) !important;
     opacity: 1 !important;
 }
+
+/* Exceção do turno da noite anterior ativa para cliques de manhã */
+.app-container.history-mode .task-item.editable-past-night {
+    opacity: 1 !important;
+    cursor: pointer !important;
+}
+
+.app-container.history-mode .task-item.editable-past-night:active {
+    transform: scale(0.985) !important;
+    background: rgba(255, 255, 255, 0.03) !important;
+}
+
+.app-container.history-mode .task-item.editable-past-night .task-checkbox {
+    cursor: pointer !important;
+    opacity: 1 !important;
+    background: transparent !important;
+    border-color: var(--text-muted) !important;
+}
