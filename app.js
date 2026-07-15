@@ -222,7 +222,7 @@ async function initApp() {
 
 function isTemporaryId(id) {
     const str = String(id);
-    return /^\d+$/.test(str);
+    return str.startsWith("temp-") || (/^\d{13,}$/.test(str));
 }
 // Event Listeners Setup
 // ----------------------------------------------------
@@ -1557,6 +1557,7 @@ async function loadData() {
                 repeat_days: task.repeat_days || null,
                 context: typeof task.context === 'string' ? ( () => { try { return JSON.parse(task.context); } catch(e) { return {}; } } )() : task.context || null,
                 assigned_to: task.assigned_to || null,
+                created_at: task.created_at,
                 completed: completedTodayIds.has(String(task.id))
             }));
 
@@ -1695,6 +1696,7 @@ function loadDataOffline() {
         repeat_days: task.repeat_days || null,
         context: typeof task.context === 'string' ? ( () => { try { return JSON.parse(task.context); } catch(e) { return {}; } } )() : task.context || null,
         assigned_to: task.assigned_to || null,
+        created_at: task.created_at,
         completed: completedTodayIds.has(String(task.id))
     }));
 }
@@ -2292,8 +2294,8 @@ function saveNewTasksOrder(container) {
         }
 
         // Tenta disparar uma sincronização silenciosa para garantir que o banco seja atualizado se possível
-        if (navigator.onLine && typeof syncOfflineData === 'function') {
-            setTimeout(syncOfflineData, 1000);
+        if (navigator.onLine && typeof syncOfflineDataToCloud === 'function') {
+            setTimeout(syncOfflineDataToCloud, 1000);
         }
 
     } catch(err) { 
@@ -2597,8 +2599,23 @@ async function updateTask(id, updates) {
     if (updates.title !== undefined) {
         const category = existingTask ? existingTask.category : "";
         const nlpContext = analyzeTaskContext(updates.title, category, tasks) || {};
-        // Mescla o contexto analisado com o que já foi enviado (como os turnos selecionados)
-        updates.context = { ...(updates.context || {}), ...nlpContext };
+        
+        // Get existing context
+        let existingContext = {};
+        if (existingTask && existingTask.context) {
+            if (typeof existingTask.context === 'string') {
+                try {
+                    existingContext = JSON.parse(existingTask.context);
+                } catch (e) {
+                    existingContext = {};
+                }
+            } else {
+                existingContext = { ...existingTask.context };
+            }
+        }
+        
+        // Mescla o contexto existente, o contexto atualizado enviado no updates, e o nlpContext analisado
+        updates.context = { ...existingContext, ...(updates.context || {}), ...nlpContext };
     }
 
     // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
@@ -2691,9 +2708,8 @@ function openEditTaskModal(task) {
     
     // Set date from created_at
     const editDate = document.getElementById("edit-task-date");
-    // We need the original created_at; find from the full task data if available
-    // For now use selectedDate as fallback
-    editDate.value = selectedDate;
+    const taskDate = (task && task.created_at) ? extractDateFromTimestamp(task.created_at) : selectedDate;
+    editDate.value = taskDate;
 
     // Configura a categoria
     if (selectEditTaskCategory) {
@@ -2743,10 +2759,18 @@ async function deleteTask(id) {
 
     // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
     if (supabaseClient && currentUser) {
+        let updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+        updatesQueue[id] = { ...(updatesQueue[id] || {}), is_active: false };
+        localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
+
         supabaseClient.from('tasks').update({ is_active: false }).eq('id', id)
             .then(({ error }) => {
                 if (error) {
                     console.warn("Erro ao deletar no Supabase. Mantido localmente.", error.message);
+                } else {
+                    let queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+                    delete queue[id];
+                    localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
                 }
                 pendingDeletes.delete(id);
             })
@@ -3841,6 +3865,79 @@ function setupSupabaseAuth() {
 
 async function syncOfflineDataToCloud() {
     if (!supabaseClient || !currentUser) return;
+
+    // 1. Sincronizar novas categorias criadas offline
+    let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+    const pendingInsertCats = localCats.filter(c => isTemporaryId(c.id) && c.is_active !== false);
+    
+    for (const pending of pendingInsertCats) {
+        try {
+            const { data, error } = await supabaseClient.from('categories').insert({ name: pending.name, is_active: true }).select();
+            if (!error && data && data.length > 0) {
+                const realCat = data[0];
+                const tempId = pending.id;
+                
+                // Atualiza na memória
+                categories = categories.map(c => String(c.id) === String(tempId) ? realCat : c);
+                
+                // Atualiza no LocalStorage
+                localCats = localCats.map(c => String(c.id) === String(tempId) ? realCat : c);
+                localStorage.setItem("offline_categories", JSON.stringify(localCats));
+            }
+        } catch (e) {
+            console.warn("Erro ao sincronizar nova categoria offline:", e);
+        }
+    }
+
+    // 2. Sincronizar novas tarefas criadas offline
+    let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    const pendingInsertTasks = localTasks.filter(t => isTemporaryId(t.id) && t.is_active !== false);
+    
+    for (const pending of pendingInsertTasks) {
+        const newTaskPayload = {
+            title: pending.title,
+            category: pending.category,
+            is_recurring: pending.is_recurring,
+            is_active: true,
+            created_at: pending.created_at || new Date().toISOString()
+        };
+        if (pending.repeat_days) newTaskPayload.repeat_days = pending.repeat_days;
+        if (pending.context) newTaskPayload.context = pending.context;
+        if (pending.assigned_to) newTaskPayload.assigned_to = pending.assigned_to;
+        if (currentUser) newTaskPayload.user_id = currentUser.id;
+        
+        try {
+            const { data, error } = await supabaseClient.from('tasks').insert(newTaskPayload).select();
+            if (!error && data && data.length > 0) {
+                const realTask = data[0];
+                const tempId = pending.id;
+                
+                // Atualiza na memória
+                tasks = tasks.map(t => String(t.id) === String(tempId) ? { ...t, id: realTask.id } : t);
+                allActiveTasks = allActiveTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
+                
+                // Atualiza no LocalStorage
+                localTasks = localTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
+                localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+                
+                // Atualiza conclusões na fila que apontavam para o ID temporário
+                let compQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+                let updatedCompQueue = {};
+                Object.keys(compQueue).forEach(key => {
+                    const [tid, date] = key.split('_');
+                    if (String(tid) === String(tempId)) {
+                        updatedCompQueue[`${realTask.id}_${date}`] = compQueue[key];
+                    } else {
+                        updatedCompQueue[key] = compQueue[key];
+                    }
+                });
+                localStorage.setItem("offline_completions_queue", JSON.stringify(updatedCompQueue));
+            }
+        } catch (e) {
+            console.warn("Erro ao sincronizar nova tarefa offline:", e);
+        }
+    }
+
     let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
     let hasChanges = false;
     for (const key of Object.keys(queue)) {
