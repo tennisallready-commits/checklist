@@ -789,22 +789,54 @@ function setupEventListeners() {
         localStorage.setItem("checklist_org_name", val);
     });
 
+    // Toggle custom type input wrapper on select change
+    const selectNewCategoryType = document.getElementById("select-new-category-type");
+    const wrapperCustomType = document.getElementById("wrapper-custom-type");
+    const inputNewCategoryCustomType = document.getElementById("input-new-category-custom-type");
+
+    if (selectNewCategoryType && wrapperCustomType) {
+        selectNewCategoryType.addEventListener("change", () => {
+            if (selectNewCategoryType.value === "Outro") {
+                wrapperCustomType.style.display = "flex";
+            } else {
+                wrapperCustomType.style.display = "none";
+            }
+        });
+    }
+
     // Add New Category (Settings Modal)
     btnAddCategory.addEventListener("click", async () => {
         const val = inputNewCategory.value.trim();
-        if (val) {
-            if (btnAddCategory.disabled) return;
-            btnAddCategory.disabled = true;
-            const originalText = btnAddCategory.innerHTML;
-            btnAddCategory.innerHTML = "Salvando...";
+        let typeVal = selectNewCategoryType ? selectNewCategoryType.value : "";
+        if (typeVal === "Outro" && inputNewCategoryCustomType) {
+            typeVal = inputNewCategoryCustomType.value.trim();
+        }
 
-            try {
-                await addCategory(val);
-                inputNewCategory.value = "";
-            } finally {
-                btnAddCategory.disabled = false;
-                btnAddCategory.innerHTML = originalText;
+        if (!val) {
+            alert("Por favor, insira o nome da categoria.");
+            return;
+        }
+        if (!typeVal) {
+            alert("Por favor, selecione ou digite o tipo da categoria.");
+            return;
+        }
+
+        if (btnAddCategory.disabled) return;
+        btnAddCategory.disabled = true;
+        const originalText = btnAddCategory.innerHTML;
+        btnAddCategory.innerHTML = "Salvando...";
+
+        try {
+            await addCategory(val, typeVal);
+            inputNewCategory.value = "";
+            if (inputNewCategoryCustomType) inputNewCategoryCustomType.value = "";
+            if (selectNewCategoryType) {
+                selectNewCategoryType.value = "Trabalho"; // reset
+                wrapperCustomType.style.display = "none";
             }
+        } finally {
+            btnAddCategory.disabled = false;
+            btnAddCategory.innerHTML = originalText;
         }
     });
 
@@ -1761,7 +1793,16 @@ async function loadData() {
             // MERGE: Preserva tarefas com tempId pendentes (ainda não confirmadas pelo Supabase)
             // para evitar race condition onde loadData sobrescreve o localStorage antes
             // do addTask background insert concluir e atualizar o tempId para UUID real.
+            const localCatsBefore = JSON.parse(localStorage.getItem("offline_categories")) || [];
+            dbCats = dbCats.map(dbCat => {
+                const localCat = localCatsBefore.find(lc => String(lc.id) === String(dbCat.id) || lc.name === dbCat.name);
+                if (localCat && localCat.type && !dbCat.type) {
+                    return { ...dbCat, type: localCat.type };
+                }
+                return dbCat;
+            });
             localStorage.setItem("offline_categories", JSON.stringify(dbCats));
+
             const existingLocal = JSON.parse(localStorage.getItem("offline_tasks")) || [];
             const pendingLocalTasks = existingLocal.filter(t => isTemporaryId(t.id) && t.is_active !== false);
             
@@ -1980,7 +2021,9 @@ function renderCategories() {
         categories.forEach(cat => {
             const item = document.createElement("div");
             item.className = "manage-item";
-            item.style.cssText = "background:rgba(255,255,255,0.02); border:1px solid var(--border-color); padding:10px 14px; border-radius:var(--radius-sm); display:flex; justify-content:space-between; align-items:center;";
+            
+            const hasType = !!cat.type;
+            item.style.cssText = "background:rgba(255,255,255,0.02); border:1px solid " + (hasType ? "var(--border-color)" : "rgba(239, 68, 68, 0.4)") + "; padding:12px; border-radius:var(--radius-sm); display:flex; flex-direction:column; gap:8px;";
             
             const isOwner = currentUser && cat.user_id === currentUser.id;
             let collabBtnHtml = "";
@@ -1992,13 +2035,27 @@ function renderCategories() {
                 `;
             }
 
+            const typeOptions = ["Trabalho", "Empresa", "Faculdade/Estudos", "Projeto", "Pessoal", "Saúde", "Finanças", "Casa", "Lazer", "Outro"];
+            const isCustomType = cat.type && !typeOptions.slice(0, -1).includes(cat.type);
+            const selectedType = isCustomType ? "Outro" : (cat.type || "");
+
             item.innerHTML = `
-                <span style="font-size:0.88rem; font-weight:600;">${escapeHTML(cat.name)}</span>
-                <div style="display:flex; align-items:center;">
-                    ${collabBtnHtml}
-                    <button class="btn-delete-cat" data-id="${cat.id}" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; padding:4px; border-radius:4px; transition:var(--transition-smooth); display:flex; align-items:center; justify-content:center;">
-                        <i data-lucide="trash-2" style="width:14px; height:14px;"></i>
-                    </button>
+                <div style="display: flex; gap: 8px; width: 100%; align-items: center;">
+                    <input type="text" class="input-edit-cat-name" value="${escapeHTML(cat.name)}" style="flex: 1; padding: 6px 10px; font-size: 0.82rem; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm);" placeholder="Nome da Categoria">
+                    <select class="select-edit-cat-type" style="width: 120px; padding: 6px 10px; font-size: 0.82rem; background: var(--bg-surface); color: var(--text-primary); border: 1px solid ${hasType ? "var(--border-color)" : "#ef4444"}; border-radius: var(--radius-sm);">
+                        <option value="" disabled ${!selectedType ? "selected" : ""}>Tipo...</option>
+                        ${typeOptions.map(t => `<option value="${t}" ${selectedType === t ? "selected" : ""}>${t}</option>`).join("")}
+                    </select>
+                    <div style="display:flex; align-items:center;">
+                        ${collabBtnHtml}
+                        <button class="btn-delete-cat" data-id="${cat.id}" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; padding:4px; border-radius:4px; transition:var(--transition-smooth); display:flex; align-items:center; justify-content:center;">
+                            <i data-lucide="trash-2" style="width:14px; height:14px;"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="edit-custom-type-wrapper" style="display: ${selectedType === "Outro" ? "flex" : "none"}; flex-direction: column; gap: 4px; width: 100%;">
+                    <label style="font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);">Tipo Customizado</label>
+                    <input type="text" class="input-edit-cat-custom-type" value="${escapeHTML(isCustomType ? cat.type : "")}" placeholder="Ex: Viagens" style="width: 100%; padding: 6px 10px; font-size: 0.82rem; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
                 </div>
             `;
             
@@ -2017,6 +2074,33 @@ function renderCategories() {
                     });
                 }
             }
+
+            const inputName = item.querySelector(".input-edit-cat-name");
+            const selectType = item.querySelector(".select-edit-cat-type");
+            const inputCustom = item.querySelector(".input-edit-cat-custom-type");
+            const customWrapper = item.querySelector(".edit-custom-type-wrapper");
+
+            const triggerUpdate = async () => {
+                const nameVal = inputName.value.trim();
+                let typeVal = selectType.value;
+                if (typeVal === "Outro") {
+                    typeVal = inputCustom.value.trim();
+                }
+                if (!nameVal) return;
+                await updateCategoryFields(cat.id, nameVal, typeVal);
+            };
+
+            selectType.addEventListener("change", () => {
+                if (selectType.value === "Outro") {
+                    customWrapper.style.display = "flex";
+                } else {
+                    customWrapper.style.display = "none";
+                    triggerUpdate();
+                }
+            });
+
+            inputName.addEventListener("change", triggerUpdate);
+            inputCustom.addEventListener("change", triggerUpdate);
             
             manageList.appendChild(item);
         });
@@ -3517,7 +3601,7 @@ function updateTaskAssigneeDropdown(categoryName, selectEl, groupEl) {
     selectEl.value = currentValue;
 }
 
-async function addCategory(name) {
+async function addCategory(name, type) {
     if (!name) return;
 
     // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
@@ -3525,6 +3609,7 @@ async function addCategory(name) {
     const newCat = {
         id: tempId,
         name: name,
+        type: type || null,
         is_active: true
     };
     if (currentUser) {
@@ -3545,19 +3630,24 @@ async function addCategory(name) {
 
     // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
     if (supabaseClient && currentUser) {
-        supabaseClient.from('categories').insert({ name: name, is_active: true }).select()
+        supabaseClient.from('categories').insert({ name: name, type: type || null, is_active: true }).select()
             .then(({ data, error }) => {
                 if (error) {
-                    console.warn("Erro ao sincronizar nova categoria no Supabase:", error.message);
+                    console.warn("Erro ao sincronizar nova categoria no Supabase com tipo, tentando sem tipo:", error.message);
+                    // Fallback to name-only if type column doesn't exist
+                    supabaseClient.from('categories').insert({ name: name, is_active: true }).select()
+                        .then(({ data: fallbackData, error: fallbackError }) => {
+                            if (!fallbackError && fallbackData && fallbackData.length > 0) {
+                                const realCat = fallbackData[0];
+                                const mergedCat = { ...realCat, type: type };
+                                updateLocalCatId(tempId, mergedCat);
+                            }
+                        });
                     return;
                 }
                 if (data && data.length > 0) {
                     const realCat = data[0];
-                    // Atualiza ID temporário para o real na memória
-                    categories = categories.map(c => String(c.id) === String(tempId) ? realCat : c);
-                    let currentLocalCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
-                    currentLocalCats = currentLocalCats.map(c => String(c.id) === String(tempId) ? realCat : c);
-                    localStorage.setItem("offline_categories", JSON.stringify(currentLocalCats));
+                    updateLocalCatId(tempId, realCat);
                 }
             })
             .catch(err => {
@@ -3566,7 +3656,15 @@ async function addCategory(name) {
     }
 }
 
-function addCategoryOffline(name) {
+function updateLocalCatId(tempId, realCat) {
+    categories = categories.map(c => String(c.id) === String(tempId) ? realCat : c);
+    let currentLocalCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+    currentLocalCats = currentLocalCats.map(c => String(c.id) === String(tempId) ? realCat : c);
+    localStorage.setItem("offline_categories", JSON.stringify(currentLocalCats));
+    renderCategories();
+}
+
+function addCategoryOffline(name, type) {
     localDataVersion++;
     let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
     if (localCats.some(c => c.name.toLowerCase() === name.toLowerCase() && c.is_active)) {
@@ -3576,12 +3674,64 @@ function addCategoryOffline(name) {
     localCats.push({
         id: Date.now(),
         name: name,
+        type: type || null,
         is_active: true
     });
     localStorage.setItem("offline_categories", JSON.stringify(localCats));
     
     loadDataOffline();
     renderCategories();
+}
+
+async function updateCategoryFields(id, newName, newType) {
+    localDataVersion++;
+    const oldCat = categories.find(c => String(c.id) === String(id));
+    if (!oldCat) return;
+    const oldName = oldCat.name;
+    
+    // 1. Update category local state
+    categories = categories.map(c => String(c.id) === String(id) ? { ...c, name: newName, type: newType } : c);
+    
+    let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+    localCats = localCats.map(c => String(c.id) === String(id) ? { ...c, name: newName, type: newType } : c);
+    localStorage.setItem("offline_categories", JSON.stringify(localCats));
+
+    // 2. Update tasks associated with this category
+    if (oldName !== newName) {
+        allActiveTasks = allActiveTasks.map(t => t.category === oldName ? { ...t, category: newName } : t);
+        tasks = tasks.map(t => t.category === oldName ? { ...t, category: newName } : t);
+        
+        let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+        localTasks = localTasks.map(t => t.category === oldName ? { ...t, category: newName } : t);
+        localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+        
+        // Update currentFilter if it matched the old name
+        if (currentFilter === oldName) {
+            currentFilter = newName;
+        }
+    }
+
+    renderCategories();
+    renderChecklist();
+    updateProgress();
+
+    // 3. Sync to Supabase if logged in
+    if (supabaseClient && currentUser && !isTemporaryId(id)) {
+        supabaseClient.from('categories').update({ name: newName, type: newType }).eq('id', id)
+            .then(({ error }) => {
+                if (error) {
+                    console.warn("Erro ao atualizar categoria no Supabase. Tentando apenas nome:", error.message);
+                    supabaseClient.from('categories').update({ name: newName }).eq('id', id);
+                }
+            });
+            
+        if (oldName !== newName) {
+            supabaseClient.from('tasks').update({ category: newName }).eq('category', oldName)
+                .then(({ error }) => {
+                    if (error) console.warn("Erro ao atualizar categoria nas tarefas no Supabase:", error.message);
+                });
+        }
+    }
 }
 
 async function deleteCategory(id) {
@@ -4995,12 +5145,20 @@ function classifyWordContext(word, associations) {
     return null;
 }
 
-function classifyTaskContext(title, category, associations) {
-    // Check category first
-    let catClass = classifyWordContext(category, associations);
-    if (catClass) return catClass;
+function classifyTaskContext(title, categoryName, associations) {
+    // 1. Get category type from the registered category object (highest priority)
+    const catObj = categories.find(c => c.name === categoryName);
+    if (catObj && catObj.type) {
+        return normalizeCategoryType(catObj.type);
+    }
     
-    // Check words in title
+    // 2. Check user term associations for categoryName
+    if (categoryName) {
+        const catClass = classifyWordContext(categoryName, associations);
+        if (catClass) return catClass;
+    }
+    
+    // 3. Check words in task title
     const words = title.split(/\s+/);
     for (const word of words) {
         const cleaned = word.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
@@ -5011,6 +5169,15 @@ function classifyTaskContext(title, category, associations) {
     }
     
     return "Pessoal/Outros";
+}
+
+function normalizeCategoryType(type) {
+    const t = type.toLowerCase();
+    if (t.match(/estud|faculd|aula|curs|prov|leit|livr|unisinos|pucrs|escola|faculdade/)) return "Estudos/Aprendizado";
+    if (t.match(/trabalh|reunia|meet|post|client|entreg|relator|venda|comercial|empresa/)) return "Trabalho/Profissional";
+    if (t.match(/trein|academ|exercic|corr|saud|medic|gym|futebol|correr/)) return "Saúde/Bem-estar";
+    if (t.match(/pag|receb|financ|dinheir|compr|limp|organiz|mercado|casa/)) return "Rotina/Organização";
+    return type; // Retorna tipo customizado
 }
 
 async function loadAndRenderReport(days, containerEl) {
@@ -5224,11 +5391,8 @@ async function loadAndRenderReport(days, containerEl) {
         .slice(0, 3)
         .map(([word, count]) => `**${word}** (${count}x)`);
 
-    // 9. Classificação baseada em aprendizado local e radicais
-    let studyCount = 0;
-    let workCount = 0;
-    let fitnessCount = 0;
-    let financeCount = 0;
+    // 9. Classificação dinâmica por tipo de categoria
+    const typeCounts = {};
     const completedTasksDetails = [];
 
     currentCompletions.forEach(c => {
@@ -5236,18 +5400,13 @@ async function loadAndRenderReport(days, containerEl) {
         if (task) {
             completedTasksDetails.push(task);
             const contextCategory = classifyTaskContext(task.title, task.category, associations);
-            if (contextCategory === "Estudos/Aprendizado") studyCount++;
-            else if (contextCategory === "Trabalho/Profissional") workCount++;
-            else if (contextCategory === "Saúde/Bem-estar") fitnessCount++;
-            else if (contextCategory === "Rotina/Organização") financeCount++;
+            typeCounts[contextCategory] = (typeCounts[contextCategory] || 0) + 1;
         }
     });
 
-    const categoryBreakdown = [];
-    if (studyCount > 0) categoryBreakdown.push(`Estudos/Aprendizado: **${studyCount}** atividades`);
-    if (workCount > 0) categoryBreakdown.push(`Trabalho/Profissional: **${workCount}** atividades`);
-    if (fitnessCount > 0) categoryBreakdown.push(`Saúde/Bem-estar: **${fitnessCount}** atividades`);
-    if (financeCount > 0) categoryBreakdown.push(`Rotina/Organização: **${financeCount}** atividades`);
+    const categoryBreakdown = Object.entries(typeCounts)
+        .filter(([type, count]) => count > 0)
+        .map(([type, count]) => `${type}: **${count}** atividades`);
 
     // 10. Tarefas puladas/adiadas (excluídas ativamente pelo usuário)
     const skippedTaskCounts = {};
@@ -5328,7 +5487,45 @@ async function loadAndRenderReport(days, containerEl) {
         return;
     }
 
-    // 13. UI "Ensine o App" para termos desconhecidos
+    // 13. UI "Classificar Categorias Antigas" e "Ensine o App"
+    const unclassifiedCats = categories.filter(c => !c.type && c.is_active);
+    let classifyCatsHtml = "";
+    if (unclassifiedCats.length > 0) {
+        classifyCatsHtml = `
+            <section style="background: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.2); border-radius: 8px; padding: 16px; margin-top: 20px;">
+                <h6 style="margin: 0 0 10px 0; color: #f59e0b; font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
+                    <i data-lucide="alert-circle" style="width: 16px; height: 16px; color: #f59e0b;"></i> Classificar Categorias Antigas
+                </h6>
+                <p style="margin: 0 0 12px 0; font-size: 0.8rem; color: var(--text-secondary);">
+                    Algumas de suas categorias antigas não possuem um tipo de contexto associado. Defina-os abaixo para que o relatório as agrupe de forma precisa:
+                </p>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    ${unclassifiedCats.map(cat => `
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: rgba(255,255,255,0.02); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color);">
+                            <span style="font-weight: 700; color: var(--text-primary); font-size: 0.82rem;">"${cat.name}"</span>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <select class="classify-cat-select" data-id="${cat.id}" style="background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); padding: 4px 8px; border-radius: 4px; font-size: 0.78rem;">
+                                    <option value="Trabalho">Trabalho</option>
+                                    <option value="Empresa">Empresa</option>
+                                    <option value="Faculdade/Estudos">Faculdade/Estudos</option>
+                                    <option value="Projeto">Projeto</option>
+                                    <option value="Pessoal">Pessoal</option>
+                                    <option value="Saúde">Saúde</option>
+                                    <option value="Finanças">Finanças</option>
+                                    <option value="Casa">Casa</option>
+                                    <option value="Lazer">Lazer</option>
+                                    <option value="Outro">Outro...</option>
+                                </select>
+                                <button onclick="saveCategoryType('${cat.id}', this.previousElementSibling.value, ${days})" style="background: #eab308; color: black; border: none; padding: 4px 10px; border-radius: 4px; font-size: 0.78rem; font-weight: bold; cursor: pointer;">Salvar</button>
+                            </div>
+                        </div>
+                    `).join("")}
+                </div>
+            </section>
+        `;
+    }
+
+    // 14. UI "Ensine o App" para termos desconhecidos
     let teachSectionHtml = "";
     if (unclassifiedCandidates.size > 0) {
         teachSectionHtml = `
@@ -5441,6 +5638,9 @@ async function loadAndRenderReport(days, containerEl) {
                 </p>
             </section>
             
+            <!-- Bloco de Classificação de Categorias Antigas -->
+            ${classifyCatsHtml}
+
             <!-- Bloco interativo de Ensino do App -->
             ${teachSectionHtml}
             
@@ -5450,6 +5650,19 @@ async function loadAndRenderReport(days, containerEl) {
     containerEl.innerHTML = contentHtml;
     lucide.createIcons();
 }
+
+window.saveCategoryType = function(catId, type, days) {
+    const cat = categories.find(c => String(c.id) === String(catId));
+    if (cat) {
+        updateCategoryFields(cat.id, cat.name, type);
+        console.log(`[Learn] Categoria "${cat.name}" associada ao tipo "${type}".`);
+    }
+    
+    // Re-renderiza a aba atual
+    if (typeof switchReportTab === "function") {
+        setTimeout(() => switchReportTab(days), 100);
+    }
+};
 
 window.saveTermAssociation = function(term, category, days) {
     const associations = JSON.parse(localStorage.getItem("user_term_associations")) || {};

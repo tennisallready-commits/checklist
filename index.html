@@ -313,9 +313,33 @@
                     <label style="display:block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); margin-bottom:8px;">Gerenciar Locais / Categorias</label>
                     
                     <!-- Quick Add Form -->
-                    <div style="display: flex; gap: 8px; margin-bottom: 12px;">
-                        <input type="text" id="input-new-category" placeholder="Novo Local (ex: Filial Centro)" autocomplete="off" style="flex: 1; padding: 12px 14px;">
-                        <button id="btn-add-category" class="btn btn-primary" style="padding: 10px 16px; font-weight: 700;">+ Add</button>
+                    <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; background: rgba(255,255,255,0.02); padding: 12px; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+                        <div style="display: flex; flex-direction: column; gap: 4px;">
+                            <label style="font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);">Nome da Categoria</label>
+                            <input type="text" id="input-new-category" placeholder="Nome (ex: Unisinos)" autocomplete="off" style="width: 100%; padding: 8px 10px; font-size: 0.82rem;">
+                        </div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                            <div style="display: flex; flex-direction: column; gap: 4px;">
+                                <label style="font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);">Tipo de Contexto</label>
+                                <select id="select-new-category-type" style="width: 100%; padding: 8px 10px; font-size: 0.82rem; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
+                                    <option value="Trabalho">Trabalho</option>
+                                    <option value="Empresa">Empresa</option>
+                                    <option value="Faculdade/Estudos">Faculdade/Estudos</option>
+                                    <option value="Projeto">Projeto</option>
+                                    <option value="Pessoal">Pessoal</option>
+                                    <option value="Saúde">Saúde</option>
+                                    <option value="Finanças">Finanças</option>
+                                    <option value="Casa">Casa</option>
+                                    <option value="Lazer">Lazer</option>
+                                    <option value="Outro">Outro...</option>
+                                </select>
+                            </div>
+                            <div id="wrapper-custom-type" style="display: none; flex-direction: column; gap: 4px;">
+                                <label style="font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);">Tipo Personalizado</label>
+                                <input type="text" id="input-new-category-custom-type" placeholder="Ex: Viagens" style="width: 100%; padding: 8px 10px; font-size: 0.82rem;">
+                            </div>
+                        </div>
+                        <button id="btn-add-category" class="btn btn-primary" style="width: 100%; padding: 10px; font-weight: 700; font-size: 0.82rem;">Adicionar Categoria</button>
                     </div>
                     
                     <!-- List of current categories -->
@@ -691,6 +715,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=7.47"></script>
+    <script src="app.js?v=7.48"></script>
 </body>
 </html>
