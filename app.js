@@ -18,7 +18,8 @@ const dbCache = {
     offline_completions: [],
     offline_category_shares: [],
     offline_completions_queue: {},
-    offline_task_updates_queue: {}
+    offline_task_updates_queue: {},
+    user_term_associations: {}
 };
 
 const idb = {
@@ -98,7 +99,7 @@ const idb = {
     },
 
     async loadAllToCache() {
-        const stores = ["offline_tasks", "offline_categories", "offline_completions", "offline_category_shares", "offline_completions_queue", "offline_task_updates_queue"];
+        const stores = ["offline_tasks", "offline_categories", "offline_completions", "offline_category_shares", "offline_completions_queue", "offline_task_updates_queue", "user_term_associations"];
         for (const store of stores) {
             let val = await this.get(store);
             if (val === null) {
@@ -113,7 +114,7 @@ const idb = {
                     await this.put(store, val);
                 } else {
                     // Valor padrão se não existir legado
-                    val = (store === "offline_completions_queue" || store === "offline_task_updates_queue") ? {} : [];
+                    val = (store === "offline_completions_queue" || store === "offline_task_updates_queue" || store === "user_term_associations") ? {} : [];
                 }
             }
             dbCache[store] = val;
@@ -4977,6 +4978,41 @@ function analyzeTaskContext(title, category, existingTasks = []) {
     };
 }
 
+function classifyWordContext(word, associations) {
+    const w = word.toLowerCase();
+    
+    // 1. Check user associations first (takes priority)
+    if (associations && associations[w]) {
+        return associations[w];
+    }
+    
+    // 2. Classify by radicals
+    if (w.match(/estud|faculd|aula|curs|prov|leit|livr|unisinos|pucrs|escola|faculdade/)) return "Estudos/Aprendizado";
+    if (w.match(/trabalh|reunia|meet|post|client|entreg|relator|venda|comercial/)) return "Trabalho/Profissional";
+    if (w.match(/trein|academ|exercic|corr|saud|medic|gym|futebol|correr/)) return "Saúde/Bem-estar";
+    if (w.match(/pag|receb|financ|dinheir|compr|limp|organiz|mercado|casa/)) return "Rotina/Organização";
+    
+    return null;
+}
+
+function classifyTaskContext(title, category, associations) {
+    // Check category first
+    let catClass = classifyWordContext(category, associations);
+    if (catClass) return catClass;
+    
+    // Check words in title
+    const words = title.split(/\s+/);
+    for (const word of words) {
+        const cleaned = word.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+        if (cleaned.length > 3) {
+            let wordClass = classifyWordContext(cleaned, associations);
+            if (wordClass) return wordClass;
+        }
+    }
+    
+    return "Pessoal/Outros";
+}
+
 async function loadAndRenderReport(days, containerEl) {
     const now = new Date();
     let isExpired = false;
@@ -5081,6 +5117,9 @@ async function loadAndRenderReport(days, containerEl) {
         evolutionText = `Você completou **${currentCount}** tarefas neste período. Não há dados suficientes do período anterior para realizar uma comparação direta de progresso.`;
     }
 
+    // Carrega associações do usuário
+    const associations = JSON.parse(localStorage.getItem("user_term_associations")) || {};
+
     // 5. Agrupar por Categorias
     const catCompletions = {};
     const catTotals = {};
@@ -5178,27 +5217,22 @@ async function loadAndRenderReport(days, containerEl) {
         .slice(0, 3)
         .map(([word, count]) => `**${word}** (${count}x)`);
 
-    // 9. Classificação genérica baseada em radicais de palavras comuns
+    // 9. Classificação baseada em aprendizado local e radicais
     let studyCount = 0;
     let workCount = 0;
     let fitnessCount = 0;
     let financeCount = 0;
+    const completedTasksDetails = [];
 
     currentCompletions.forEach(c => {
         const task = allActiveTasks.find(t => String(t.id) === String(c.task_id));
         if (task) {
-            const titleLower = task.title.toLowerCase();
-            const catLower = task.category.toLowerCase();
-            
-            const matchStudy = titleLower.match(/estud|faculd|aula|curs|prov|leit|livr/) || catLower.match(/estud|faculd|aula|curs|prov|leit|livr/);
-            const matchWork = titleLower.match(/trabalh|reunia|meet|post|client|entreg|relator/) || catLower.match(/trabalh|reunia|meet|post|client|entreg|relator/);
-            const matchFitness = titleLower.match(/trein|academ|exercic|corr|saud|medic/) || catLower.match(/trein|academ|exercic|corr|saud|medic/);
-            const matchFinance = titleLower.match(/pag|receb|financ|dinheir|compr|limp|organiz/) || catLower.match(/pag|receb|financ|dinheir|compr|limp|organiz/);
-
-            if (matchStudy) studyCount++;
-            if (matchWork) workCount++;
-            if (matchFitness) fitnessCount++;
-            if (matchFinance) financeCount++;
+            completedTasksDetails.push(task);
+            const contextCategory = classifyTaskContext(task.title, task.category, associations);
+            if (contextCategory === "Estudos/Aprendizado") studyCount++;
+            else if (contextCategory === "Trabalho/Profissional") workCount++;
+            else if (contextCategory === "Saúde/Bem-estar") fitnessCount++;
+            else if (contextCategory === "Rotina/Organização") financeCount++;
         }
     });
 
@@ -5231,6 +5265,41 @@ async function loadAndRenderReport(days, containerEl) {
         return !wasCompleted;
     });
 
+    // 12. Identificar termos novos para classificar (Proper Nouns or Capitals)
+    const stopWords = ["para", "com", "uma", "uns", "das", "dos", "pelo", "pela", "seus", "suas", "como", "mais", "fazer", "cada", "toda", "todo", "hoje", "ontem", "amanha", "amanhã"];
+    const unclassifiedCandidates = new Set();
+
+    completedTasksDetails.forEach(task => {
+        const catClass = classifyWordContext(task.category, associations);
+        if (catClass) return; // Categoria já classificada
+        
+        let hasAutoClassification = false;
+        const words = task.title.split(/\s+/);
+        words.forEach(word => {
+            const cleaned = word.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+            if (cleaned.length > 3 && !stopWords.includes(cleaned)) {
+                if (classifyWordContext(cleaned, {}) !== null) {
+                    hasAutoClassification = true;
+                }
+            }
+        });
+        
+        if (!hasAutoClassification) {
+            words.forEach((word, idx) => {
+                const cleaned = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+                if (cleaned.length > 3 && !stopWords.includes(cleaned.toLowerCase())) {
+                    const isCapitalized = cleaned[0] === cleaned[0].toUpperCase() && cleaned[0] !== cleaned[0].toLowerCase();
+                    const wLower = cleaned.toLowerCase();
+                    if (!associations[wLower]) {
+                        if (isCapitalized || idx > 0) {
+                            unclassifiedCandidates.add(cleaned);
+                        }
+                    }
+                }
+            });
+        }
+    });
+
     const labelPeriod = days === 7 ? "esta semana" : days === 30 ? "este mês" : "este ano";
     const warningLabel = daysRemaining === 1 ? "amanhã" : `em ${daysRemaining} dias`;
 
@@ -5252,7 +5321,39 @@ async function loadAndRenderReport(days, containerEl) {
         return;
     }
 
-    // 12. Construir o relatório final em 5 blocos detalhados e humanos
+    // 13. UI "Ensine o App" para termos desconhecidos
+    let teachSectionHtml = "";
+    if (unclassifiedCandidates.size > 0) {
+        teachSectionHtml = `
+            <section style="background: rgba(139, 92, 246, 0.05); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px; padding: 16px; margin-top: 20px;">
+                <h6 style="margin: 0 0 10px 0; color: var(--primary); font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
+                    <i data-lucide="brain" style="width: 16px; height: 16px;"></i> Ensine o App (Novos termos)
+                </h6>
+                <p style="margin: 0 0 12px 0; font-size: 0.8rem; color: var(--text-secondary);">
+                    Encontramos termos no seu checklist que não conseguimos classificar. Escolha a categoria abaixo para que o app aprenda e organize seus próximos relatórios:
+                </p>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    ${Array.from(unclassifiedCandidates).slice(0, 3).map(term => `
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: rgba(255,255,255,0.02); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color);">
+                            <span style="font-weight: 700; color: var(--text-primary); font-size: 0.82rem;">"${term}"</span>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <select class="teach-term-select" style="background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); padding: 4px 8px; border-radius: 4px; font-size: 0.78rem;">
+                                    <option value="Trabalho/Profissional">Trabalho/Profissional</option>
+                                    <option value="Estudos/Aprendizado">Estudos/Aprendizado</option>
+                                    <option value="Saúde/Bem-estar">Saúde/Bem-estar</option>
+                                    <option value="Rotina/Organização">Rotina/Organização</option>
+                                    <option value="Pessoal/Outros">Pessoal/Outros</option>
+                                </select>
+                                <button onclick="saveTermAssociation('${term.toLowerCase()}', this.previousElementSibling.value, ${days})" style="background: var(--primary); color: white; border: none; padding: 4px 10px; border-radius: 4px; font-size: 0.78rem; font-weight: bold; cursor: pointer;">Salvar</button>
+                            </div>
+                        </div>
+                    `).join("")}
+                </div>
+            </section>
+        `;
+    }
+
+    // 14. Construir o relatório final em 5 blocos detalhados e humanos
     let contentHtml = `
         ${warningHtml}
         
@@ -5333,12 +5434,27 @@ async function loadAndRenderReport(days, containerEl) {
                 </p>
             </section>
             
+            <!-- Bloco interativo de Ensino do App -->
+            ${teachSectionHtml}
+            
         </div>
     `;
 
     containerEl.innerHTML = contentHtml;
     lucide.createIcons();
 }
+
+window.saveTermAssociation = function(term, category, days) {
+    const associations = JSON.parse(localStorage.getItem("user_term_associations")) || {};
+    associations[term] = category;
+    localStorage.setItem("user_term_associations", JSON.stringify(associations));
+    console.log(`[Learn] Termo "${term}" associado a "${category}".`);
+    
+    // Re-renderiza a aba atual
+    if (typeof switchReportTab === "function") {
+        switchReportTab(days);
+    }
+};
 
 function checkSaturdayAnimation() {
     const now = new Date();
