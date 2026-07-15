@@ -2593,7 +2593,7 @@ async function toggleTask(id) {
     const yesterdayStr = getLocalDateString(yesterdayDate);
     
     let isPastNightShiftException = false;
-    const task = tasks.find(t => String(t.id) === String(id));
+    let task = tasks.find(t => String(t.id) === String(id));
     const turnos = (task && task.context && task.context.turnos) ? task.context.turnos : [];
     
     if (selectedDate === yesterdayStr && now.getHours() < 12 && turnos.includes("Noite")) {
@@ -2616,7 +2616,7 @@ async function toggleTask(id) {
         navigator.vibrate(12);
     }
 
-    const task = tasks.find(t => String(t.id) === String(id));
+    task = tasks.find(t => String(t.id) === String(id));
     if (!task) {
         pendingToggles.delete(id);
         return;
