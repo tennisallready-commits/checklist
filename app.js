@@ -4,6 +4,131 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 
+// ----------------------------------------------------
+// IndexedDB & Shadow Storage Configuration
+// ----------------------------------------------------
+const DB_NAME = "ChecklistDB";
+const DB_VERSION = 1;
+
+// Global memory cache for sychronous access
+const dbCache = {
+    offline_tasks: [],
+    offline_categories: [],
+    offline_completions: [],
+    offline_category_shares: [],
+    offline_completions_queue: {},
+    offline_task_updates_queue: {}
+};
+
+const idb = {
+    _db: null,
+    
+    init() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open(DB_NAME, DB_VERSION);
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+                this._db = request.result;
+                resolve();
+            };
+            request.onupgradeneeded = (e) => {
+                const database = request.result;
+                if (!database.objectStoreNames.contains("key_value")) {
+                    database.createObjectStore("key_value", { keyPath: "key" });
+                }
+            };
+        });
+    },
+    
+    get(key) {
+        return new Promise((resolve, reject) => {
+            if (!this._db) return resolve(null);
+            const tx = this._db.transaction("key_value", "readonly");
+            const store = tx.objectStore("key_value");
+            const req = store.get(key);
+            req.onsuccess = () => resolve(req.result ? req.result.value : null);
+            req.onerror = () => reject(req.error);
+        });
+    },
+    
+    put(key, value) {
+        return new Promise((resolve, reject) => {
+            if (!this._db) return resolve();
+            const tx = this._db.transaction("key_value", "readwrite");
+            const store = tx.objectStore("key_value");
+            const req = store.put({ key: key, value: value });
+            req.onsuccess = () => resolve();
+            req.onerror = () => reject(req.error);
+        });
+    },
+    
+    delete(key) {
+        return new Promise((resolve, reject) => {
+            if (!this._db) return resolve();
+            const tx = this._db.transaction("key_value", "readwrite");
+            const store = tx.objectStore("key_value");
+            const req = store.delete(key);
+            req.onsuccess = () => resolve();
+            req.onerror = () => reject(req.error);
+        });
+    },
+
+    async loadAllToCache() {
+        const stores = ["offline_tasks", "offline_categories", "offline_completions", "offline_category_shares", "offline_completions_queue", "offline_task_updates_queue"];
+        for (const store of stores) {
+            let val = await this.get(store);
+            if (val === null) {
+                // Tenta migrar do window.localStorage existente para IndexedDB
+                const legacyVal = window.localStorage.getItem(store);
+                if (legacyVal !== null) {
+                    try {
+                        val = JSON.parse(legacyVal);
+                    } catch(e) {
+                        val = legacyVal;
+                    }
+                    await this.put(store, val);
+                } else {
+                    // Valor padrão se não existir legado
+                    val = (store === "offline_completions_queue" || store === "offline_task_updates_queue") ? {} : [];
+                }
+            }
+            dbCache[store] = val;
+        }
+    }
+};
+
+const localPrefs = window.localStorage;
+const localStorage = {
+    getItem(key) {
+        if (dbCache.hasOwnProperty(key)) {
+            return JSON.stringify(dbCache[key]);
+        }
+        return localPrefs.getItem(key);
+    },
+    setItem(key, value) {
+        if (dbCache.hasOwnProperty(key)) {
+            try {
+                const parsed = JSON.parse(value);
+                dbCache[key] = parsed;
+                idb.put(key, parsed);
+            } catch (e) {
+                dbCache[key] = value;
+                idb.put(key, value);
+            }
+            return;
+        }
+        localPrefs.setItem(key, value);
+    },
+    removeItem(key) {
+        if (dbCache.hasOwnProperty(key)) {
+            dbCache[key] = (key === "offline_completions_queue" || key === "offline_task_updates_queue") ? {} : [];
+            idb.delete(key);
+            return;
+        }
+        localPrefs.removeItem(key);
+    }
+};
+
 // Default categories/places
 const DEFAULT_CATEGORIES = ["Tio Nan", "Cassol", "PUCRS"];
 
@@ -150,6 +275,14 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 async function initApp() {
+    // Inicializa o IndexedDB e carrega o cache
+    try {
+        await idb.init();
+        await idb.loadAllToCache();
+    } catch (e) {
+        console.error("Falha ao inicializar IndexedDB:", e);
+    }
+
     // Load theme
     const storedTheme = localStorage.getItem("checklist_theme") || "default";
     applyTheme(storedTheme);
@@ -1315,6 +1448,25 @@ async function loadChecklistAndProgress(skipOfflineReload = false) {
 
     // 2. Revalida com o Supabase em segundo plano sem travar a interface do usuário
     if (supabaseClient && currentUser) {
+        // Se houver qualquer sincronização pendente na fila offline, não busca dados do servidor ainda.
+        // Isso impede que dados antigos do servidor sobrescrevam alterações locais que ainda não foram enviadas.
+        const localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+        const hasPendingCats = localCats.some(c => isTemporaryId(c.id) && c.is_active !== false);
+        
+        const localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+        const hasPendingTasks = localTasks.some(t => isTemporaryId(t.id) && t.is_active !== false);
+        
+        const compQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+        const hasPendingCompletions = Object.keys(compQueue).length > 0;
+        
+        const updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+        const hasPendingUpdates = Object.keys(updatesQueue).length > 0;
+
+        if (hasPendingCats || hasPendingTasks || hasPendingCompletions || hasPendingUpdates) {
+            console.log("[Sync] Revalidação com o servidor adiada: existem alterações locais pendentes de envio.");
+            return;
+        }
+
         // Guarda fingerprint dos dados atuais para comparar depois
         const fingerprintBefore = JSON.stringify(tasks.map(t => t.id + '|' + t.title + '|' + t.completed + '|' + JSON.stringify(t.context)));
         const catFingerprintBefore = JSON.stringify(categories.map(c => c.id + '|' + c.name));
@@ -3863,64 +4015,58 @@ function setupSupabaseAuth() {
     });
 }
 
+let isSyncing = false;
+
 async function syncOfflineDataToCloud() {
     if (!supabaseClient || !currentUser) return;
+    if (isSyncing) return;
+    isSyncing = true;
 
-    // 1. Sincronizar novas categorias criadas offline
-    let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
-    const pendingInsertCats = localCats.filter(c => isTemporaryId(c.id) && c.is_active !== false);
-    
-    for (const pending of pendingInsertCats) {
-        try {
+    try {
+        console.log("[Sync] Iniciando sincronização sequencial...");
+
+        // 1. Sincronizar novas categorias criadas offline
+        let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+        const pendingInsertCats = localCats.filter(c => isTemporaryId(c.id) && c.is_active !== false);
+        for (const pending of pendingInsertCats) {
             const { data, error } = await supabaseClient.from('categories').insert({ name: pending.name, is_active: true }).select();
-            if (!error && data && data.length > 0) {
+            if (error) throw error;
+            if (data && data.length > 0) {
                 const realCat = data[0];
                 const tempId = pending.id;
-                
-                // Atualiza na memória
                 categories = categories.map(c => String(c.id) === String(tempId) ? realCat : c);
-                
-                // Atualiza no LocalStorage
                 localCats = localCats.map(c => String(c.id) === String(tempId) ? realCat : c);
                 localStorage.setItem("offline_categories", JSON.stringify(localCats));
             }
-        } catch (e) {
-            console.warn("Erro ao sincronizar nova categoria offline:", e);
         }
-    }
 
-    // 2. Sincronizar novas tarefas criadas offline
-    let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
-    const pendingInsertTasks = localTasks.filter(t => isTemporaryId(t.id) && t.is_active !== false);
-    
-    for (const pending of pendingInsertTasks) {
-        const newTaskPayload = {
-            title: pending.title,
-            category: pending.category,
-            is_recurring: pending.is_recurring,
-            is_active: true,
-            created_at: pending.created_at || new Date().toISOString()
-        };
-        if (pending.repeat_days) newTaskPayload.repeat_days = pending.repeat_days;
-        if (pending.context) newTaskPayload.context = pending.context;
-        if (pending.assigned_to) newTaskPayload.assigned_to = pending.assigned_to;
-        if (currentUser) newTaskPayload.user_id = currentUser.id;
-        
-        try {
+        // 2. Sincronizar novas tarefas criadas offline
+        let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+        const pendingInsertTasks = localTasks.filter(t => isTemporaryId(t.id) && t.is_active !== false);
+        for (const pending of pendingInsertTasks) {
+            const newTaskPayload = {
+                title: pending.title,
+                category: pending.category,
+                is_recurring: pending.is_recurring,
+                is_active: true,
+                created_at: pending.created_at || new Date().toISOString()
+            };
+            if (pending.repeat_days) newTaskPayload.repeat_days = pending.repeat_days;
+            if (pending.context) newTaskPayload.context = pending.context;
+            if (pending.assigned_to) newTaskPayload.assigned_to = pending.assigned_to;
+            newTaskPayload.user_id = currentUser.id;
+
             const { data, error } = await supabaseClient.from('tasks').insert(newTaskPayload).select();
-            if (!error && data && data.length > 0) {
+            if (error) throw error;
+            if (data && data.length > 0) {
                 const realTask = data[0];
                 const tempId = pending.id;
                 
-                // Atualiza na memória
                 tasks = tasks.map(t => String(t.id) === String(tempId) ? { ...t, id: realTask.id } : t);
                 allActiveTasks = allActiveTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
-                
-                // Atualiza no LocalStorage
                 localTasks = localTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
                 localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
                 
-                // Atualiza conclusões na fila que apontavam para o ID temporário
                 let compQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
                 let updatedCompQueue = {};
                 Object.keys(compQueue).forEach(key => {
@@ -3933,54 +4079,50 @@ async function syncOfflineDataToCloud() {
                 });
                 localStorage.setItem("offline_completions_queue", JSON.stringify(updatedCompQueue));
             }
-        } catch (e) {
-            console.warn("Erro ao sincronizar nova tarefa offline:", e);
         }
-    }
 
-    let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
-    let hasChanges = false;
-    for (const key of Object.keys(queue)) {
-        const [taskId, date] = key.split('_');
-        if (isTemporaryId(taskId)) continue; // Can't sync yet
+        // 3. Sincronizar conclusões (completions)
+        let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+        let queueKeys = Object.keys(queue);
+        for (const key of queueKeys) {
+            const [taskId, date] = key.split('_');
+            if (isTemporaryId(taskId)) continue;
 
-        const completed = queue[key];
-        const query = completed
-            ? supabaseClient.from('completions').upsert({ task_id: taskId, date: date, completed: true }, { onConflict: 'task_id,date' })
-            : supabaseClient.from('completions').delete().eq('task_id', taskId).eq('date', date);
-        
-        try {
+            const completed = queue[key];
+            const query = completed
+                ? supabaseClient.from('completions').upsert({ task_id: taskId, date: date, completed: true }, { onConflict: 'task_id,date' })
+                : supabaseClient.from('completions').delete().eq('task_id', taskId).eq('date', date);
+            
             const { error } = await query;
-            if (!error) {
-                delete queue[key];
-                hasChanges = true;
-            }
-        } catch(e) {
-            console.warn("Erro ao sync", e);
-        }
-    }
-    if (hasChanges) {
-        localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
-    }
+            if (error) throw error;
 
-    // Sync task updates
-    let taskUpdatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
-    let hasTaskUpdates = false;
-    for (const id of Object.keys(taskUpdatesQueue)) {
-        if (isTemporaryId(id)) continue;
-        const dbUpdates = taskUpdatesQueue[id];
-        try {
-            const { error } = await supabaseClient.from('tasks').update(dbUpdates).eq('id', id);
-            if (!error) {
-                delete taskUpdatesQueue[id];
-                hasTaskUpdates = true;
-            }
-        } catch(e) {
-            console.warn("Erro ao sync updateTask", e);
+            delete queue[key];
+            localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
         }
-    }
-    if (hasTaskUpdates) {
-        localStorage.setItem("offline_task_updates_queue", JSON.stringify(taskUpdatesQueue));
+
+        // 4. Sincronizar atualizações e exclusões de tarefas
+        let taskUpdatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+        let updateKeys = Object.keys(taskUpdatesQueue);
+        for (const id of updateKeys) {
+            if (isTemporaryId(id)) continue;
+            const dbUpdates = taskUpdatesQueue[id];
+            
+            const { error } = await supabaseClient.from('tasks').update(dbUpdates).eq('id', id);
+            if (error) throw error;
+
+            delete taskUpdatesQueue[id];
+            localStorage.setItem("offline_task_updates_queue", JSON.stringify(taskUpdatesQueue));
+        }
+
+        console.log("[Sync] Sincronização concluída com sucesso. Baixando dados mais recentes...");
+        
+        isSyncing = false; // Libera o lock
+        await loadChecklistAndProgress(false); // Busca dados e revalida
+        
+    } catch (e) {
+        console.warn("[Sync] Falha durante a sincronização. Alterações pendentes mantidas no IndexedDB:", e);
+    } finally {
+        isSyncing = false;
     }
 }
 
