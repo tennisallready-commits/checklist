@@ -133,6 +133,18 @@ body {
     overflow: visible;
 }
 
+.app-session-loader { position: fixed; inset: 0; z-index: 30000; display: grid; place-items: center; padding: 20px; background: var(--bg-main); opacity: 1; visibility: visible; transition: opacity .28s ease, visibility .28s ease; }
+.app-session-loader.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+.session-loader-card { display: flex; width: min(310px,100%); flex-direction: column; align-items: center; text-align: center; }
+.session-loader-icon { display: grid; place-items: center; width: 58px; height: 58px; margin-bottom: 14px; border-radius: 18px; color: #fff; background: var(--primary-gradient); box-shadow: 0 14px 34px rgba(139,92,246,.28); animation: session-loader-float 1.6s ease-in-out infinite; }
+.session-loader-icon svg { width: 27px; height: 27px; }
+.session-loader-card strong { color: var(--text-primary); font-size: .92rem; }
+.session-loader-card small { margin-top: 4px; color: var(--text-muted); font-size: .69rem; }
+.session-loader-bar { width: 150px; height: 4px; margin-top: 18px; overflow: hidden; border-radius: 99px; background: rgba(139,92,246,.1); }
+.session-loader-bar i { display: block; width: 45%; height: 100%; border-radius: inherit; background: var(--primary-gradient); animation: session-loader-slide 1.15s ease-in-out infinite; }
+@keyframes session-loader-slide { 0% { transform: translateX(-110%); } 100% { transform: translateX(330%); } }
+@keyframes session-loader-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+
 /* Header Styles (Sticky header on scroll) */
 .app-header {
     position: sticky;
@@ -3216,6 +3228,7 @@ body.theme-girly .modal-content::before {
 .task-notification-copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .task-notification-copy strong { color: var(--text-primary); font-size: .78rem; }
 .task-notification-copy small { color: var(--text-muted); font-size: .64rem; }
+.task-notification-copy small.configured { color: var(--primary); font-weight: 800; }
 .task-notification-checkbox { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .task-notification-toggle { position: relative; width: 46px; height: 26px; margin: 0; border: 1px solid var(--border-color); border-radius: 999px; background: rgba(148,163,184,.2); cursor: pointer; transition: .22s ease; }
 .task-notification-toggle span { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,.25); transition: transform .22s cubic-bezier(.2,.8,.2,1); }

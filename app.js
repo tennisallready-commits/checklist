@@ -188,8 +188,22 @@ let currentUser = null;
 let currentUsername = "";
 const collaborationIdentityByEmail = new Map();
 let identifierSetupResolver = null;
-let addTaskReminderTime = "08:00";
-let editTaskReminderTime = "08:00";
+function getCurrentReminderTime() {
+    const now = new Date();
+    return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+}
+
+function updateTaskReminderSummary(mode, enabled, time, offsetDays) {
+    const element = document.getElementById(mode === "edit" ? "edit-task-reminder-summary" : "task-reminder-summary");
+    if (!element) return;
+    element.textContent = enabled
+        ? `${Number(offsetDays) === 1 ? "1 dia antes" : "No mesmo dia"} às ${time}`
+        : "Lembrar sobre esta tarefa";
+    element.classList.toggle("configured", enabled);
+}
+
+let addTaskReminderTime = getCurrentReminderTime();
+let editTaskReminderTime = getCurrentReminderTime();
 let addTaskReminderOffsetDays = 0;
 let editTaskReminderOffsetDays = 0;
 
@@ -232,6 +246,19 @@ let pendingAutocompleteDetailsTask = null;
 let collaborationRealtimeChannel = null;
 let categoryOnboardingTimer = null;
 let categoryOnboardingSlide = 0;
+let lastStartupInteractionAt = 0;
+
+function registerStartupInteraction() {
+    lastStartupInteractionAt = Date.now();
+}
+
+async function waitForStartupInteractionToSettle() {
+    if (document.body.dataset.hasChecklistCache !== "true") return;
+    const observationEndsAt = Date.now() + 850;
+    while (Date.now() < observationEndsAt || Date.now() - lastStartupInteractionAt < 450) {
+        await new Promise(resolve => setTimeout(resolve, 90));
+    }
+}
 
 function getNoticeKind(message) {
     const text = String(message || "").toLowerCase();
@@ -299,6 +326,7 @@ const btnPrevDay = document.getElementById("btn-prev-day");
 const btnNextDay = document.getElementById("btn-next-day");
 const orgTagEl = document.getElementById("org-tag");
 const appContainer = document.querySelector(".app-container");
+const appSessionLoader = document.getElementById("app-session-loader");
 const syncStatusEl = document.getElementById("sync-status");
 const syncStatusLabelEl = document.getElementById("sync-status-label");
 
@@ -443,6 +471,8 @@ const calendarDaysGrid = document.getElementById("calendar-days-grid");
 // Initialization
 // ----------------------------------------------------
 document.addEventListener("DOMContentLoaded", () => {
+    document.addEventListener("pointerdown", registerStartupInteraction, { passive: true, capture: true });
+    document.addEventListener("touchstart", registerStartupInteraction, { passive: true, capture: true });
     setSyncStatus(navigator.onLine ? "checking" : "offline", navigator.onLine ? "Verificando…" : "Offline");
     initApp();
     setupEventListeners();
@@ -505,13 +535,24 @@ async function initApp() {
         orgTagEl.textContent = "Checklist Organizacional";
     }
 
-    // Carrega dados offline de imediato para renderização instantânea na tela
-    // enquanto a sessão do Supabase é verificada assincronamente (evita tela em branco/delay de 1s)
-    loadDataOffline();
-    renderCategories();
-    renderChecklist();
-    updateProgress();
-    updateSmartReportButtonVisibility();
+    // Com cache útil, abre o checklist imediatamente e revalida silenciosamente.
+    // Sem cache, mantém a tela curta até a primeira carga da conta terminar.
+    const cachedCategories = JSON.parse(localStorage.getItem("offline_categories")) || [];
+    const cachedTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    const hasUsefulCache = cachedCategories.some(category => category.is_active !== false)
+        || cachedTasks.some(task => task.is_active !== false);
+    document.body.dataset.hasChecklistCache = hasUsefulCache ? "true" : "false";
+    if (hasUsefulCache) {
+        loadDataOffline();
+        renderCategories();
+        renderChecklist();
+        updateProgress();
+        updateSmartReportButtonVisibility();
+        appContainer.style.display = "flex";
+        if (appSessionLoader) appSessionLoader.classList.add("hidden");
+    } else {
+        appContainer.style.display = "none";
+    }
 
     // Connect to Supabase
     connectSupabase();
@@ -1455,10 +1496,12 @@ function setupEventListeners() {
         chkImportant.addEventListener("change", async () => {
             if (chkImportant.checked) {
                 requestNotificationPermission();
+                addTaskReminderTime = getCurrentReminderTime();
                 const reminder = await chooseTaskReminderTime(addTaskReminderTime, addTaskReminderOffsetDays);
                 if (!reminder) chkImportant.checked = false;
                 else { addTaskReminderTime = reminder.time; addTaskReminderOffsetDays = reminder.offsetDays; }
             }
+            updateTaskReminderSummary("add", chkImportant.checked, addTaskReminderTime, addTaskReminderOffsetDays);
         });
     }
 
@@ -1471,6 +1514,7 @@ function setupEventListeners() {
                 if (!reminder) chkEditImportant.checked = false;
                 else { editTaskReminderTime = reminder.time; editTaskReminderOffsetDays = reminder.offsetDays; }
             }
+            updateTaskReminderSummary("edit", chkEditImportant.checked, editTaskReminderTime, editTaskReminderOffsetDays);
         });
     }
 
@@ -1523,8 +1567,9 @@ function setupEventListeners() {
             // Limpa seleção de turnos
             document.querySelectorAll("#add-shift-selector .shift-toggle-btn").forEach(b => b.classList.remove("active"));
             if (chkImp) chkImp.checked = false;
-            addTaskReminderTime = "08:00";
+            addTaskReminderTime = getCurrentReminderTime();
             addTaskReminderOffsetDays = 0;
+            updateTaskReminderSummary("add", false, addTaskReminderTime, addTaskReminderOffsetDays);
             selectTaskRecurring.value = "once";
             closeModal(modalAddTask);
         } catch (error) {
@@ -4494,8 +4539,9 @@ function openEditTaskModal(task) {
     const chkEditImp = document.getElementById("edit-task-important");
     if (chkEditImp) {
         chkEditImp.checked = task.context && (task.context.important === true || task.context.important === "true");
-        editTaskReminderTime = task.context && task.context.reminder_time ? task.context.reminder_time : "08:00";
+        editTaskReminderTime = task.context && task.context.reminder_time ? task.context.reminder_time : getCurrentReminderTime();
         editTaskReminderOffsetDays = task.context && Number(task.context.reminder_offset_days) === 1 ? 1 : 0;
+        updateTaskReminderSummary("edit", chkEditImp.checked, editTaskReminderTime, editTaskReminderOffsetDays);
     }
     
     openModal(modalEditTask);
@@ -5914,6 +5960,7 @@ function setupSupabaseAuth() {
         document.getElementById("auth-container").style.display = "none";
         document.querySelector(".app-container").style.display = "flex";
         loadChecklistAndProgress();
+        if (appSessionLoader) appSessionLoader.classList.add("hidden");
         return;
     }
 
@@ -5939,6 +5986,10 @@ function setupSupabaseAuth() {
 
             // Toda conta precisa definir um ID público antes de continuar.
             await ensureUserIdentifier();
+
+            // Com cache visível, não substitui os cartões enquanto o usuário
+            // inicia um swipe, toque ou edição logo após abrir o PWA.
+            await waitForStartupInteractionToSettle();
             
             // Sync local data to cloud
             await syncOfflineDataToCloud();
@@ -5973,6 +6024,7 @@ function setupSupabaseAuth() {
                 }, 250);
             }
             lucide.createIcons();
+            if (appSessionLoader) appSessionLoader.classList.add("hidden");
         } else {
             if (collaborationRealtimeChannel && supabaseClient) {
                 supabaseClient.removeChannel(collaborationRealtimeChannel);
@@ -5986,6 +6038,7 @@ function setupSupabaseAuth() {
             reportsCloudState = "idle";
             document.getElementById("auth-container").style.display = "flex";
             document.querySelector(".app-container").style.display = "none";
+            if (appSessionLoader) appSessionLoader.classList.add("hidden");
             
             // Limpa o cache local ao deslogar para evitar contaminação
             localStorage.removeItem("offline_categories");

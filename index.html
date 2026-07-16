@@ -36,7 +36,7 @@
             }
         });
     </script>
-    <link rel="stylesheet" href="style.css?v=7.86">
+    <link rel="stylesheet" href="style.css?v=7.87">
     
     <!-- iOS / PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -55,6 +55,9 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
+    <div id="app-session-loader" class="app-session-loader" aria-live="polite">
+        <div class="session-loader-card"><span class="session-loader-icon"><i data-lucide="list-checks"></i></span><strong>Preparando seu checklist</strong><small>Carregando suas categorias e tarefas…</small><span class="session-loader-bar"><i></i></span></div>
+    </div>
     <!-- Auth Container (Login / Register Screen) -->
     <div id="auth-container" class="auth-container" style="display: none;">
         <div class="auth-card">
@@ -372,7 +375,7 @@
                     <input type="date" id="task-date" required>
                 </div>
                 <div class="task-notification-setting">
-                    <div class="task-notification-copy"><strong>Notificar</strong><small>Lembrar sobre esta tarefa</small></div>
+                    <div class="task-notification-copy"><strong>Notificar</strong><small id="task-reminder-summary">Lembrar sobre esta tarefa</small></div>
                     <button type="button" class="btn-notification-info" style="background: transparent; border: none; padding: 2px; color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;">
                         <i data-lucide="clock-3" style="width: 14px; height: 14px;"></i>
                     </button>
@@ -470,7 +473,7 @@
 
                 <div class="settings-version">
                     <span>Checklist</span>
-                        <strong>Versão 8.72</strong>
+                        <strong>Versão 8.77</strong>
                 </div>
             </div>
         </div>
@@ -623,7 +626,7 @@
                     <input type="date" id="edit-task-date" required>
                 </div>
                 <div class="task-notification-setting">
-                    <div class="task-notification-copy"><strong>Notificar</strong><small>Lembrar sobre esta tarefa</small></div>
+                    <div class="task-notification-copy"><strong>Notificar</strong><small id="edit-task-reminder-summary">Lembrar sobre esta tarefa</small></div>
                     <button type="button" class="btn-notification-info" style="background: transparent; border: none; padding: 2px; color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;">
                         <i data-lucide="clock-3" style="width: 14px; height: 14px;"></i>
                     </button>
@@ -1012,6 +1015,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=8.72"></script>
+    <script src="app.js?v=8.77"></script>
 </body>
 </html>
