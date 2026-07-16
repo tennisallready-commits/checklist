@@ -188,6 +188,39 @@ let currentUser = null;
 let currentUsername = "";
 const collaborationIdentityByEmail = new Map();
 let identifierSetupResolver = null;
+let addTaskReminderTime = "08:00";
+let editTaskReminderTime = "08:00";
+let addTaskReminderOffsetDays = 0;
+let editTaskReminderOffsetDays = 0;
+
+function chooseTaskReminderTime(currentValue = "08:00", currentOffsetDays = 0) {
+    return new Promise(resolve => {
+        const layer = document.createElement("div");
+        layer.className = "reminder-picker-layer";
+        const presets = [{ time: "08:00", label: "Início da manhã", icon: "sunrise" }, { time: "12:00", label: "Hora do almoço", icon: "sun" }, { time: "18:00", label: "Fim da tarde", icon: "sunset" }, { time: "21:00", label: "À noite", icon: "moon" }];
+        layer.innerHTML = `<div class="reminder-picker-backdrop"></div><div class="reminder-picker-card" role="dialog" aria-modal="true"><div class="reminder-picker-icon"><i data-lucide="alarm-clock"></i></div><h3>Quando deseja ser lembrado?</h3><p>Escolha o dia e o horário do lembrete.</p><div class="reminder-day-choice"><button type="button" data-offset="0" class="${currentOffsetDays === 0 ? "selected" : ""}">No mesmo dia</button><button type="button" data-offset="1" class="${currentOffsetDays === 1 ? "selected" : ""}">1 dia antes</button></div><div class="reminder-preset-grid">${presets.map(item => `<button type="button" data-time="${item.time}" class="${currentValue === item.time ? "selected" : ""}"><i data-lucide="${item.icon}"></i><strong>${item.time}</strong><span>${item.label}</span></button>`).join("")}</div><label class="reminder-custom-label">Outro horário<input class="reminder-custom-time" type="time" value="${escapeHTML(currentValue)}"></label><div class="reminder-picker-actions"><button type="button" class="btn reminder-cancel">Cancelar</button><button type="button" class="btn btn-primary reminder-confirm">Salvar lembrete</button></div></div>`;
+        document.body.appendChild(layer);
+        if (window.lucide) window.lucide.createIcons();
+        let selectedTime = currentValue;
+        let selectedOffsetDays = currentOffsetDays;
+        const customInput = layer.querySelector(".reminder-custom-time");
+        layer.querySelectorAll("[data-time]").forEach(button => button.addEventListener("click", () => {
+            selectedTime = button.dataset.time;
+            customInput.value = selectedTime;
+            layer.querySelectorAll("[data-time]").forEach(item => item.classList.toggle("selected", item === button));
+        }));
+        customInput.addEventListener("input", () => { selectedTime = customInput.value; layer.querySelectorAll("[data-time]").forEach(item => item.classList.toggle("selected", item.dataset.time === selectedTime)); });
+        layer.querySelectorAll("[data-offset]").forEach(button => button.addEventListener("click", () => {
+            selectedOffsetDays = Number(button.dataset.offset);
+            layer.querySelectorAll("[data-offset]").forEach(item => item.classList.toggle("selected", item === button));
+        }));
+        const finish = value => { layer.classList.remove("visible"); setTimeout(() => layer.remove(), 240); resolve(value); };
+        layer.querySelector(".reminder-cancel").addEventListener("click", () => finish(null));
+        layer.querySelector(".reminder-picker-backdrop").addEventListener("click", () => finish(null));
+        layer.querySelector(".reminder-confirm").addEventListener("click", () => finish({ time: selectedTime || "08:00", offsetDays: selectedOffsetDays }));
+        requestAnimationFrame(() => layer.classList.add("visible"));
+    });
+}
 let isAuthModeLogin = true;
 let localDataVersion = 0; // Previne race conditions de sync
 let dataLoadRequestVersion = 0; // Impede respostas antigas de outra data de sobrescreverem a tela
@@ -199,6 +232,53 @@ let pendingAutocompleteDetailsTask = null;
 let collaborationRealtimeChannel = null;
 let categoryOnboardingTimer = null;
 let categoryOnboardingSlide = 0;
+
+function getNoticeKind(message) {
+    const text = String(message || "").toLowerCase();
+    if (/erro|não foi possível|indisponível|bloquead|inválid/.test(text)) return "error";
+    if (/sucesso|concluíd|copiado|aceito|enviado|saiu|removido|criada/.test(text)) return "success";
+    if (/atenção|selecione|cadastre|adicione|aguarde/.test(text)) return "warning";
+    return "info";
+}
+
+function showAppNotice(message, kind = getNoticeKind(message)) {
+    let stack = document.getElementById("app-notice-stack");
+    if (!stack) {
+        stack = document.createElement("div");
+        stack.id = "app-notice-stack";
+        stack.className = "app-notice-stack";
+        document.body.appendChild(stack);
+    }
+    const icons = { success: "circle-check", error: "circle-x", warning: "triangle-alert", info: "info" };
+    const notice = document.createElement("div");
+    notice.className = `app-notice ${kind}`;
+    notice.setAttribute("role", kind === "error" ? "alert" : "status");
+    notice.innerHTML = `<span class="app-notice-icon"><i data-lucide="${icons[kind] || icons.info}"></i></span><div><strong>${kind === "success" ? "Tudo certo" : kind === "error" ? "Algo deu errado" : kind === "warning" ? "Atenção" : "Checklist"}</strong><p>${escapeHTML(String(message))}</p></div><button type="button" aria-label="Fechar"><i data-lucide="x"></i></button>`;
+    stack.appendChild(notice);
+    if (window.lucide) window.lucide.createIcons();
+    const close = () => { notice.classList.remove("visible"); setTimeout(() => notice.remove(), 260); };
+    notice.querySelector("button").addEventListener("click", close);
+    requestAnimationFrame(() => notice.classList.add("visible"));
+    setTimeout(close, kind === "error" ? 6000 : 4200);
+}
+
+async function showAppConfirm(message, options = {}) {
+    return new Promise(resolve => {
+        const layer = document.createElement("div");
+        layer.className = "app-confirm-layer";
+        layer.innerHTML = `<div class="app-confirm-backdrop"></div><div class="app-confirm-card" role="alertdialog" aria-modal="true"><span class="app-confirm-icon"><i data-lucide="${options.danger ? "trash-2" : "circle-help"}"></i></span><h3>${escapeHTML(options.title || "Confirmar ação")}</h3><p>${escapeHTML(String(message))}</p><div class="app-confirm-actions"><button class="btn app-confirm-cancel">${escapeHTML(options.cancelText || "Cancelar")}</button><button class="btn ${options.danger ? "app-confirm-danger" : "btn-primary"} app-confirm-ok">${escapeHTML(options.confirmText || "Confirmar")}</button></div></div>`;
+        document.body.appendChild(layer);
+        if (window.lucide) window.lucide.createIcons();
+        const finish = value => { layer.classList.remove("visible"); setTimeout(() => layer.remove(), 260); resolve(value); };
+        layer.querySelector(".app-confirm-cancel").addEventListener("click", () => finish(false));
+        layer.querySelector(".app-confirm-backdrop").addEventListener("click", () => finish(false));
+        layer.querySelector(".app-confirm-ok").addEventListener("click", () => finish(true));
+        requestAnimationFrame(() => layer.classList.add("visible"));
+    });
+}
+
+// Mantém chamadas informativas antigas dentro da identidade visual do app.
+window.alert = message => showAppNotice(message);
 
 // Supabase Client instance
 let supabaseClient = null;
@@ -236,7 +316,8 @@ function hasPendingSyncData() {
     const pendingTasks = (dbCache.offline_tasks || []).some(t => isTemporaryId(t.id) && t.is_active !== false);
     const pendingCompletions = Object.keys(dbCache.offline_completions_queue || {}).length > 0;
     const pendingUpdates = Object.keys(dbCache.offline_task_updates_queue || {}).length > 0;
-    return pendingCategories || pendingTasks || pendingCompletions || pendingUpdates;
+    const pendingInvites = (JSON.parse(localStorage.getItem("offline_collaboration_invites_queue")) || []).length > 0;
+    return pendingCategories || pendingTasks || pendingCompletions || pendingUpdates || pendingInvites;
 }
 
 function refreshSyncStatusFromQueues() {
@@ -379,6 +460,8 @@ document.addEventListener("DOMContentLoaded", () => {
         navigator.serviceWorker.addEventListener('message', event => {
             if (event.data && event.data.type === 'OPEN_SHARED_TASK' && event.data.taskId) {
                 focusSharedTaskFromNotification({ task_id: event.data.taskId });
+            } else if (event.data && event.data.type === 'OPEN_COLLABORATION_INVITE' && event.data.inviteId) {
+                promptCollaborationInviteNavigation(event.data.inviteId);
             } else if (event.data && event.data.type === 'OPEN_NOTIFICATIONS') {
                 renderNotifications();
                 openModal(modalNotifications);
@@ -1369,15 +1452,25 @@ function setupEventListeners() {
 
     const chkImportant = document.getElementById("task-important");
     if (chkImportant) {
-        chkImportant.addEventListener("change", () => {
-            if (chkImportant.checked) requestNotificationPermission();
+        chkImportant.addEventListener("change", async () => {
+            if (chkImportant.checked) {
+                requestNotificationPermission();
+                const reminder = await chooseTaskReminderTime(addTaskReminderTime, addTaskReminderOffsetDays);
+                if (!reminder) chkImportant.checked = false;
+                else { addTaskReminderTime = reminder.time; addTaskReminderOffsetDays = reminder.offsetDays; }
+            }
         });
     }
 
     const chkEditImportant = document.getElementById("edit-task-important");
     if (chkEditImportant) {
-        chkEditImportant.addEventListener("change", () => {
-            if (chkEditImportant.checked) requestNotificationPermission();
+        chkEditImportant.addEventListener("change", async () => {
+            if (chkEditImportant.checked) {
+                requestNotificationPermission();
+                const reminder = await chooseTaskReminderTime(editTaskReminderTime, editTaskReminderOffsetDays);
+                if (!reminder) chkEditImportant.checked = false;
+                else { editTaskReminderTime = reminder.time; editTaskReminderOffsetDays = reminder.offsetDays; }
+            }
         });
     }
 
@@ -1418,7 +1511,11 @@ function setupEventListeners() {
             const chkImp = document.getElementById("task-important");
             const important = chkImp ? chkImp.checked : false;
             
+            const queuedSharedTask = Boolean(assignedTo) && !navigator.onLine;
             await addTask(inputTaskTitle.value.trim(), selectTaskCategory.value, selectTaskRecurring.value, taskDate, repeatDays, assignedTo, shifts, important);
+            if (queuedSharedTask) {
+                showAppNotice("Você está sem internet. A tarefa atribuída será enviada automaticamente quando a conexão voltar. O responsável receberá quando estiver conectado.", "warning");
+            }
             inputTaskTitle.value = "";
             // Reset day toggles
             document.querySelectorAll("#repeat-days-group .day-toggle").forEach(b => b.classList.remove("active"));
@@ -1426,6 +1523,8 @@ function setupEventListeners() {
             // Limpa seleção de turnos
             document.querySelectorAll("#add-shift-selector .shift-toggle-btn").forEach(b => b.classList.remove("active"));
             if (chkImp) chkImp.checked = false;
+            addTaskReminderTime = "08:00";
+            addTaskReminderOffsetDays = 0;
             selectTaskRecurring.value = "once";
             closeModal(modalAddTask);
         } catch (error) {
@@ -1500,6 +1599,15 @@ function setupEventListeners() {
         const chkEditImp = document.getElementById("edit-task-important");
         if (chkEditImp) {
             context.important = chkEditImp.checked;
+            if (chkEditImp.checked) {
+                context.reminder_time = editTaskReminderTime;
+                context.reminder_offset_days = editTaskReminderOffsetDays;
+                context.reminder_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
+            } else {
+                delete context.reminder_time;
+                delete context.reminder_offset_days;
+                delete context.reminder_timezone;
+            }
         }
 
         const updates = {
@@ -1820,7 +1928,7 @@ function setupEventListeners() {
 
     if (btnLogout) {
         btnLogout.addEventListener("click", async () => {
-            if (confirm("Deseja sair da sua conta?")) {
+            if (await showAppConfirm("Deseja sair da sua conta?", { title: "Encerrar sessão", confirmText: "Sair" })) {
                 if (supabaseClient) {
                     // Limpa todo o cache local do usuário anterior para evitar contaminação
                     localStorage.removeItem("offline_categories");
@@ -2088,6 +2196,10 @@ function getIdentityLabel(email) {
     if (currentUser && normalized === normalizeAccountEmail(currentUser.email) && currentUsername) return `@${currentUsername}`;
     const username = collaborationIdentityByEmail.get(normalized);
     return username ? `@${username}` : normalized;
+}
+
+function getPlainIdentityLabel(email) {
+    return getIdentityLabel(email).replace(/^@/, "");
 }
 
 async function loadCollaborationIdentityLabels() {
@@ -4081,6 +4193,9 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
     }
     if (important) {
         context.important = true;
+        context.reminder_time = addTaskReminderTime;
+        context.reminder_offset_days = addTaskReminderOffsetDays;
+        context.reminder_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
     }
     console.log(`%c[Motor de Contexto] Tarefa: "${title}" na guia "${category}"`, "color: #8b5cf6; font-weight: bold;", context);
 
@@ -4379,6 +4494,8 @@ function openEditTaskModal(task) {
     const chkEditImp = document.getElementById("edit-task-important");
     if (chkEditImp) {
         chkEditImp.checked = task.context && (task.context.important === true || task.context.important === "true");
+        editTaskReminderTime = task.context && task.context.reminder_time ? task.context.reminder_time : "08:00";
+        editTaskReminderOffsetDays = task.context && Number(task.context.reminder_offset_days) === 1 ? 1 : 0;
     }
     
     openModal(modalEditTask);
@@ -4682,6 +4799,19 @@ async function inviteCollaborator(catId, email) {
         alert("Erro: Categoria não encontrada nas guias ativas.");
         return;
     }
+
+    if (!navigator.onLine) {
+        const queue = JSON.parse(localStorage.getItem("offline_collaboration_invites_queue")) || [];
+        const identifier = email.trim().toLowerCase().replace(/^@/, "");
+        if (!queue.some(item => String(item.category_id) === String(catId) && item.identifier === identifier)) {
+            queue.push({ category_id: catId, category_name: cat.name, identifier, queued_at: new Date().toISOString() });
+        }
+        localStorage.setItem("offline_collaboration_invites_queue", JSON.stringify(queue));
+        if (inputCollabEmail) inputCollabEmail.value = "";
+        showAppNotice("Você está sem internet. O convite será enviado automaticamente quando a conexão voltar. A outra pessoa receberá quando estiver conectada.", "warning");
+        scheduleSyncStatusRefresh();
+        return;
+    }
     
     const enteredIdentity = email.trim().toLowerCase().replace(/^@/, "");
     let cleanEmail = enteredIdentity;
@@ -4700,18 +4830,6 @@ async function inviteCollaborator(catId, email) {
         return;
     }
     
-    const exists = categoryShares.some(s => String(s.category_id) === String(catId) && String(s.collaborator_email).trim().toLowerCase() === cleanEmail);
-    if (exists) {
-        alert("Este e-mail já foi convidado para esta guia.");
-        return;
-    }
-    
-    const newShare = {
-        category_id: catId,
-        owner_id: currentUser.id,
-        owner_email: currentUser.email,
-        collaborator_email: cleanEmail
-    };
     requestCollaborationNotificationPermission();
     
     if (btn) {
@@ -4720,6 +4838,51 @@ async function inviteCollaborator(catId, email) {
     }
     
     try {
+        // O ID guardado pelo PWA pode ficar obsoleto após uma categoria ser
+        // excluída/recriada. Confirma sempre a categoria real antes do convite.
+        let { data: remoteCategory, error: remoteCategoryError } = await supabaseClient
+            .from("categories")
+            .select("*")
+            .eq("id", catId)
+            .eq("user_id", currentUser.id)
+            .maybeSingle();
+
+        if (!remoteCategory && !remoteCategoryError) {
+            const fallbackResult = await supabaseClient
+                .from("categories")
+                .select("*")
+                .eq("user_id", currentUser.id)
+                .eq("name", cat.name)
+                .eq("is_active", true)
+                .order("id", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+            remoteCategory = fallbackResult.data;
+            remoteCategoryError = fallbackResult.error;
+        }
+        if (remoteCategoryError) throw remoteCategoryError;
+        if (!remoteCategory) {
+            throw new Error("Esta categoria ainda não está sincronizada. Feche esta janela, aguarde aparecer ‘Sincronizado’ e tente novamente.");
+        }
+
+        const realCategoryId = remoteCategory.id;
+        if (String(realCategoryId) !== String(catId)) {
+            updateLocalCatId(catId, remoteCategory);
+            if (collabCategoryId) collabCategoryId.value = realCategoryId;
+        }
+
+        const exists = categoryShares.some(share =>
+            String(share.category_id) === String(realCategoryId)
+            && normalizeAccountEmail(share.collaborator_email) === normalizeAccountEmail(cleanEmail)
+        );
+        if (exists) throw new Error("Este ID já foi convidado para esta categoria.");
+
+        const newShare = {
+            category_id: realCategoryId,
+            owner_id: currentUser.id,
+            owner_email: currentUser.email,
+            collaborator_email: cleanEmail
+        };
         const { data: createdShares, error } = await supabaseClient
             .from('category_shares')
             .insert(newShare)
@@ -4757,7 +4920,7 @@ async function removeCollaborator(shareId, cat) {
         return;
     }
     
-    if (confirm("Deseja realmente remover este colaborador da guia?")) {
+    if (await showAppConfirm("Deseja realmente remover este colaborador da categoria?", { title: "Remover colaborador", confirmText: "Remover", danger: true })) {
         try {
             const { error } = await supabaseClient
                 .from('category_shares')
@@ -4809,7 +4972,7 @@ function renderNotifications() {
             btnAccept.addEventListener("click", async () => {
                 btnAccept.disabled = true;
                 btnAccept.textContent = "...";
-                await acceptInvitation(invite.id);
+                await acceptInvitation(invite.id, true);
             });
 
             btnDecline.addEventListener("click", async () => {
@@ -4817,6 +4980,13 @@ function renderNotifications() {
                 btnDecline.textContent = "...";
                 await declineInvitation(invite.id);
             });
+
+            item.addEventListener("click", async event => {
+                if (event.target.closest("button")) return;
+                const shouldAccept = await showAppConfirm(`Aceitar o convite e abrir a categoria “${invite.category_name || "Compartilhada"}”?`, { title: "Abrir categoria", confirmText: "Aceitar e abrir" });
+                if (shouldAccept) await acceptInvitation(invite.id, true);
+            });
+            item.style.cursor = "pointer";
 
             notificationsListContainer.appendChild(item);
         });
@@ -4943,10 +5113,11 @@ async function focusSharedTaskFromNotification(notification) {
     setTimeout(() => highlightRenderedTask(notification.task_id), 220);
 }
 
-async function acceptInvitation(shareId) {
+async function acceptInvitation(shareId, openCategory = false) {
     if (!supabaseClient) return;
     requestCollaborationNotificationPermission();
     try {
+        const invite = pendingInvites.find(item => String(item.id) === String(shareId));
         const { error } = await supabaseClient
             .from('category_shares')
             .update({ accepted: true })
@@ -4956,11 +5127,33 @@ async function acceptInvitation(shareId) {
 
         alert("Convite aceito! A guia compartilhada agora está disponível.");
         await loadChecklistAndProgress();
+        if (openCategory && invite) {
+            const category = categories.find(item => String(item.id) === String(invite.category_id));
+            if (category) {
+                closeModal(modalNotifications);
+                currentFilter = category.name;
+                renderCategories();
+                renderChecklist();
+                requestAnimationFrame(() => document.querySelector(`.category-chip[data-category="${CSS.escape(category.name)}"]`)?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" }));
+            }
+        }
         renderNotifications();
     } catch (err) {
         console.error("Erro ao aceitar convite:", err);
         alert("Erro ao aceitar convite: " + err.message);
     }
+}
+
+async function promptCollaborationInviteNavigation(inviteId) {
+    await loadChecklistAndProgress();
+    const invite = pendingInvites.find(item => String(item.id) === String(inviteId));
+    if (!invite) {
+        renderNotifications();
+        openModal(modalNotifications);
+        return;
+    }
+    const shouldAccept = await showAppConfirm(`Aceitar o convite e abrir a categoria “${invite.category_name || "Compartilhada"}”?`, { title: "Convite de colaboração", confirmText: "Aceitar e abrir" });
+    if (shouldAccept) await acceptInvitation(invite.id, true);
 }
 
 function requestCollaborationNotificationPermission() {
@@ -4971,7 +5164,7 @@ function requestCollaborationNotificationPermission() {
 
 async function declineInvitation(shareId) {
     if (!supabaseClient) return;
-    if (confirm("Deseja realmente recusar este convite?")) {
+    if (await showAppConfirm("Deseja realmente recusar este convite?", { title: "Recusar convite", confirmText: "Recusar", danger: true })) {
         try {
             const { error } = await supabaseClient
                 .from('category_shares')
@@ -5025,7 +5218,7 @@ function updateTaskAssigneeDropdown(categoryName, selectEl, groupEl) {
     const ownerEmail = isOwnerMe ? currentUser.email : (shares[0].owner_email || "Dono da Guia");
     const optOwner = document.createElement("option");
     optOwner.value = ownerEmail;
-    optOwner.textContent = `${getIdentityLabel(ownerEmail)} (Dono)`;
+    optOwner.textContent = `${getPlainIdentityLabel(ownerEmail)} (Dono)`;
     selectEl.appendChild(optOwner);
     
     // Collaborator Options
@@ -5036,7 +5229,7 @@ function updateTaskAssigneeDropdown(categoryName, selectEl, groupEl) {
         addedEmails.add(normalizedEmail);
         const optCollab = document.createElement("option");
         optCollab.value = share.collaborator_email;
-        optCollab.textContent = getIdentityLabel(share.collaborator_email);
+        optCollab.textContent = getPlainIdentityLabel(share.collaborator_email);
         selectEl.appendChild(optCollab);
     });
     
@@ -5181,7 +5374,7 @@ async function deleteCategory(id) {
     localDataVersion++;
     const cat = categories.find(c => String(c.id) === String(id));
     if (!cat) return;
-    if (!confirm(`Deseja excluir a categoria “${cat.name}”? Todas as tarefas e conclusões relacionadas a ela também serão excluídas permanentemente.`)) return;
+    if (!await showAppConfirm(`Deseja excluir a categoria “${cat.name}”? Todas as tarefas e conclusões relacionadas também serão excluídas permanentemente.`, { title: "Excluir categoria", confirmText: "Excluir tudo", danger: true })) return;
 
     try {
         if (supabaseClient && currentUser && !isTemporaryId(id)) {
@@ -5270,7 +5463,7 @@ async function leaveSharedCategory(cat) {
         alert("Não foi possível localizar sua participação nesta categoria.");
         return;
     }
-    if (!confirm(`Deseja sair da categoria “${cat.name}”? Você poderá ser convidado novamente pelo administrador.`)) return;
+    if (!await showAppConfirm(`Deseja sair da categoria “${cat.name}”? Você poderá ser convidado novamente pelo administrador.`, { title: "Sair da categoria", confirmText: "Sair", danger: true })) return;
 
     try {
         const { error } = await supabaseClient
@@ -5764,9 +5957,13 @@ function setupSupabaseAuth() {
             }
             const notificationTaskId = new URLSearchParams(window.location.search).get("notification_task");
             const shouldOpenNotifications = new URLSearchParams(window.location.search).get("open_notifications") === "1";
+            const collaborationInviteId = new URLSearchParams(window.location.search).get("collaboration_invite");
             if (notificationTaskId) {
                 history.replaceState({}, "", window.location.pathname);
                 setTimeout(() => focusSharedTaskFromNotification({ task_id: notificationTaskId }), 250);
+            } else if (collaborationInviteId) {
+                history.replaceState({}, "", window.location.pathname);
+                setTimeout(() => promptCollaborationInviteNavigation(collaborationInviteId), 250);
             } else if (shouldOpenNotifications) {
                 history.replaceState({}, "", window.location.pathname);
                 setTimeout(() => {
@@ -5797,6 +5994,7 @@ function setupSupabaseAuth() {
             localStorage.removeItem("offline_category_shares");
             localStorage.removeItem("offline_completions_queue");
             localStorage.removeItem("offline_task_updates_queue");
+            localStorage.removeItem("offline_collaboration_invites_queue");
             
             tasks = [];
             categories = [];
@@ -5851,10 +6049,11 @@ async function syncOfflineDataToCloud() {
             if (pending.context) newTaskPayload.context = pending.context;
             if (pending.assigned_to) newTaskPayload.assigned_to = pending.assigned_to;
             if (pending.category_id) newTaskPayload.category_id = pending.category_id;
-            if (!newTaskPayload.category_id) {
-                const matchingCategory = categories.find(cat => cat.name === pending.category && !isTemporaryId(cat.id));
-                if (matchingCategory) newTaskPayload.category_id = matchingCategory.id;
-            }
+            const matchingCategory = categories.find(cat => cat.name === pending.category && !isTemporaryId(cat.id));
+            // O cache pode apontar para uma categoria já excluída. O nome é a
+            // referência segura para reparar o vínculo antes do insert.
+            if (matchingCategory) newTaskPayload.category_id = matchingCategory.id;
+            else delete newTaskPayload.category_id;
             newTaskPayload.user_id = currentUser.id;
 
             const { data, error } = await insertTaskWithCategoryFallback(newTaskPayload);
@@ -5867,6 +6066,10 @@ async function syncOfflineDataToCloud() {
                 allActiveTasks = allActiveTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
                 localTasks = localTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
                 localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+                if (realTask.category_id && realTask.assigned_to) {
+                    const { error: pushError } = await supabaseClient.functions.invoke("send-task-push", { body: { task_id: realTask.id } });
+                    if (pushError) console.warn("Tarefa sincronizada, mas o push ficou indisponível:", pushError.message);
+                }
                 
                 let compQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
                 let updatedCompQueue = {};
@@ -5882,12 +6085,68 @@ async function syncOfflineDataToCloud() {
             }
         }
 
-        // 3. Sincronizar conclusões (completions)
+        // 3. Enviar convites criados enquanto o aparelho estava offline.
+        let inviteQueue = JSON.parse(localStorage.getItem("offline_collaboration_invites_queue")) || [];
+        for (const pendingInvite of [...inviteQueue]) {
+            const category = categories.find(cat =>
+                String(cat.id) === String(pendingInvite.category_id)
+                || cat.name === pendingInvite.category_name
+            );
+            if (!category || isTemporaryId(category.id)) continue;
+
+            let collaboratorEmail = pendingInvite.identifier;
+            if (!collaboratorEmail.includes("@")) {
+                const { data: resolvedEmail, error: resolveError } = await supabaseClient.rpc("resolve_collaboration_email", { identifier: collaboratorEmail });
+                if (resolveError) throw resolveError;
+                if (!resolvedEmail) {
+                    showAppNotice(`O convite para “${pendingInvite.identifier}” não foi enviado porque esse ID não foi encontrado.`, "error");
+                    inviteQueue = inviteQueue.filter(item => item !== pendingInvite);
+                    localStorage.setItem("offline_collaboration_invites_queue", JSON.stringify(inviteQueue));
+                    continue;
+                }
+                collaboratorEmail = resolvedEmail;
+            }
+
+            const { data: createdShares, error: inviteError } = await supabaseClient.from("category_shares").insert({
+                category_id: category.id,
+                owner_id: currentUser.id,
+                owner_email: currentUser.email,
+                collaborator_email: collaboratorEmail
+            }).select("id");
+            if (inviteError && !/duplicate|unique/i.test(inviteError.message || "")) throw inviteError;
+            const createdInvite = createdShares && createdShares[0];
+            if (createdInvite) {
+                const { error: pushError } = await supabaseClient.functions.invoke("send-task-push", { body: { invite_id: createdInvite.id } });
+                if (pushError) console.warn("Convite sincronizado, mas o push ficou indisponível:", pushError.message);
+            }
+            inviteQueue = inviteQueue.filter(item => item !== pendingInvite);
+            localStorage.setItem("offline_collaboration_invites_queue", JSON.stringify(inviteQueue));
+            showAppNotice(`Convite para ${pendingInvite.identifier} enviado após a conexão ser restaurada.`, "success");
+        }
+
+        // 4. Sincronizar conclusões (completions)
         let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
         let queueKeys = Object.keys(queue);
         for (const key of queueKeys) {
             const [taskId, date] = key.split('_');
             if (isTemporaryId(taskId)) continue;
+
+            // Descarta conclusões órfãs deixadas no cache quando uma categoria
+            // e todas as suas tarefas foram removidas em cascata.
+            const { data: queuedTaskExists, error: queuedTaskCheckError } = await supabaseClient
+                .from("tasks")
+                .select("id")
+                .eq("id", taskId)
+                .maybeSingle();
+            if (queuedTaskCheckError) throw queuedTaskCheckError;
+            if (!queuedTaskExists) {
+                delete queue[key];
+                localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
+                let cachedCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+                cachedCompletions = cachedCompletions.filter(item => String(item.task_id) !== String(taskId));
+                localStorage.setItem("offline_completions", JSON.stringify(cachedCompletions));
+                continue;
+            }
 
             const completed = queue[key];
             const query = completed
@@ -5906,7 +6165,13 @@ async function syncOfflineDataToCloud() {
         let updateKeys = Object.keys(taskUpdatesQueue);
         for (const id of updateKeys) {
             if (isTemporaryId(id)) continue;
-            const dbUpdates = taskUpdatesQueue[id];
+            const dbUpdates = { ...taskUpdatesQueue[id] };
+            if (dbUpdates.category_id) {
+                const queuedTask = localTasks.find(task => String(task.id) === String(id));
+                const matchingCategory = queuedTask && categories.find(cat => cat.name === queuedTask.category && !isTemporaryId(cat.id));
+                if (matchingCategory) dbUpdates.category_id = matchingCategory.id;
+                else delete dbUpdates.category_id;
+            }
             
             const { error } = await supabaseClient.from('tasks').update(dbUpdates).eq('id', id);
             if (error) throw error;
@@ -5924,7 +6189,8 @@ async function syncOfflineDataToCloud() {
     } catch (e) {
         console.warn("[Sync] Falha durante a sincronização. Alterações pendentes mantidas no IndexedDB:", e);
         if (navigator.onLine) {
-            setSyncStatus("error", "Erro ao sincronizar", "Não foi possível sincronizar; as alterações permanecem salvas neste dispositivo");
+            const errorDetail = e && e.message ? e.message : "Falha desconhecida";
+            setSyncStatus("error", "Erro ao sincronizar", `Não foi possível sincronizar: ${errorDetail}`);
         } else {
             refreshSyncStatusFromQueues();
         }
@@ -7691,6 +7957,20 @@ function checkImportantTaskNotifications() {
     const checkTask = (task, targetDateStr) => {
         const isImportant = task.context && (task.context.important === true || task.context.important === "true");
         if (!isImportant) return;
+
+        if (task.context.reminder_time) {
+            const reminderTime = task.context.reminder_time;
+            const offsetDays = Number(task.context.reminder_offset_days) === 1 ? 1 : 0;
+            const reminderDateTime = new Date(`${targetDateStr}T${reminderTime}:00`);
+            reminderDateTime.setDate(reminderDateTime.getDate() - offsetDays);
+            const reminderKey = `reminder-${task.id}-${targetDateStr}-${reminderTime}`;
+            if (now >= reminderDateTime && now.getTime() - reminderDateTime.getTime() < 60 * 60 * 1000 && !shownAlerts[reminderKey]) {
+                showWebNotification("⏰ Lembrete de tarefa", offsetDays === 1 ? `Amanhã: “${task.title}”.` : `Está na hora de “${task.title}”.`, task.id, reminderKey);
+                shownAlerts[reminderKey] = true;
+                updated = true;
+            }
+            return;
+        }
 
         const turnos = task.context.turnos || [];
         

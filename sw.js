@@ -1,9 +1,9 @@
-const CACHE_NAME = 'checklist-cache-v8.78';
+const CACHE_NAME = 'checklist-cache-v8.90';
 const ASSETS = [
   './',
   './index.html',
-  './style.css?v=7.82',
-  './app.js?v=8.60',
+  './style.css?v=7.86',
+  './app.js?v=8.72',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -62,6 +62,7 @@ self.addEventListener('fetch', (e) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const taskId = event.notification.data && event.notification.data.taskId;
+  const inviteId = event.notification.data && event.notification.data.inviteId;
   const targetUrl = event.notification.data && event.notification.data.url
     ? event.notification.data.url
     : (taskId ? `./?notification_task=${encodeURIComponent(taskId)}` : './');
@@ -72,7 +73,7 @@ self.addEventListener('notificationclick', (event) => {
       if (existingClient) {
         existingClient.postMessage(taskId
           ? { type: 'OPEN_SHARED_TASK', taskId }
-          : { type: 'OPEN_NOTIFICATIONS' });
+          : inviteId ? { type: 'OPEN_COLLABORATION_INVITE', inviteId } : { type: 'OPEN_NOTIFICATIONS' });
         return existingClient.focus();
       }
       return clients.openWindow(absoluteTargetUrl);
@@ -93,7 +94,7 @@ self.addEventListener('push', (event) => {
     icon: './icons/icon-192.png',
     badge: './icons/icon-192.png',
     tag: payload.tag || `shared-task-${payload.task_id || Date.now()}`,
-    data: { taskId: payload.task_id || null, url: payload.url || './' },
+    data: { taskId: payload.task_id || null, inviteId: payload.invite_id || null, url: payload.url || './' },
     vibrate: [180, 80, 180]
   };
   event.waitUntil(self.registration.showNotification(title, options));

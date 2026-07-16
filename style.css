@@ -3212,6 +3212,67 @@ body.theme-girly .modal-content::before {
 .settings-toggle.is-on span { transform: translateX(20px); }
 .settings-notification-status { min-height: 1em; margin: -5px 2px 0; color: var(--text-muted); font-size: .63rem; }
 
+.task-notification-setting { display: grid; grid-template-columns: minmax(0,1fr) 24px 46px; align-items: center; gap: 8px; margin: 16px 0 24px; padding: 12px; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(255,255,255,.02); }
+.task-notification-copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.task-notification-copy strong { color: var(--text-primary); font-size: .78rem; }
+.task-notification-copy small { color: var(--text-muted); font-size: .64rem; }
+.task-notification-checkbox { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.task-notification-toggle { position: relative; width: 46px; height: 26px; margin: 0; border: 1px solid var(--border-color); border-radius: 999px; background: rgba(148,163,184,.2); cursor: pointer; transition: .22s ease; }
+.task-notification-toggle span { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,.25); transition: transform .22s cubic-bezier(.2,.8,.2,1); }
+.task-notification-checkbox:checked + .task-notification-toggle { border-color: rgba(139,92,246,.75); background: var(--primary); box-shadow: 0 0 0 3px rgba(139,92,246,.1); }
+.task-notification-checkbox:checked + .task-notification-toggle span { transform: translateX(20px); }
+.task-notification-checkbox:focus-visible + .task-notification-toggle { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+.app-notice-stack { position: fixed; top: 50%; left: 50%; z-index: 20000; display: flex; width: min(420px, calc(100vw - 28px)); max-height: calc(100dvh - 40px); flex-direction: column; gap: 9px; transform: translate(-50%, -50%); pointer-events: none; }
+.app-notice { display: grid; grid-template-columns: 38px minmax(0,1fr) 28px; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--border-color); border-radius: 15px; background: color-mix(in srgb, var(--bg-surface-solid) 94%, transparent); box-shadow: 0 18px 52px rgba(0,0,0,.4); backdrop-filter: blur(16px); opacity: 0; transform: translateY(10px) scale(.96); transition: opacity .25s ease, transform .25s ease; pointer-events: auto; }
+.app-notice.visible { opacity: 1; transform: translateY(0) scale(1); }
+.app-notice-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; background: rgba(139,92,246,.12); color: var(--primary); }
+.app-notice.success .app-notice-icon { color: #10b981; background: rgba(16,185,129,.12); }
+.app-notice.error .app-notice-icon { color: #ef4444; background: rgba(239,68,68,.12); }
+.app-notice.warning .app-notice-icon { color: #f59e0b; background: rgba(245,158,11,.12); }
+.app-notice-icon svg { width: 19px; height: 19px; }
+.app-notice strong { display: block; color: var(--text-primary); font-size: .76rem; }
+.app-notice p { margin: 2px 0 0; color: var(--text-secondary); font-size: .7rem; line-height: 1.4; }
+.app-notice > button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.app-notice > button svg { width: 15px; height: 15px; }
+.app-confirm-layer { position: fixed; inset: 0; z-index: 21000; display: grid; place-items: center; padding: 20px; opacity: 0; transition: opacity .25s ease; }
+.app-confirm-layer.visible { opacity: 1; }
+.app-confirm-backdrop { position: absolute; inset: 0; background: rgba(3,5,12,.78); backdrop-filter: blur(10px); }
+.app-confirm-card { position: relative; width: min(370px, 100%); padding: 24px; border: 1px solid var(--border-color); border-radius: 20px; background: var(--bg-surface-solid); box-shadow: 0 24px 70px rgba(0,0,0,.48); text-align: center; transform: translateY(12px) scale(.97); transition: transform .25s ease; }
+.app-confirm-layer.visible .app-confirm-card { transform: translateY(0) scale(1); }
+.app-confirm-icon { display: grid; place-items: center; width: 50px; height: 50px; margin: 0 auto 12px; border-radius: 15px; background: rgba(139,92,246,.13); color: var(--primary); }
+.app-confirm-icon svg { width: 23px; height: 23px; }
+.app-confirm-card h3 { margin: 0 0 7px; color: var(--text-primary); font-size: 1rem; }
+.app-confirm-card p { margin: 0; color: var(--text-secondary); font-size: .76rem; line-height: 1.5; }
+.app-confirm-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 20px; }
+.app-confirm-actions .btn { min-height: 43px; border-radius: 11px; }
+.app-confirm-cancel { border: 1px solid var(--border-color); background: rgba(255,255,255,.03); color: var(--text-secondary); }
+.app-confirm-danger { border: 1px solid rgba(239,68,68,.4); background: rgba(239,68,68,.14); color: #ef4444; font-weight: 800; }
+
+.reminder-picker-layer { position: fixed; inset: 0; z-index: 22000; display: grid; place-items: center; padding: 18px; opacity: 0; transition: opacity .24s ease; }
+.reminder-picker-layer.visible { opacity: 1; }
+.reminder-picker-backdrop { position: absolute; inset: 0; background: rgba(3,5,12,.8); backdrop-filter: blur(11px); }
+.reminder-picker-card { position: relative; width: min(390px,100%); padding: 24px; border: 1px solid var(--border-color); border-radius: 21px; background: var(--bg-surface-solid); box-shadow: 0 24px 72px rgba(0,0,0,.48); text-align: center; transform: translateY(12px) scale(.97); transition: transform .24s ease; }
+.reminder-picker-layer.visible .reminder-picker-card { transform: translateY(0) scale(1); }
+.reminder-picker-icon { display: grid; place-items: center; width: 52px; height: 52px; margin: 0 auto 11px; border-radius: 16px; color: #fff; background: var(--primary-gradient); box-shadow: 0 10px 25px rgba(139,92,246,.28); }
+.reminder-picker-icon svg { width: 24px; height: 24px; }
+.reminder-picker-card h3 { margin: 0 0 5px; color: var(--text-primary); font-size: 1.05rem; }
+.reminder-picker-card > p { margin: 0 0 17px; color: var(--text-secondary); font-size: .74rem; }
+.reminder-day-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-bottom: 10px; padding: 4px; border-radius: 11px; background: rgba(255,255,255,.035); }
+.reminder-day-choice button { min-height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--text-muted); font-size: .7rem; font-weight: 800; cursor: pointer; }
+.reminder-day-choice button.selected { background: rgba(139,92,246,.16); color: var(--primary); box-shadow: inset 0 0 0 1px rgba(139,92,246,.3); }
+.reminder-preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.reminder-preset-grid button { display: grid; grid-template-columns: 24px 1fr; grid-template-rows: auto auto; align-items: center; column-gap: 7px; padding: 10px; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(255,255,255,.025); color: var(--text-primary); text-align: left; cursor: pointer; }
+.reminder-preset-grid button.selected { border-color: var(--primary); background: rgba(139,92,246,.11); box-shadow: 0 0 0 2px rgba(139,92,246,.08); }
+.reminder-preset-grid svg { grid-row: 1 / 3; width: 19px; height: 19px; color: var(--primary); }
+.reminder-preset-grid strong { font-size: .8rem; }
+.reminder-preset-grid span { color: var(--text-muted); font-size: .59rem; }
+.reminder-custom-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; padding: 9px 11px; border: 1px solid var(--border-color); border-radius: 12px; color: var(--text-secondary); font-size: .7rem; font-weight: 700; }
+.reminder-custom-time { width: 112px !important; min-height: 36px !important; padding: 6px 9px !important; text-align: center; }
+.reminder-picker-actions { display: grid; grid-template-columns: 1fr 1.4fr; gap: 8px; margin-top: 16px; }
+.reminder-picker-actions .btn { min-height: 43px; border-radius: 11px; }
+.reminder-cancel { border: 1px solid var(--border-color); background: rgba(255,255,255,.03); color: var(--text-secondary); }
+
 .shared-task-notification-item {
     display: flex;
     gap: 11px;

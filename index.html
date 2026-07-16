@@ -36,7 +36,7 @@
             }
         });
     </script>
-    <link rel="stylesheet" href="style.css?v=7.82">
+    <link rel="stylesheet" href="style.css?v=7.86">
     
     <!-- iOS / PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -100,8 +100,8 @@
             <p>Ele será usado para entrar na conta e aparecer em convites, tarefas e colaborações.</p>
             <form id="form-create-identifier">
                 <label for="input-user-identifier">ID único</label>
-                <div class="identifier-input-shell"><span>@</span><input id="input-user-identifier" type="text" minlength="3" maxlength="24" placeholder="luiggi_cassol" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>
-                <small>Use de 3 a 24 caracteres: letras minúsculas, números, ponto, hífen ou _ — sem espaços.</small>
+                <div class="identifier-input-shell"><span>@</span><input id="input-user-identifier" type="text" minlength="3" maxlength="24" placeholder="crie_seu_id_aqui" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>
+                <small>Crie um ID pessoal seu — não copie o exemplo. Use de 3 a 24 caracteres: letras minúsculas, números, ponto, hífen ou _ — sem espaços.</small>
                 <div id="identifier-error" class="identifier-error" role="alert"></div>
                 <button id="btn-confirm-identifier" type="submit" class="btn btn-primary">Confirmar meu ID</button>
             </form>
@@ -371,14 +371,13 @@
                     <label for="task-date">Data da Tarefa</label>
                     <input type="date" id="task-date" required>
                 </div>
-                <div style="display: flex; align-items: center; gap: 8px; margin-top: 16px; margin-bottom: 24px; background: rgba(255,255,255,0.02); padding: 12px; border-radius: var(--radius-sm); border: 1px dashed var(--border-color);">
-                    <input type="checkbox" id="task-important" style="width: 18px; height: 18px; cursor: pointer; margin: 0;">
-                    <label for="task-important" style="margin: 0; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none;">
-                        Notificar
-                    </label>
+                <div class="task-notification-setting">
+                    <div class="task-notification-copy"><strong>Notificar</strong><small>Lembrar sobre esta tarefa</small></div>
                     <button type="button" class="btn-notification-info" style="background: transparent; border: none; padding: 2px; color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;">
-                        <i data-lucide="alert-circle" style="width: 14px; height: 14px;"></i>
+                        <i data-lucide="clock-3" style="width: 14px; height: 14px;"></i>
                     </button>
+                    <input type="checkbox" id="task-important" class="task-notification-checkbox">
+                    <label for="task-important" class="task-notification-toggle" aria-label="Ativar notificação"><span></span></label>
                 </div>
                 <button type="submit" class="btn btn-primary btn-block">Adicionar Tarefa</button>
             </form>
@@ -471,7 +470,7 @@
 
                 <div class="settings-version">
                     <span>Checklist</span>
-                        <strong>Versão 8.60</strong>
+                        <strong>Versão 8.72</strong>
                 </div>
             </div>
         </div>
@@ -623,14 +622,13 @@
                     <label for="edit-task-date">Data da Tarefa</label>
                     <input type="date" id="edit-task-date" required>
                 </div>
-                <div style="display: flex; align-items: center; gap: 8px; margin-top: 16px; margin-bottom: 24px; background: rgba(255,255,255,0.02); padding: 12px; border-radius: var(--radius-sm); border: 1px dashed var(--border-color);">
-                    <input type="checkbox" id="edit-task-important" style="width: 18px; height: 18px; cursor: pointer; margin: 0;">
-                    <label for="edit-task-important" style="margin: 0; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none;">
-                        Notificar
-                    </label>
+                <div class="task-notification-setting">
+                    <div class="task-notification-copy"><strong>Notificar</strong><small>Lembrar sobre esta tarefa</small></div>
                     <button type="button" class="btn-notification-info" style="background: transparent; border: none; padding: 2px; color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;">
-                        <i data-lucide="alert-circle" style="width: 14px; height: 14px;"></i>
+                        <i data-lucide="clock-3" style="width: 14px; height: 14px;"></i>
                     </button>
+                    <input type="checkbox" id="edit-task-important" class="task-notification-checkbox">
+                    <label for="edit-task-important" class="task-notification-toggle" aria-label="Ativar notificação"><span></span></label>
                 </div>
                 <button type="submit" class="btn btn-primary btn-block">Salvar Alterações</button>
             </form>
@@ -871,9 +869,9 @@
                 <div style="background: rgba(139, 92, 246, 0.1); color: var(--primary); width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 16px;">
                     <i data-lucide="bell" style="width: 24px; height: 24px; color: var(--primary);"></i>
                 </div>
-                <h4 style="margin: 0 0 8px 0; font-size: 1.05rem; font-weight: 800; color: var(--text-primary);">Como funciona a Notificação?</h4>
+                <h4 style="margin: 0 0 8px 0; font-size: 1.05rem; font-weight: 800; color: var(--text-primary);">Lembrete com horário</h4>
                 <p style="margin: 0 0 20px 0; font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5;">
-                    Ao ativar a opção de notificação, você receberá alertas push na tela do seu dispositivo <strong>1 dia antes</strong> e <strong>1 turno antes</strong> do início desta tarefa.
+                    Ao ligar a alavanca, escolha o horário em que deseja receber o lembrete desta tarefa. Você pode usar uma sugestão ou definir um horário personalizado.
                 </p>
                 <button id="btn-close-notification-info" type="button" class="btn btn-primary" style="width: 100%; padding: 10px; font-weight: 700; font-size: 0.8rem;">Entendi</button>
             </div>
@@ -1014,6 +1012,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=8.60"></script>
+    <script src="app.js?v=8.72"></script>
 </body>
 </html>
