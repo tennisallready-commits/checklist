@@ -19,7 +19,8 @@ const dbCache = {
     offline_category_shares: [],
     offline_completions_queue: {},
     offline_task_updates_queue: {},
-    user_term_associations: {}
+    user_term_associations: {},
+    user_function_associations: {}
 };
 
 const idb = {
@@ -99,7 +100,7 @@ const idb = {
     },
 
     async loadAllToCache() {
-        const stores = ["offline_tasks", "offline_categories", "offline_completions", "offline_category_shares", "offline_completions_queue", "offline_task_updates_queue", "user_term_associations"];
+        const stores = ["offline_tasks", "offline_categories", "offline_completions", "offline_category_shares", "offline_completions_queue", "offline_task_updates_queue", "user_term_associations", "user_function_associations"];
         for (const store of stores) {
             let val = await this.get(store);
             if (val === null) {
@@ -114,7 +115,7 @@ const idb = {
                     await this.put(store, val);
                 } else {
                     // Valor padrão se não existir legado
-                    val = (store === "offline_completions_queue" || store === "offline_task_updates_queue" || store === "user_term_associations") ? {} : [];
+                    val = (store === "offline_completions_queue" || store === "offline_task_updates_queue" || store === "user_term_associations" || store === "user_function_associations") ? {} : [];
                 }
             }
             dbCache[store] = val;
@@ -136,9 +137,11 @@ const localStorage = {
                 const parsed = JSON.parse(value);
                 dbCache[key] = parsed;
                 idb.put(key, parsed);
+                scheduleSyncStatusRefresh();
             } catch (e) {
                 dbCache[key] = value;
                 idb.put(key, value);
+                scheduleSyncStatusRefresh();
             }
             return;
         }
@@ -148,6 +151,7 @@ const localStorage = {
         if (dbCache.hasOwnProperty(key)) {
             dbCache[key] = (key === "offline_completions_queue" || key === "offline_task_updates_queue") ? {} : [];
             idb.delete(key);
+            scheduleSyncStatusRefresh();
             return;
         }
         localPrefs.removeItem(key);
@@ -181,6 +185,7 @@ let pendingToggles = new Set();
 let currentUser = null;
 let isAuthModeLogin = true;
 let localDataVersion = 0; // Previne race conditions de sync
+let dataLoadRequestVersion = 0; // Impede respostas antigas de outra data de sobrescreverem a tela
 let scrollPosition = 0;
 
 // Supabase Client instance
@@ -200,6 +205,45 @@ const btnPrevDay = document.getElementById("btn-prev-day");
 const btnNextDay = document.getElementById("btn-next-day");
 const orgTagEl = document.getElementById("org-tag");
 const appContainer = document.querySelector(".app-container");
+const syncStatusEl = document.getElementById("sync-status");
+const syncStatusLabelEl = document.getElementById("sync-status-label");
+
+let syncStatusRefreshTimer = null;
+
+function setSyncStatus(state, label, title = label) {
+    if (!syncStatusEl || !syncStatusLabelEl) return;
+    syncStatusEl.dataset.state = state;
+    syncStatusLabelEl.textContent = label;
+    syncStatusEl.title = title;
+}
+
+function hasPendingSyncData() {
+    const pendingCategories = (dbCache.offline_categories || []).some(c => isTemporaryId(c.id) && c.is_active !== false);
+    const pendingTasks = (dbCache.offline_tasks || []).some(t => isTemporaryId(t.id) && t.is_active !== false);
+    const pendingCompletions = Object.keys(dbCache.offline_completions_queue || {}).length > 0;
+    const pendingUpdates = Object.keys(dbCache.offline_task_updates_queue || {}).length > 0;
+    return pendingCategories || pendingTasks || pendingCompletions || pendingUpdates;
+}
+
+function refreshSyncStatusFromQueues() {
+    if (!syncStatusEl) return;
+    const hasPending = hasPendingSyncData();
+
+    if (!navigator.onLine) {
+        setSyncStatus("offline", hasPending ? "Offline — pendente" : "Offline", hasPending ? "Sem internet; alterações aguardando sincronização" : "Sem conexão com a internet");
+    } else if (isSyncing) {
+        setSyncStatus("syncing", "Salvando…", "Enviando alterações para a nuvem");
+    } else if (hasPending) {
+        setSyncStatus("pending", "Pendente", "Alterações aguardando sincronização");
+    } else {
+        setSyncStatus("synced", "Sincronizado", "Todos os dados estão sincronizados");
+    }
+}
+
+function scheduleSyncStatusRefresh(delay = 0) {
+    clearTimeout(syncStatusRefreshTimer);
+    syncStatusRefreshTimer = setTimeout(refreshSyncStatusFromQueues, delay);
+}
 
 // Modals
 const modalAddTask = document.getElementById("modal-add-task");
@@ -207,8 +251,11 @@ const modalManageTasks = document.getElementById("modal-manage-tasks");
 const modalCalendar = document.getElementById("modal-calendar");
 const modalSmartReport = document.getElementById("modal-smart-report");
 const modalConfirmDelete = document.getElementById("modal-confirm-delete");
+const modalGesturesTutorial = document.getElementById("modal-gestures-tutorial");
 const btnSmartReport = document.getElementById("btn-smart-report");
 const btnCloseSmartReportModal = document.getElementById("btn-close-smart-report-modal");
+const btnSaveSmartReport = document.getElementById("btn-save-smart-report");
+let activeSmartReportDays = 7;
 
 // Custom Delete Confirmation Elements
 const confirmDeleteTitle = document.getElementById("confirm-delete-title");
@@ -236,6 +283,7 @@ let pendingInvites = [];
 // Forms & Inputs
 const formAddTask = document.getElementById("form-add-task");
 const inputTaskTitle = document.getElementById("task-title");
+let suppressTaskAutocompleteSubmit = false;
 const selectTaskCategory = document.getElementById("task-category");
 const selectEditTaskCategory = document.getElementById("edit-task-category");
 const selectTaskRecurring = document.getElementById("task-recurring");
@@ -277,6 +325,8 @@ const btnCloseManageModal = document.getElementById("btn-close-manage-modal");
 const modalManageCategories = document.getElementById("modal-manage-categories");
 const btnOpenManageCategories = document.getElementById("btn-open-manage-categories");
 const btnCloseManageCategoriesModal = document.getElementById("btn-close-manage-categories-modal");
+const btnOpenGesturesTutorial = document.getElementById("btn-open-gestures-tutorial");
+const btnCloseGesturesTutorial = document.getElementById("btn-close-gestures-tutorial");
 
 const btnResetDefault = document.getElementById("btn-reset-default");
 const btnClearAll = document.getElementById("btn-clear-all");
@@ -292,13 +342,25 @@ const calendarDaysGrid = document.getElementById("calendar-days-grid");
 // Initialization
 // ----------------------------------------------------
 document.addEventListener("DOMContentLoaded", () => {
+    setSyncStatus(navigator.onLine ? "checking" : "offline", navigator.onLine ? "Verificando…" : "Offline");
     initApp();
     setupEventListeners();
     
     // Register Service Worker for PWA compatibility on Android
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('./sw.js')
-            .then(reg => console.log('Service Worker registrado com sucesso:', reg))
+        let reloadingForServiceWorkerUpdate = false;
+
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (reloadingForServiceWorkerUpdate) return;
+            reloadingForServiceWorkerUpdate = true;
+            window.location.reload();
+        });
+
+        navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
+            .then(reg => {
+                console.log('Service Worker registrado com sucesso:', reg);
+                return reg.update();
+            })
             .catch(err => console.error('Erro ao registrar Service Worker:', err));
     }
 });
@@ -380,8 +442,7 @@ async function initApp() {
         if (notificationsBadge) notificationsBadge.style.display = "none";
     }
     
-    // Check if we need to show Saturday notification animation
-    checkSaturdayAnimation();
+    // O destaque do relatório é controlado junto da disponibilidade do botão.
 }
 
 // ----------------------------------------------------
@@ -398,6 +459,8 @@ function setupEventListeners() {
     let lastAddTaskInteractionTime = 0;
     let lastShareInteractionTime = 0;
 
+    setupTaskTitleAutocomplete();
+
     // Smart Report Modal Events
     // Smart Report Tab Switcher and Listeners
     const tabWeekly = document.getElementById("tab-report-weekly");
@@ -407,6 +470,7 @@ function setupEventListeners() {
     const reportSummaryContent = document.getElementById("report-summary-content");
 
     switchReportTab = (days) => {
+        activeSmartReportDays = days;
         [tabWeekly, tabMonthly, tabYearly].forEach(tab => {
             if (tab) tab.classList.remove("active");
         });
@@ -432,9 +496,19 @@ function setupEventListeners() {
 
     if (btnSmartReport) {
         btnSmartReport.addEventListener("click", () => {
-            switchReportTab(7); // default to weekly summary
+            const attentionKey = getSmartReportAttentionKey();
+            if (attentionKey) localStorage.setItem(attentionKey, "true");
+            btnSmartReport.classList.remove("report-attention");
+            const now = new Date();
+            const defaultPeriod = (now.getMonth() === 0 && now.getDate() <= 3)
+                ? 365
+                : (now.getDate() <= 3 ? 30 : 7);
+            switchReportTab(defaultPeriod);
             openModal(modalSmartReport);
         });
+    }
+    if (btnSaveSmartReport) {
+        btnSaveSmartReport.addEventListener("click", saveCurrentSmartReport);
     }
     if (btnCloseSmartReportModal) {
         btnCloseSmartReportModal.addEventListener("click", () => {
@@ -746,6 +820,92 @@ function setupEventListeners() {
         });
     }
 
+    // Permite trocar o dia deslizando apenas nas faixas vazias junto às
+    // bordas, com o resumo aberto ou recolhido. Assim o gesto não disputa
+    // com os swipes dos blocos nem das tarefas (editar/excluir).
+    if (appContainer) {
+        const EDGE_SWIPE_ZONE = 28;
+        const EDGE_SWIPE_THRESHOLD = 70;
+        const EDGE_DIRECTION_RATIO = 1.5;
+        let edgeSwipeActive = false;
+        let edgeSwipeLocked = false;
+        let edgeSwipeStartX = 0;
+        let edgeSwipeStartY = 0;
+        let edgeSwipeCurrentX = 0;
+        let edgeSwipeCurrentY = 0;
+        let edgeSwipeChangingDay = false;
+
+        const isInteractiveSwipeTarget = (target) =>
+            target.closest(".progress-card-container, .task-item, .categories-bar, .app-header, .fab-menu-container, button, input, select, textarea, a, .modal");
+
+        appContainer.addEventListener("touchstart", (e) => {
+            edgeSwipeActive = false;
+            edgeSwipeLocked = false;
+
+            if (edgeSwipeChangingDay || e.touches.length !== 1) return;
+            if (isInteractiveSwipeTarget(e.target)) return;
+
+            const touch = e.touches[0];
+            const appRect = appContainer.getBoundingClientRect();
+            const distanceFromLeft = touch.clientX - appRect.left;
+            const distanceFromRight = appRect.right - touch.clientX;
+            const startedAtEdge = distanceFromLeft <= EDGE_SWIPE_ZONE || distanceFromRight <= EDGE_SWIPE_ZONE;
+
+            if (!startedAtEdge) return;
+
+            edgeSwipeStartX = edgeSwipeCurrentX = touch.clientX;
+            edgeSwipeStartY = edgeSwipeCurrentY = touch.clientY;
+            edgeSwipeActive = true;
+        }, { passive: true });
+
+        appContainer.addEventListener("touchmove", (e) => {
+            if (!edgeSwipeActive || e.touches.length !== 1) return;
+
+            edgeSwipeCurrentX = e.touches[0].clientX;
+            edgeSwipeCurrentY = e.touches[0].clientY;
+            const dx = edgeSwipeCurrentX - edgeSwipeStartX;
+            const dy = edgeSwipeCurrentY - edgeSwipeStartY;
+
+            if (!edgeSwipeLocked && Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+
+            if (!edgeSwipeLocked) {
+                if (Math.abs(dx) < Math.abs(dy) * EDGE_DIRECTION_RATIO) {
+                    edgeSwipeActive = false;
+                    return;
+                }
+                edgeSwipeLocked = true;
+            }
+
+            if (e.cancelable) e.preventDefault();
+        }, { passive: false });
+
+        appContainer.addEventListener("touchend", async () => {
+            if (!edgeSwipeActive) return;
+            edgeSwipeActive = false;
+
+            const dx = edgeSwipeCurrentX - edgeSwipeStartX;
+            const dy = edgeSwipeCurrentY - edgeSwipeStartY;
+            const isDeliberateHorizontalSwipe =
+                edgeSwipeLocked &&
+                Math.abs(dx) >= EDGE_SWIPE_THRESHOLD &&
+                Math.abs(dx) >= Math.abs(dy) * EDGE_DIRECTION_RATIO;
+
+            if (!isDeliberateHorizontalSwipe) return;
+
+            edgeSwipeChangingDay = true;
+            try {
+                await changeDay(dx < 0 ? 1 : -1);
+            } finally {
+                edgeSwipeChangingDay = false;
+            }
+        }, { passive: true });
+
+        appContainer.addEventListener("touchcancel", () => {
+            edgeSwipeActive = false;
+            edgeSwipeLocked = false;
+        }, { passive: true });
+    }
+
 
     // Toggle Task Complete (using event delegation)
     tasksListEl.addEventListener("click", (e) => {
@@ -831,6 +991,73 @@ function setupEventListeners() {
     btnManageTasks.addEventListener("click", () => openModal(modalManageTasks));
     btnCloseManageModal.addEventListener("click", () => closeModal(modalManageTasks));
 
+    // Gestures tutorial carousel
+    if (modalGesturesTutorial && btnOpenGesturesTutorial) {
+        const carousel = document.getElementById("gestures-carousel");
+        const carouselTrack = document.getElementById("gestures-carousel-track");
+        const carouselDots = document.getElementById("gestures-carousel-dots");
+        const carouselCounter = document.getElementById("gesture-slide-counter");
+        const btnGesturePrev = document.getElementById("btn-gesture-prev");
+        const btnGestureNext = document.getElementById("btn-gesture-next");
+        const slides = Array.from(carouselTrack.querySelectorAll(".gesture-slide"));
+        let currentGestureSlide = 0;
+        let carouselTouchStartX = 0;
+        let carouselTouchStartY = 0;
+
+        const dots = slides.map((_, index) => {
+            const dot = document.createElement("button");
+            dot.type = "button";
+            dot.className = "gesture-dot";
+            dot.setAttribute("aria-label", `Ir para o gesto ${index + 1}`);
+            dot.addEventListener("click", () => updateGestureSlide(index));
+            carouselDots.appendChild(dot);
+            return dot;
+        });
+
+        function updateGestureSlide(index) {
+            currentGestureSlide = Math.max(0, Math.min(index, slides.length - 1));
+            carouselTrack.style.transform = `translateX(-${currentGestureSlide * 100}%)`;
+            carouselCounter.textContent = `${currentGestureSlide + 1} de ${slides.length}`;
+            btnGesturePrev.disabled = currentGestureSlide === 0;
+            btnGestureNext.disabled = currentGestureSlide === slides.length - 1;
+            dots.forEach((dot, dotIndex) => {
+                dot.classList.toggle("active", dotIndex === currentGestureSlide);
+                dot.setAttribute("aria-current", dotIndex === currentGestureSlide ? "step" : "false");
+            });
+        }
+
+        const closeGesturesTutorial = () => {
+            closeModal(modalGesturesTutorial);
+            openModal(modalManageTasks);
+        };
+
+        btnOpenGesturesTutorial.addEventListener("click", () => {
+            closeModal(modalManageTasks);
+            updateGestureSlide(0);
+            openModal(modalGesturesTutorial);
+        });
+        btnCloseGesturesTutorial.addEventListener("click", closeGesturesTutorial);
+        document.getElementById("overlay-gestures-tutorial").addEventListener("click", closeGesturesTutorial);
+        btnGesturePrev.addEventListener("click", () => updateGestureSlide(currentGestureSlide - 1));
+        btnGestureNext.addEventListener("click", () => updateGestureSlide(currentGestureSlide + 1));
+
+        carousel.addEventListener("touchstart", (e) => {
+            if (e.touches.length !== 1) return;
+            carouselTouchStartX = e.touches[0].clientX;
+            carouselTouchStartY = e.touches[0].clientY;
+        }, { passive: true });
+
+        carousel.addEventListener("touchend", (e) => {
+            if (e.changedTouches.length !== 1) return;
+            const dx = e.changedTouches[0].clientX - carouselTouchStartX;
+            const dy = e.changedTouches[0].clientY - carouselTouchStartY;
+            if (Math.abs(dx) < 50 || Math.abs(dx) <= Math.abs(dy)) return;
+            updateGestureSlide(currentGestureSlide + (dx < 0 ? 1 : -1));
+        }, { passive: true });
+
+        updateGestureSlide(0);
+    }
+
     // Categories Management Modal
     if (btnOpenManageCategories) {
         btnOpenManageCategories.addEventListener("click", () => {
@@ -871,6 +1098,33 @@ function setupEventListeners() {
             } else {
                 wrapperCustomType.style.display = "none";
             }
+        });
+    }
+
+    const inputManualLearning = document.getElementById("input-manual-learning-term");
+    const selectManualLearning = document.getElementById("select-manual-learning-function");
+    const btnSaveManualLearning = document.getElementById("btn-save-manual-learning");
+    if (inputManualLearning && selectManualLearning && btnSaveManualLearning) {
+        btnSaveManualLearning.addEventListener("click", () => {
+            const term = inputManualLearning.value.trim();
+            if (!term) {
+                inputManualLearning.focus();
+                return;
+            }
+            if (!selectManualLearning.value) {
+                selectManualLearning.focus();
+                return;
+            }
+            saveLearnedFunctionAssociation(term, selectManualLearning.value);
+            inputManualLearning.value = "";
+            const originalText = btnSaveManualLearning.textContent;
+            btnSaveManualLearning.textContent = "Aprendido ✓";
+            btnSaveManualLearning.disabled = true;
+            setTimeout(() => {
+                btnSaveManualLearning.textContent = originalText;
+                btnSaveManualLearning.disabled = false;
+                renderCategories();
+            }, 800);
         });
     }
 
@@ -967,7 +1221,6 @@ function setupEventListeners() {
         openModal(modalAddTask);
     };
 
-    btnAddTaskModal.addEventListener("pointerdown", handleAddTaskTrigger);
     btnAddTaskModal.addEventListener("click", handleAddTaskTrigger);
     btnCloseAddModal.addEventListener("click", () => closeModal(modalAddTask));
 
@@ -1035,6 +1288,10 @@ function setupEventListeners() {
 
     formAddTask.addEventListener("submit", async (e) => {
         e.preventDefault();
+        if (suppressTaskAutocompleteSubmit) {
+            suppressTaskAutocompleteSubmit = false;
+            return;
+        }
         const btnSubmit = formAddTask.querySelector("button[type='submit']");
         if (!btnSubmit || btnSubmit.disabled) return;
         
@@ -1292,7 +1549,6 @@ function setupEventListeners() {
         shareReport();
     };
 
-    btnShareReport.addEventListener("pointerdown", handleShareReport);
     btnShareReport.addEventListener("click", handleShareReport);
 
     // Close FAB menu when clicking outside, scrolling, or swiping past a threshold
@@ -1341,7 +1597,12 @@ function setupEventListeners() {
     // Sincroniza dados locais com a nuvem quando a conexão com a internet é restaurada
     window.addEventListener("online", () => {
         console.log("Internet restaurada! Sincronizando dados offline...");
+        setSyncStatus("syncing", "Salvando…", "Conexão restaurada; sincronizando alterações");
         syncOfflineDataToCloud();
+    });
+
+    window.addEventListener("offline", () => {
+        refreshSyncStatusFromQueues();
     });
 
     // Auth Listeners & Forms
@@ -1500,6 +1761,23 @@ function setupEventListeners() {
         });
     });
 
+    const modalPastNightInfo = document.getElementById("modal-past-night-info");
+    const btnClosePastNightInfo = document.getElementById("btn-close-past-night-info");
+    if (btnClosePastNightInfo) {
+        btnClosePastNightInfo.addEventListener("click", () => closeModal(modalPastNightInfo));
+    }
+    const overlayPastNightInfo = modalPastNightInfo?.querySelector(".modal-overlay");
+    if (overlayPastNightInfo) {
+        overlayPastNightInfo.addEventListener("click", () => closeModal(modalPastNightInfo));
+    }
+    document.addEventListener("click", event => {
+        const infoButton = event.target.closest(".btn-past-night-info");
+        if (!infoButton) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openModal(modalPastNightInfo);
+    });
+
     // Habilita deslize para baixo (swipe-down-to-close) em todos os modais
     document.querySelectorAll(".modal").forEach(setupModalSwipeToClose);
 }
@@ -1568,26 +1846,36 @@ function updateDateDisplay() {
 function updateDateState() {
     const now = new Date();
     const todayStr = getLocalDateString(now);
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = getLocalDateString(yesterday);
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = getLocalDateString(tomorrow);
     const historyBadge = document.getElementById("history-badge");
     const miniDateBadge = document.getElementById("header-mini-date-badge");
 
     if (selectedDate < todayStr) {
         isHistoryMode = true;
         appContainer.classList.add("history-mode");
-        appContainer.classList.remove("planning-mode", "today-mode");
+        appContainer.classList.remove("planning-mode", "today-mode", "tomorrow-mode");
+        appContainer.classList.toggle("yesterday-mode", selectedDate === yesterdayStr);
         toggleEditMode(false);
-        if (historyBadge) historyBadge.innerHTML = "Histórico";
-        if (miniDateBadge) miniDateBadge.innerHTML = "Histórico";
+        const pastLabel = selectedDate === yesterdayStr ? "Ontem" : "Histórico";
+        if (historyBadge) historyBadge.innerHTML = pastLabel;
+        if (miniDateBadge) miniDateBadge.innerHTML = pastLabel;
     } else if (selectedDate > todayStr) {
         isHistoryMode = false;
         appContainer.classList.add("planning-mode");
-        appContainer.classList.remove("history-mode", "today-mode");
-        if (historyBadge) historyBadge.innerHTML = "Planejamento";
-        if (miniDateBadge) miniDateBadge.innerHTML = "Planejamento";
+        appContainer.classList.remove("history-mode", "today-mode", "yesterday-mode");
+        appContainer.classList.toggle("tomorrow-mode", selectedDate === tomorrowStr);
+        const futureLabel = selectedDate === tomorrowStr ? "Amanhã" : "Planejamento";
+        if (historyBadge) historyBadge.innerHTML = futureLabel;
+        if (miniDateBadge) miniDateBadge.innerHTML = futureLabel;
     } else {
         isHistoryMode = false;
         appContainer.classList.add("today-mode");
-        appContainer.classList.remove("history-mode", "planning-mode");
+        appContainer.classList.remove("history-mode", "planning-mode", "yesterday-mode", "tomorrow-mode");
         if (historyBadge) historyBadge.innerHTML = '<span class="pulse-dot"></span>Hoje';
         if (miniDateBadge) miniDateBadge.innerHTML = '<span class="pulse-dot"></span>Hoje';
     }
@@ -1662,6 +1950,8 @@ async function loadChecklistAndProgress(skipOfflineReload = false) {
 
 async function loadData() {
     const versionAtFetchStart = localDataVersion;
+    const selectedDateAtFetchStart = selectedDate;
+    const requestVersionAtFetchStart = ++dataLoadRequestVersion;
     if (supabaseClient && currentUser) {
         try {
             // Executa as consultas ao banco de dados em paralelo usando Promise.all para máxima velocidade de carregamento
@@ -1677,8 +1967,8 @@ async function loadData() {
                 supabaseClient.from('categories').select('*').eq('is_active', true),
                 supabaseClient.from('categories').select('*', { count: 'exact', head: true }),
                 supabaseClient.from('tasks').select('*').eq('is_active', true),
-                supabaseClient.from('completions').select('*').eq('date', selectedDate),
-                supabaseClient.from('completions').select('task_id, date, completed').lt('date', selectedDate),
+                supabaseClient.from('completions').select('*').eq('date', selectedDateAtFetchStart),
+                supabaseClient.from('completions').select('task_id, date, completed').lt('date', selectedDateAtFetchStart),
                 supabaseClient.from('category_shares').select('*').eq('owner_id', currentUser.id).then(r => r, err => {
                     console.warn("Tabela 'category_shares' não encontrada ou inacessível ao buscar proprietário.", err);
                     return { data: [], error: null };
@@ -1688,6 +1978,13 @@ async function loadData() {
                     return { data: [], error: null };
                 })
             ]);
+
+            // A navegação pode iniciar outro carregamento antes deste terminar.
+            // Nesse caso, a resposta pertence a uma tela antiga e deve ser ignorada.
+            if (requestVersionAtFetchStart !== dataLoadRequestVersion || selectedDateAtFetchStart !== selectedDate) {
+                console.log("[Data] Resposta obsoleta ignorada após troca de data.");
+                return false;
+            }
 
             let dbCats = catsResult.data || [];
             const errCats = catsResult.error;
@@ -1779,8 +2076,12 @@ async function loadData() {
                     await supabaseClient.from('tasks').insert(seedTasks);
                 }
             }
-            if (localDataVersion !== versionAtFetchStart) {
-                console.warn("Usuário modificou dados durante o carregamento assíncrono. Descartando fetch para evitar flash/zerada da tela.");
+            if (
+                localDataVersion !== versionAtFetchStart ||
+                requestVersionAtFetchStart !== dataLoadRequestVersion ||
+                selectedDateAtFetchStart !== selectedDate
+            ) {
+                console.warn("Dados ou data mudaram durante o carregamento assíncrono. Descartando resposta obsoleta.");
                 return false;
             }
 
@@ -1899,6 +2200,9 @@ async function loadData() {
                 return dbCat;
             });
             localStorage.setItem("offline_categories", JSON.stringify(dbCats));
+            // Usa imediatamente os tipos recuperados do cache local. Antes eles
+            // eram salvos, mas a lista em memória continuava desatualizada.
+            categories = dbCats;
 
             const existingLocal = JSON.parse(localStorage.getItem("offline_tasks")) || [];
             const pendingLocalTasks = existingLocal.filter(t => isTemporaryId(t.id) && t.is_active !== false);
@@ -2043,6 +2347,25 @@ function loadDataOffline() {
     }));
 }
 
+let categoriesOverflowEventsBound = false;
+
+function updateCategoriesOverflowFade() {
+    const bar = document.getElementById("categories-bar");
+    if (!bar) return;
+
+    const maxScrollLeft = Math.max(0, bar.scrollWidth - bar.clientWidth);
+    bar.classList.toggle("has-overflow-left", bar.scrollLeft > 3);
+    bar.classList.toggle("has-overflow-right", bar.scrollLeft < maxScrollLeft - 3);
+}
+
+function setupCategoriesOverflowFade() {
+    const bar = document.getElementById("categories-bar");
+    if (!bar || categoriesOverflowEventsBound) return;
+    categoriesOverflowEventsBound = true;
+    bar.addEventListener("scroll", updateCategoriesOverflowFade, { passive: true });
+    window.addEventListener("resize", updateCategoriesOverflowFade, { passive: true });
+}
+
 function renderCategories() {
     const bar = document.getElementById("categories-bar");
     const select = document.getElementById("task-category");
@@ -2100,6 +2423,9 @@ function renderCategories() {
         });
         bar.appendChild(chip);
     });
+
+    setupCategoriesOverflowFade();
+    requestAnimationFrame(updateCategoriesOverflowFade);
 
     // 2. Render options in task category dropdowns (Add and Edit)
     select.innerHTML = "";
@@ -2279,7 +2605,7 @@ function renderCategories() {
         }
     }
 
-    // 3.2. Render Ensine o App (if any unclassified terms)
+    // 3.2. Render Ensine o App (funções ainda não reconhecidas)
     const settingsTeachWrapper = document.getElementById("settings-teach-app-wrapper");
     const settingsTeachList = document.getElementById("settings-teach-app-list");
     
@@ -2291,14 +2617,26 @@ function renderCategories() {
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; background: rgba(0,0,0,0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color); box-sizing: border-box; width: 100%;">
                     <span style="font-weight: 700; color: var(--text-primary); font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px;">"${escapeHTML(term)}"</span>
                     <div style="display: flex; align-items: center; gap: 6px;">
-                        <select class="settings-teach-term-select" data-term="${term.toLowerCase()}" style="background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); padding: 4px 6px; border-radius: 4px; font-size: 0.76rem;">
-                            <option value="Trabalho/Profissional">Trabalho/Profissional</option>
-                            <option value="Estudos/Aprendizado">Estudos/Aprendizado</option>
-                            <option value="Saúde/Bem-estar">Saúde/Bem-estar</option>
-                            <option value="Rotina/Organização">Rotina/Organização</option>
-                            <option value="Pessoal/Outros">Pessoal/Outros</option>
+                        <select class="settings-teach-term-select" data-term="${encodeURIComponent(term.toLowerCase())}" style="background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); padding: 4px 6px; border-radius: 4px; font-size: 0.76rem; max-width: 150px;">
+                            <option value="" selected disabled>Selecionar…</option>
+                            <option value="delivery">Entrega</option>
+                            <option value="billing">Cobrança/Financeiro</option>
+                            <option value="production">Produção/Operação</option>
+                            <option value="marketing">Divulgação</option>
+                            <option value="sales">Vendas/Comercial</option>
+                            <option value="service">Atendimento</option>
+                            <option value="supply">Compra/Abastecimento</option>
+                            <option value="assessment">Avaliação/Prova</option>
+                            <option value="academic_work">Trabalho acadêmico</option>
+                            <option value="study">Estudo/Revisão</option>
+                            <option value="exercise">Atividade física</option>
+                            <option value="self_care">Saúde/Autocuidado</option>
+                            <option value="home">Casa/Organização</option>
+                            <option value="personal_learning">Aprendizado</option>
+                            <option value="planning">Rotina/Planejamento</option>
+                            <option value="other">Outra atividade</option>
                         </select>
-                        <button class="btn-save-settings-teach-term" data-term="${term.toLowerCase()}" style="background: var(--primary); color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 0.76rem; font-weight: bold; cursor: pointer;">Salvar</button>
+                        <button class="btn-save-settings-teach-term" data-term="${encodeURIComponent(term.toLowerCase())}" style="background: var(--primary); color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 0.76rem; font-weight: bold; cursor: pointer;">Salvar</button>
                     </div>
                 </div>
             `).join("");
@@ -2306,19 +2644,55 @@ function renderCategories() {
             // Add click listeners
             settingsTeachList.querySelectorAll(".btn-save-settings-teach-term").forEach(btn => {
                 btn.addEventListener("click", () => {
-                    const term = btn.dataset.term;
-                    const select = settingsTeachList.querySelector(`.settings-teach-term-select[data-term="${term}"]`);
+                    const encodedTerm = btn.dataset.term;
+                    const term = decodeURIComponent(encodedTerm);
+                    const select = settingsTeachList.querySelector(`.settings-teach-term-select[data-term="${encodedTerm}"]`);
                     if (select) {
-                        const catVal = select.value;
-                        const associations = JSON.parse(localStorage.getItem("user_term_associations")) || {};
-                        associations[term] = catVal;
-                        localStorage.setItem("user_term_associations", JSON.stringify(associations));
-                        renderCategories(); // Re-render
+                        if (!select.value) {
+                            select.focus();
+                            return;
+                        }
+                        saveLearnedFunctionAssociation(term, select.value);
+                        btn.textContent = "Aprendido ✓";
+                        btn.disabled = true;
+                        setTimeout(() => renderCategories(), 650);
                     }
                 });
             });
         } else {
-            settingsTeachWrapper.style.display = "none";
+            settingsTeachWrapper.style.display = "block";
+            settingsTeachList.innerHTML = '<p style="margin:0; color:var(--text-muted); font-size:.72rem; text-align:center;">Nenhuma sugestão pendente. Você ainda pode ensinar um termo manualmente acima.</p>';
+        }
+    }
+
+    const learnedWrapper = document.getElementById("settings-learned-functions-wrapper");
+    const learnedList = document.getElementById("settings-learned-functions-list");
+    if (learnedWrapper && learnedList) {
+        const learned = JSON.parse(localStorage.getItem("user_function_associations")) || {};
+        const learnedEntries = Object.entries(learned).filter(([, functionId]) => REPORT_FUNCTION_CATALOG[functionId]);
+        if (learnedEntries.length > 0) {
+            learnedWrapper.style.display = "block";
+            learnedList.innerHTML = learnedEntries.map(([term, functionId]) => {
+                const encodedTerm = encodeURIComponent(term);
+                return `
+                    <div style="display:flex; align-items:center; gap:7px; padding:7px 9px; border-radius:7px; background:rgba(255,255,255,.025); border:1px solid var(--border-color);">
+                        <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; font-size:.76rem; font-weight:700; color:var(--text-primary);">${escapeHTML(term)}</span>
+                        <span style="font-size:.7rem; color:var(--text-secondary);">${escapeHTML(REPORT_FUNCTION_CATALOG[functionId].singular)}</span>
+                        <button class="btn-remove-learned-function" data-term="${encodedTerm}" title="Remover aprendizado" style="display:flex; padding:4px; border:0; background:transparent; color:#ef4444; cursor:pointer;"><i data-lucide="x" style="width:14px;height:14px;"></i></button>
+                    </div>`;
+            }).join("");
+            learnedList.querySelectorAll(".btn-remove-learned-function").forEach(button => {
+                button.addEventListener("click", () => {
+                    const term = decodeURIComponent(button.dataset.term);
+                    const latestLearned = JSON.parse(localStorage.getItem("user_function_associations")) || {};
+                    delete latestLearned[term];
+                    localStorage.setItem("user_function_associations", JSON.stringify(latestLearned));
+                    renderCategories();
+                });
+            });
+        } else {
+            learnedWrapper.style.display = "none";
+            learnedList.innerHTML = "";
         }
     }
     
@@ -2327,14 +2701,14 @@ function renderCategories() {
 }
 
 function getRecentUnclassifiedTerms() {
-    const associations = JSON.parse(localStorage.getItem("user_term_associations")) || {};
+    const associations = JSON.parse(localStorage.getItem("user_function_associations")) || {};
     const unclassifiedCandidates = new Set();
-    const stopWords = ["para", "com", "uma", "uns", "das", "dos", "pelo", "pela", "seus", "suas", "como", "mais", "fazer", "cada", "toda", "todo", "hoje", "ontem", "amanha", "amanhã"];
+    const stopWords = ["para", "com", "uma", "uns", "das", "dos", "pelo", "pela", "seus", "suas", "como", "mais", "fazer", "cada", "toda", "todo", "hoje", "ontem", "amanha", "amanhã", "tarefa", "editar"];
     
-    // Get completions from the last 7 days
+    // Analisa conclusões dos últimos 30 dias para aprender com mais histórico.
     const now = new Date();
     const sevenDaysAgo = new Date(now);
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 30);
     const startStr = getLocalDateString(sevenDaysAgo);
     
     let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
@@ -2343,22 +2717,9 @@ function getRecentUnclassifiedTerms() {
     recentCompletions.forEach(c => {
         const task = allActiveTasks.find(t => String(t.id) === String(c.task_id));
         if (task) {
-            const catClass = classifyWordContext(task.category, associations);
-            if (catClass) return; // Categoria já classificada
-            
+            if (classifyTaskFunction(task).singular !== "Outra atividade") return;
             const words = task.title.split(/\s+/);
-            let hasAutoClassification = false;
-            words.forEach(word => {
-                const cleaned = word.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
-                if (cleaned.length > 3 && !stopWords.includes(cleaned)) {
-                    if (classifyWordContext(cleaned, {}) !== null) {
-                        hasAutoClassification = true;
-                    }
-                }
-            });
-            
-            if (!hasAutoClassification) {
-                words.forEach((word, idx) => {
+            words.forEach((word, idx) => {
                     const cleaned = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
                     if (cleaned.length > 3 && !stopWords.includes(cleaned.toLowerCase())) {
                         const isCapitalized = cleaned[0] === cleaned[0].toUpperCase() && cleaned[0] !== cleaned[0].toLowerCase();
@@ -2369,18 +2730,155 @@ function getRecentUnclassifiedTerms() {
                             return;
                         }
                         
-                        if (!associations[wLower]) {
+                        if (!associations[normalizeReportText(wLower)]) {
                             if (isCapitalized || idx > 0) {
                                 unclassifiedCandidates.add(cleaned);
                             }
                         }
                     }
                 });
-            }
         }
     });
     
-    return Array.from(unclassifiedCandidates).slice(0, 3);
+    return Array.from(unclassifiedCandidates).slice(0, 8);
+}
+
+function taskTitleEditDistance(first, second) {
+    const a = normalizeReportText(first);
+    const b = normalizeReportText(second);
+    const row = Array.from({ length: b.length + 1 }, (_, index) => index);
+    for (let i = 1; i <= a.length; i++) {
+        let previousDiagonal = row[0];
+        row[0] = i;
+        for (let j = 1; j <= b.length; j++) {
+            const previousAbove = row[j];
+            row[j] = Math.min(
+                row[j] + 1,
+                row[j - 1] + 1,
+                previousDiagonal + (a[i - 1] === b[j - 1] ? 0 : 1)
+            );
+            previousDiagonal = previousAbove;
+        }
+    }
+    return row[b.length];
+}
+
+function getTaskTitleSuggestions(query) {
+    const normalizedQuery = normalizeReportText(query).trim();
+    if (normalizedQuery.length < 2) return [];
+    const queryLastWord = normalizedQuery.split(/\s+/).pop();
+    const selectedCategory = document.getElementById("task-category")?.value;
+    const uniqueTitles = new Map();
+
+    allActiveTasks.forEach(task => {
+        if (!task?.title) return;
+        const normalizedTitle = normalizeReportText(task.title).trim();
+        const existing = uniqueTitles.get(normalizedTitle);
+        if (!existing || task.category === selectedCategory) uniqueTitles.set(normalizedTitle, task);
+    });
+
+    return Array.from(uniqueTitles.values()).map(task => {
+        const normalizedTitle = normalizeReportText(task.title);
+        const titleWords = normalizedTitle.split(/\s+/);
+        let score = Infinity;
+        if (normalizedTitle.startsWith(normalizedQuery)) score = 0;
+        else if (titleWords.some(word => word.startsWith(queryLastWord))) score = 1;
+        else if (normalizedTitle.includes(normalizedQuery) || normalizedTitle.includes(queryLastWord)) score = 2;
+        else {
+            const closestDistance = Math.min(...titleWords.map(word => taskTitleEditDistance(queryLastWord, word)));
+            const allowedDistance = Math.max(1, Math.floor(queryLastWord.length * 0.34));
+            if (closestDistance <= allowedDistance) score = 3 + (closestDistance / 10);
+        }
+        if (task.category === selectedCategory) score -= 0.25;
+        return { task, score };
+    }).filter(item => Number.isFinite(item.score))
+        .sort((a, b) => a.score - b.score || a.task.title.localeCompare(b.task.title, "pt-BR"))
+        .slice(0, 6)
+        .map(item => item.task);
+}
+
+function setupTaskTitleAutocomplete() {
+    const input = document.getElementById("task-title");
+    const dropdown = document.getElementById("task-title-autocomplete");
+    if (!input || !dropdown || input.dataset.autocompleteReady === "true") return;
+    input.dataset.autocompleteReady = "true";
+    let suggestions = [];
+    let activeIndex = -1;
+
+    const closeSuggestions = () => {
+        dropdown.classList.remove("open");
+        dropdown.innerHTML = "";
+        input.setAttribute("aria-expanded", "false");
+        activeIndex = -1;
+    };
+
+    const chooseSuggestion = index => {
+        const task = suggestions[index];
+        if (!task) return;
+        input.value = task.title;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        closeSuggestions();
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    };
+
+    const updateActiveSuggestion = () => {
+        dropdown.querySelectorAll(".task-title-suggestion").forEach((button, index) => {
+            button.classList.toggle("active", index === activeIndex);
+            button.setAttribute("aria-selected", index === activeIndex ? "true" : "false");
+            if (index === activeIndex) button.scrollIntoView({ block: "nearest" });
+        });
+    };
+
+    const renderSuggestions = () => {
+        suggestions = getTaskTitleSuggestions(input.value);
+        activeIndex = -1;
+        if (suggestions.length === 0) {
+            closeSuggestions();
+            return;
+        }
+        dropdown.innerHTML = suggestions.map((task, index) => `
+            <button type="button" class="task-title-suggestion" role="option" aria-selected="false" data-index="${index}">
+                <i data-lucide="history"></i>
+                <span class="task-title-suggestion-text">
+                    <span class="task-title-suggestion-title">${escapeHTML(task.title)}</span>
+                    <span class="task-title-suggestion-meta">${escapeHTML(task.category || "Sem categoria")}</span>
+                </span>
+            </button>`).join("");
+        dropdown.classList.add("open");
+        input.setAttribute("aria-expanded", "true");
+        dropdown.querySelectorAll(".task-title-suggestion").forEach(button => {
+            button.addEventListener("pointerdown", event => event.preventDefault());
+            button.addEventListener("click", () => chooseSuggestion(Number(button.dataset.index)));
+        });
+        if (window.lucide) window.lucide.createIcons();
+    };
+
+    input.addEventListener("input", renderSuggestions);
+    input.addEventListener("focus", () => {
+        if (input.value.trim().length >= 2) renderSuggestions();
+    });
+    input.addEventListener("blur", () => setTimeout(closeSuggestions, 120));
+    input.addEventListener("keydown", event => {
+        if (!dropdown.classList.contains("open")) return;
+        if (event.key === "ArrowDown") {
+            event.preventDefault();
+            activeIndex = (activeIndex + 1) % suggestions.length;
+            updateActiveSuggestion();
+        } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            activeIndex = activeIndex <= 0 ? suggestions.length - 1 : activeIndex - 1;
+            updateActiveSuggestion();
+        } else if (event.key === "Enter") {
+            event.preventDefault();
+            event.stopPropagation();
+            suppressTaskAutocompleteSubmit = true;
+            chooseSuggestion(activeIndex >= 0 ? activeIndex : 0);
+            setTimeout(() => { suppressTaskAutocompleteSubmit = false; }, 250);
+        } else if (event.key === "Escape") {
+            closeSuggestions();
+        }
+    });
 }
 
 function renderChecklist() {
@@ -2456,7 +2954,15 @@ function renderChecklist() {
                 
                 let shiftLabelExtra = "";
                 if (title === "Noite" && isPastNightShiftExceptionPeriod) {
-                    shiftLabelExtra = ` <span style="font-size: 0.7rem; font-weight: 700; color: #eab308; background: rgba(234, 179, 8, 0.1); padding: 3px 8px; border-radius: 4px; margin-left: 8px; border: 1px solid rgba(234, 179, 8, 0.2); vertical-align: middle; display: inline-flex; align-items: center; gap: 4px;"><i data-lucide="clock" style="width: 10px; height: 10px;"></i> aberto para check até 12h</span>`;
+                    shiftLabelExtra = `
+                        <span class="past-night-check-window" title="A noite anterior permanece aberta para marcar tarefas até 12h" aria-label="A noite anterior permanece aberta para marcar tarefas até 12h">
+                            <i data-lucide="clock"></i>
+                            <span class="past-night-check-full">aberto para check até 12h</span>
+                            <span class="past-night-check-compact">até 12h</span>
+                            <button type="button" class="btn-past-night-info" aria-label="Entenda por que a noite anterior fica aberta até 12h" title="Como funciona?">
+                                <i data-lucide="circle-alert"></i>
+                            </button>
+                        </span>`;
                 }
                 
                 header.innerHTML = `
@@ -2485,9 +2991,12 @@ function renderChecklist() {
                 setupTaskDragAndDrop(tasksContainer, title);
             };
 
-            // Determina o turno atual com base no horário local do dispositivo
+            // Determina o turno que deve liderar a lista do dia selecionado.
+            // Entre 00h e 04h59 a data já mudou: a "Noite" dessa nova data ainda
+            // acontecerá mais tarde, por isso a hierarquia começa pela Manhã.
             const getCurrentShift = () => {
                 const hour = new Date().getHours();
+                if (hour < 5) return "Manhã";
                 if (hour >= 5 && hour < 12) return "Manhã";
                 if (hour >= 12 && hour < 18) return "Tarde";
                 return "Noite";
@@ -2547,8 +3056,26 @@ function renderChecklist() {
                 renderGroup(group.name, group.icon, group.tasks);
             });
         } else {
-            // Renderização plana para guias de categorias específicas
-            sortedTasks.forEach(task => {
+            // Categorias específicas permanecem em uma lista plana, sem
+            // subtítulos, mas seguem a cronologia natural do dia.
+            const getChronologicalShiftRank = (task) => {
+                const shifts = (task.context && Array.isArray(task.context.turnos))
+                    ? task.context.turnos
+                    : [];
+                if (shifts.includes("Manhã")) return 0;
+                if (shifts.includes("Tarde")) return 1;
+                if (shifts.includes("Noite")) return 2;
+                return 3;
+            };
+
+            const categoryChronologicalTasks = [...filteredTasks].sort((a, b) => {
+                const shiftDifference = getChronologicalShiftRank(a) - getChronologicalShiftRank(b);
+                if (shiftDifference !== 0) return shiftDifference;
+                if (!isEditMode && a.completed !== b.completed) return a.completed ? 1 : -1;
+                return getTaskOrder(a) - getTaskOrder(b);
+            });
+
+            categoryChronologicalTasks.forEach(task => {
                 tasksListEl.appendChild(createTaskDOMElement(task));
             });
         }
@@ -4548,9 +5075,14 @@ function setupSupabaseAuth() {
 let isSyncing = false;
 
 async function syncOfflineDataToCloud() {
-    if (!supabaseClient || !currentUser) return;
+    if (!supabaseClient || !currentUser) {
+        refreshSyncStatusFromQueues();
+        return;
+    }
     if (isSyncing) return;
     isSyncing = true;
+    let syncSucceeded = false;
+    setSyncStatus("syncing", "Salvando…", "Enviando alterações para a nuvem");
 
     try {
         console.log("[Sync] Iniciando sincronização sequencial...");
@@ -4648,11 +5180,22 @@ async function syncOfflineDataToCloud() {
         
         isSyncing = false; // Libera o lock
         await loadChecklistAndProgress(false); // Busca dados e revalida
+        syncSucceeded = true;
         
     } catch (e) {
         console.warn("[Sync] Falha durante a sincronização. Alterações pendentes mantidas no IndexedDB:", e);
+        if (navigator.onLine) {
+            setSyncStatus("error", "Erro ao sincronizar", "Não foi possível sincronizar; as alterações permanecem salvas neste dispositivo");
+        } else {
+            refreshSyncStatusFromQueues();
+        }
     } finally {
         isSyncing = false;
+        if (syncSucceeded) {
+            refreshSyncStatusFromQueues();
+        } else if (navigator.onLine) {
+            scheduleSyncStatusRefresh(4000);
+        }
     }
 }
 
@@ -5452,6 +5995,123 @@ function classifyWordContext(word, associations) {
     return null;
 }
 
+function getSmartReportPeriods(days, referenceDate = new Date()) {
+    const atNoon = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0, 0);
+    const addDays = (date, amount) => {
+        const result = atNoon(date);
+        result.setDate(result.getDate() + amount);
+        return result;
+    };
+
+    const now = atNoon(referenceDate);
+    let currentStart;
+    let currentEnd;
+    let previousStart;
+    let previousEnd;
+
+    if (days === 7) {
+        // O ciclo semanal fecha na sexta-feira e fica disponível no sábado/domingo.
+        const daysSinceFriday = (now.getDay() + 2) % 7;
+        currentEnd = addDays(now, -daysSinceFriday);
+        currentStart = addDays(currentEnd, -6);
+        previousEnd = addDays(currentStart, -1);
+        previousStart = addDays(previousEnd, -6);
+    } else if (days === 30) {
+        // Mês civil anterior e o mês imediatamente anterior a ele.
+        currentStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 12);
+        currentEnd = new Date(now.getFullYear(), now.getMonth(), 0, 12);
+        previousStart = new Date(now.getFullYear(), now.getMonth() - 2, 1, 12);
+        previousEnd = new Date(now.getFullYear(), now.getMonth() - 1, 0, 12);
+    } else {
+        // Ano civil anterior e o ano imediatamente anterior a ele.
+        currentStart = new Date(now.getFullYear() - 1, 0, 1, 12);
+        currentEnd = new Date(now.getFullYear() - 1, 11, 31, 12);
+        previousStart = new Date(now.getFullYear() - 2, 0, 1, 12);
+        previousEnd = new Date(now.getFullYear() - 2, 11, 31, 12);
+    }
+
+    return {
+        currentStart,
+        currentEnd,
+        previousStart,
+        previousEnd,
+        currentStartStr: getLocalDateString(currentStart),
+        currentEndStr: getLocalDateString(currentEnd),
+        previousStartStr: getLocalDateString(previousStart),
+        previousEndStr: getLocalDateString(previousEnd)
+    };
+}
+
+function getSmartReportPreviewPeriods(days, referenceDate = new Date()) {
+    const atNoon = date => new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0, 0);
+    const addDays = (date, amount) => {
+        const result = atNoon(date);
+        result.setDate(result.getDate() + amount);
+        return result;
+    };
+    const now = atNoon(referenceDate);
+    let currentStart;
+
+    if (days === 7) {
+        const daysSinceSaturday = (now.getDay() + 1) % 7;
+        currentStart = addDays(now, -daysSinceSaturday);
+    } else if (days === 30) {
+        currentStart = new Date(now.getFullYear(), now.getMonth(), 1, 12);
+    } else {
+        currentStart = new Date(now.getFullYear(), 0, 1, 12);
+    }
+
+    const currentEnd = now;
+    const elapsedDays = Math.round((currentEnd - currentStart) / 86400000) + 1;
+    const previousEnd = addDays(currentStart, -1);
+    const previousStart = addDays(previousEnd, -(elapsedDays - 1));
+
+    return {
+        currentStart,
+        currentEnd,
+        previousStart,
+        previousEnd,
+        currentStartStr: getLocalDateString(currentStart),
+        currentEndStr: getLocalDateString(currentEnd),
+        previousStartStr: getLocalDateString(previousStart),
+        previousEndStr: getLocalDateString(previousEnd)
+    };
+}
+
+function taskWasPlannedOnDate(task, dateObj, dateStr) {
+    if (!task || task.is_active === false) return false;
+    const createdDate = task.created_at ? extractDateFromTimestamp(task.created_at) : null;
+    if (createdDate && createdDate > dateStr) return false;
+
+    if (!task.is_recurring) {
+        return createdDate === dateStr;
+    }
+
+    if (Array.isArray(task.repeat_days) && task.repeat_days.length > 0) {
+        return task.repeat_days.map(Number).includes(dateObj.getDay());
+    }
+
+    return true;
+}
+
+function buildPlannedOccurrences(tasksList, startDate, endDate) {
+    const occurrences = [];
+    const cursor = new Date(startDate);
+    cursor.setHours(12, 0, 0, 0);
+
+    while (cursor <= endDate) {
+        const dateStr = getLocalDateString(cursor);
+        tasksList.forEach(task => {
+            if (taskWasPlannedOnDate(task, cursor, dateStr)) {
+                occurrences.push({ task, date: dateStr, key: `${task.id}_${dateStr}` });
+            }
+        });
+        cursor.setDate(cursor.getDate() + 1);
+    }
+
+    return occurrences;
+}
+
 function classifyTaskContext(title, categoryName, associations) {
     // 1. Get category type from the registered category object (highest priority)
     const catObj = categories.find(c => c.name === categoryName);
@@ -5485,6 +6145,118 @@ function normalizeCategoryType(type) {
     if (t.match(/trein|academ|exercic|corr|saud|medic|gym|futebol|correr/)) return "Saúde/Bem-estar";
     if (t.match(/pag|receb|financ|dinheir|compr|limp|organiz|mercado|casa/)) return "Rotina/Organização";
     return type; // Retorna tipo customizado
+}
+
+function normalizeReportText(value) {
+    return String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+}
+
+function matchesReportFunction(text, patterns) {
+    return patterns.some(pattern => pattern.test(text));
+}
+
+const REPORT_FUNCTION_CATALOG = {
+    delivery: { singular: "Entrega", plural: "Entregas" },
+    billing: { singular: "Cobrança e financeiro", plural: "Cobranças e financeiro" },
+    production: { singular: "Produção e operação", plural: "Produção e operação" },
+    marketing: { singular: "Divulgação", plural: "Ações de divulgação" },
+    sales: { singular: "Venda e comercial", plural: "Vendas e ações comerciais" },
+    service: { singular: "Atendimento", plural: "Atendimentos" },
+    supply: { singular: "Compra e abastecimento", plural: "Compras e abastecimento" },
+    assessment: { singular: "Avaliação", plural: "Avaliações" },
+    academic_work: { singular: "Trabalho acadêmico", plural: "Trabalhos acadêmicos" },
+    study: { singular: "Estudo e revisão", plural: "Estudos e revisões" },
+    exercise: { singular: "Atividade física", plural: "Atividades físicas" },
+    self_care: { singular: "Saúde e autocuidado", plural: "Saúde e autocuidado" },
+    home: { singular: "Casa e organização", plural: "Casa e organização" },
+    personal_learning: { singular: "Aprendizado", plural: "Aprendizados" },
+    planning: { singular: "Rotina e planejamento", plural: "Rotina e planejamento" },
+    other: { singular: "Outra atividade", plural: "Outras atividades" }
+};
+
+function saveLearnedFunctionAssociation(term, functionId) {
+    if (!REPORT_FUNCTION_CATALOG[functionId]) return false;
+    const normalizedTerm = normalizeReportText(term).trim();
+    if (!normalizedTerm) return false;
+    const learned = JSON.parse(localStorage.getItem("user_function_associations")) || {};
+    learned[normalizedTerm] = functionId;
+    localStorage.setItem("user_function_associations", JSON.stringify(learned));
+    return true;
+}
+
+function getLearnedTaskFunction(normalizedTitle) {
+    const learned = JSON.parse(localStorage.getItem("user_function_associations")) || {};
+    const learnedTerms = Object.keys(learned).sort((a, b) => b.length - a.length);
+    for (const term of learnedTerms) {
+        const normalizedTerm = normalizeReportText(term);
+        if (!normalizedTerm || !normalizedTitle.includes(normalizedTerm)) continue;
+        const functionInfo = REPORT_FUNCTION_CATALOG[learned[term]];
+        if (functionInfo) return functionInfo;
+    }
+    return null;
+}
+
+function classifyTaskFunction(task) {
+    const title = normalizeReportText(task.title);
+    const learnedFunction = getLearnedTaskFunction(title);
+    if (learnedFunction) return learnedFunction;
+    const category = categories.find(cat => cat.name === task.category);
+    const rawCategoryType = category?.type || "";
+    const categoryType = normalizeReportText(normalizeCategoryType(rawCategoryType));
+    const isStudy = /estud|aprend|faculd|escola|curso/.test(categoryType);
+    const isHealth = /saud|bem-estar|academ|esport/.test(categoryType);
+    const isWork = /trabalh|profission|empresa|comercial|projeto/.test(categoryType);
+    const isPersonal = /pessoal|rotina|organiz|casa|financ|lazer/.test(categoryType);
+
+    if (isStudy) {
+        if (matchesReportFunction(title, [/\bprova\b/, /\bteste\b/, /avaliacao/, /simulado/, /\bg[12]\b/])) return { singular: "Avaliação", plural: "Avaliações" };
+        if (matchesReportFunction(title, [/trabalho/, /projeto/, /atividade/, /exercicio/, /entregar/])) return { singular: "Trabalho acadêmico", plural: "Trabalhos acadêmicos" };
+        if (matchesReportFunction(title, [/estud/, /revis/, /resum/, /pesquis/, /pratic/])) return { singular: "Estudo e revisão", plural: "Estudos e revisões" };
+        if (matchesReportFunction(title, [/\baula\b/, /assistir/, /palestra/, /laboratorio/])) return { singular: "Aula", plural: "Aulas" };
+        if (matchesReportFunction(title, [/\bler\b/, /leitur/, /livro/, /artigo/, /capitulo/])) return { singular: "Leitura", plural: "Leituras" };
+    }
+
+    if (isWork) {
+        if (matchesReportFunction(title, [/entreg/, /despach/, /enviar produto/, /levar produto/, /distribu/])) return { singular: "Entrega", plural: "Entregas" };
+        if (matchesReportFunction(title, [/cobrar/, /cobranca/, /pagamento/, /receber/, /boleto/, /nota fiscal/])) return { singular: "Cobrança e financeiro", plural: "Cobranças e financeiro" };
+        if (matchesReportFunction(title, [/envas/, /produz/, /fabric/, /embal/, /separar pedido/, /estoque/])) return { singular: "Produção e operação", plural: "Produção e operação" };
+        if (matchesReportFunction(title, [/storie/, /story/, /post/, /instagram/, /whatsapp/, /divulg/, /anuncio/, /conteudo/])) return { singular: "Divulgação", plural: "Ações de divulgação" };
+        if (matchesReportFunction(title, [/vender/, /venda/, /oferta/, /orcamento/, /proposta/, /comercial/])) return { singular: "Venda e comercial", plural: "Vendas e ações comerciais" };
+        if (matchesReportFunction(title, [/atender/, /atendimento/, /reuniao/, /cliente/, /visita/])) return { singular: "Atendimento", plural: "Atendimentos" };
+        if (matchesReportFunction(title, [/comprar/, /buscar/, /retirar/, /fornecedor/, /abastec/])) return { singular: "Compra e abastecimento", plural: "Compras e abastecimento" };
+    }
+
+    if (isHealth || isPersonal) {
+        if (matchesReportFunction(title, [/treino/, /academ/, /corrida/, /correr/, /caminh/, /exercicio/, /futebol/, /bike/, /pedalar/])) return { singular: "Atividade física", plural: "Atividades físicas" };
+        if (matchesReportFunction(title, [/tratamento/, /medic/, /terapia/, /consulta/, /cabelo/, /capilar/, /saude/])) return { singular: "Saúde e autocuidado", plural: "Saúde e autocuidado" };
+        if (matchesReportFunction(title, [/limpar/, /lavar/, /arrumar/, /organizar/, /mercado/, /cozinhar/, /roupa/, /casa/])) return { singular: "Casa e organização", plural: "Casa e organização" };
+        if (matchesReportFunction(title, [/pagar/, /conta/, /banco/, /dinheiro/, /orcamento/, /economizar/])) return { singular: "Finanças pessoais", plural: "Finanças pessoais" };
+        if (matchesReportFunction(title, [/duolingo/, /estud/, /curso/, /ler/, /leitur/, /aprender/])) return { singular: "Aprendizado pessoal", plural: "Aprendizados pessoais" };
+        if (matchesReportFunction(title, [/habito/, /rotina/, /planejar/, /checklist/, /agenda/])) return { singular: "Rotina e planejamento", plural: "Rotina e planejamento" };
+    }
+
+    // Ações suficientemente claras continuam reconhecíveis mesmo em categorias
+    // customizadas ou ainda não classificadas.
+    if (matchesReportFunction(title, [/entreg/, /despach/, /distribu/])) return { singular: "Entrega", plural: "Entregas" };
+    if (matchesReportFunction(title, [/cobrar/, /cobranca/, /pagamento/, /receber/, /boleto/])) return { singular: "Cobrança e financeiro", plural: "Cobranças e financeiro" };
+    if (matchesReportFunction(title, [/envas/, /produz/, /fabric/, /embal/, /separar pedido/, /estoque/])) return { singular: "Produção e operação", plural: "Produção e operação" };
+    if (matchesReportFunction(title, [/storie/, /story/, /post/, /instagram/, /divulg/, /anuncio/, /conteudo/])) return { singular: "Divulgação", plural: "Ações de divulgação" };
+    if (matchesReportFunction(title, [/vender/, /venda/, /oferta/, /orcamento/, /proposta/])) return { singular: "Venda e comercial", plural: "Vendas e ações comerciais" };
+    if (matchesReportFunction(title, [/reuniao/, /atender/, /atendimento/])) return { singular: "Atendimento", plural: "Atendimentos" };
+    if (matchesReportFunction(title, [/comprar/, /buscar/, /retirar/])) return { singular: "Compra ou retirada", plural: "Compras ou retiradas" };
+    if (matchesReportFunction(title, [/\bprova\b/, /\bteste\b/, /avaliacao/, /simulado/, /\bg[12]\b/])) return { singular: "Avaliação", plural: "Avaliações" };
+    if (matchesReportFunction(title, [/treino/, /academ/, /corrida/, /correr/, /caminh/, /exercicio/, /futebol/])) return { singular: "Atividade física", plural: "Atividades físicas" };
+    if (matchesReportFunction(title, [/tratamento/, /medic/, /terapia/, /consulta/, /capilar/, /saude/])) return { singular: "Saúde e autocuidado", plural: "Saúde e autocuidado" };
+    if (matchesReportFunction(title, [/duolingo/, /estud/, /curso/, /leitur/, /aprender/])) return { singular: "Aprendizado", plural: "Aprendizados" };
+    if (matchesReportFunction(title, [/limpar/, /lavar/, /arrumar/, /organizar/, /mercado/, /roupa/])) return { singular: "Casa e organização", plural: "Casa e organização" };
+    return { singular: "Outra atividade", plural: "Outras atividades" };
+}
+
+function formatReportFunctionCount(functionInfo, count) {
+    return `**${count} ${count === 1 ? functionInfo.singular : functionInfo.plural}**`;
 }
 
 async function loadAndRenderReport(days, containerEl) {
@@ -5541,78 +6313,109 @@ async function loadAndRenderReport(days, containerEl) {
 
     containerEl.innerHTML = `<span style="font-size: 0.8rem; color: var(--text-secondary);"><span class="loading-spinner" style="display:inline-block; vertical-align:middle; margin-right:6px; width:12px; height:12px; border:2px solid var(--primary); border-top-color:transparent; border-radius:50%; animation:spin 1s linear infinite;"></span> Analisando histórico...</span>`;
 
-    // 1. Calcular datas dos períodos
-    const totalDays = 2 * days;
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
-    const startDateStr = getLocalDateString(startDate);
-
-    const prevStartDate = new Date();
-    prevStartDate.setDate(prevStartDate.getDate() - totalDays);
-    const prevStartDateStr = getLocalDateString(prevStartDate);
+    // 1. Calcular dois períodos civis fechados e comparáveis.
+    const periods = isDebugMode
+        ? getSmartReportPreviewPeriods(days, now)
+        : getSmartReportPeriods(days, now);
 
     // 2. Carregar conclusões do Supabase ou Local
     let completionsList = [];
+    let cloudHistoryLoaded = false;
     if (supabaseClient && currentUser) {
         try {
             const { data, error } = await supabaseClient
                 .from('completions')
                 .select('*')
-                .gte('date', prevStartDateStr);
+                .gte('date', periods.previousStartStr)
+                .lte('date', periods.currentEndStr);
             if (!error && data) {
                 completionsList = data;
+                cloudHistoryLoaded = true;
             }
         } catch (e) {
             console.error("Erro ao carregar conclusões do Supabase", e);
         }
     }
     
-    // Fallback local
-    if (completionsList.length === 0) {
+    // Fallback local somente quando a consulta à nuvem não foi concluída.
+    if (!cloudHistoryLoaded) {
         let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
-        completionsList = localCompletions.filter(c => c.date >= prevStartDateStr);
+        completionsList = localCompletions.filter(c =>
+            c.date >= periods.previousStartStr && c.date <= periods.currentEndStr
+        );
     }
 
-    // 3. Separar conclusões em períodos
-    const currentCompletions = completionsList.filter(c => c.date >= startDateStr && c.completed === true);
-    const prevCompletions = completionsList.filter(c => c.date >= prevStartDateStr && c.date < startDateStr && c.completed === true);
-    const skippedCompletions = completionsList.filter(c => c.date >= startDateStr && c.completed === false);
+    // 3. Separar e deduplicar conclusões por tarefa + data.
+    const uniqueCompletedRecords = (startStr, endStr) => {
+        const recordsByKey = new Map();
+        completionsList.forEach(completion => {
+            if (completion.completed !== true || completion.date < startStr || completion.date > endStr) return;
+            recordsByKey.set(`${completion.task_id}_${completion.date}`, completion);
+        });
+        return Array.from(recordsByKey.values());
+    };
 
+    const currentCompletions = uniqueCompletedRecords(periods.currentStartStr, periods.currentEndStr);
+    const prevCompletions = uniqueCompletedRecords(periods.previousStartStr, periods.previousEndStr);
+    const currentCompletionKeys = new Set(currentCompletions.map(c => `${c.task_id}_${c.date}`));
+    const previousCompletionKeys = new Set(prevCompletions.map(c => `${c.task_id}_${c.date}`));
+
+    // 4. Gerar as ocorrências realmente planejadas conforme data e recorrência.
+    const reportTasks = allActiveTasks.filter(task => task.is_active !== false);
+    const currentPlannedOccurrences = buildPlannedOccurrences(reportTasks, periods.currentStart, periods.currentEnd);
+    const previousPlannedOccurrences = buildPlannedOccurrences(reportTasks, periods.previousStart, periods.previousEnd);
+    const currentPlannedCount = currentPlannedOccurrences.length;
+    const previousPlannedCount = previousPlannedOccurrences.length;
     const currentCount = currentCompletions.length;
     const prevCount = prevCompletions.length;
-
-    // 4. Análise de evolução do período
-    const associations = JSON.parse(localStorage.getItem("user_term_associations")) || {};
+    const currentCompletedPlannedCount = currentPlannedOccurrences.filter(o => currentCompletionKeys.has(o.key)).length;
+    const previousCompletedPlannedCount = previousPlannedOccurrences.filter(o => previousCompletionKeys.has(o.key)).length;
+    const currentRate = currentPlannedCount > 0 ? Math.round((currentCompletedPlannedCount / currentPlannedCount) * 100) : 0;
+    const previousRate = previousPlannedCount > 0 ? Math.round((previousCompletedPlannedCount / previousPlannedCount) * 100) : 0;
 
     // 5. Agrupar por Categorias e calcular planejadas vs concluídas
     const catCompletions = {};
     const catPlanned = {};
     
-    categories.forEach(cat => {
-        catCompletions[cat.name] = 0;
-        catPlanned[cat.name] = 0;
-    });
-
-    const currentPeriodRecords = completionsList.filter(c => c.date >= startDateStr);
-    currentPeriodRecords.forEach(c => {
-        const task = allActiveTasks.find(t => String(t.id) === String(c.task_id));
-        if (task) {
-            catPlanned[task.category] = (catPlanned[task.category] || 0) + 1;
-            if (c.completed === true) {
-                catCompletions[task.category] = (catCompletions[task.category] || 0) + 1;
-            }
+    currentPlannedOccurrences.forEach(occurrence => {
+        const categoryName = occurrence.task.category || "Sem categoria";
+        catPlanned[categoryName] = (catPlanned[categoryName] || 0) + 1;
+        if (currentCompletionKeys.has(occurrence.key)) {
+            catCompletions[categoryName] = (catCompletions[categoryName] || 0) + 1;
         }
     });
 
-    // Valida se a soma das categorias corresponde ao total de tarefas
-    let sumCompletions = 0;
-    Object.values(catCompletions).forEach(val => {
-        sumCompletions += val;
+    const categoryNames = Object.keys(catPlanned);
+    const activeCats = categoryNames
+        .filter(name => catPlanned[name] > 0)
+        .map(name => categories.find(cat => cat.name === name) || { id: name, name, type: "Não classificada" });
+
+    // 5.1. Ler a função executada dentro de cada categoria/setor.
+    const functionStatsByCategory = {};
+    currentPlannedOccurrences.forEach(occurrence => {
+        if (!currentCompletionKeys.has(occurrence.key)) return;
+        const categoryName = occurrence.task.category || "Sem categoria";
+        const functionInfo = classifyTaskFunction(occurrence.task);
+        if (!functionStatsByCategory[categoryName]) functionStatsByCategory[categoryName] = {};
+        if (!functionStatsByCategory[categoryName][functionInfo.singular]) {
+            functionStatsByCategory[categoryName][functionInfo.singular] = { ...functionInfo, count: 0 };
+        }
+        functionStatsByCategory[categoryName][functionInfo.singular].count += 1;
     });
+
+    const functionSummaries = Object.entries(functionStatsByCategory)
+        .sort((a, b) => (catCompletions[b[0]] || 0) - (catCompletions[a[0]] || 0))
+        .map(([categoryName, stats]) => {
+            const category = categories.find(cat => cat.name === categoryName);
+            const categoryType = category?.type ? ` — ${category.type}` : "";
+            const functions = Object.values(stats)
+                .sort((a, b) => b.count - a.count)
+                .map(item => formatReportFunctionCount(item, item.count));
+            return `**${categoryName}**${categoryType}: ${functions.join(", ")}.`;
+        });
 
     // 6. Principais destaques (Máximo 3)
     const highlights = [];
-    const activeCats = categories.filter(cat => (catPlanned[cat.name] || 0) > 0);
     
     // Destaque 1: Conclusão perfeita
     const perfectCat = activeCats.find(cat => catCompletions[cat.name] === catPlanned[cat.name]);
@@ -5629,14 +6432,16 @@ async function loadAndRenderReport(days, containerEl) {
     }
 
     // Destaque 3: Comparação com período anterior
-    if (prevCount > 0 && highlights.length < 3) {
-        const pctDiff = Math.round(((currentCount - prevCount) / prevCount) * 100);
-        if (pctDiff > 0) {
-            highlights.push(`Aumento de **+${pctDiff}%** na produtividade geral em relação ao período anterior (de ${prevCount} para ${currentCount} tarefas).`);
+    if (previousPlannedCount > 0 && highlights.length < 3) {
+        const rateDiff = currentRate - previousRate;
+        if (rateDiff > 0) {
+            highlights.push(`Aumento de **+${rateDiff} pontos percentuais** no aproveitamento em relação ao período anterior (${previousRate}% para ${currentRate}%).`);
         }
     }
     
-    if (highlights.length === 0) {
+    if (currentPlannedCount === 0) {
+        highlights.push("Não houve ocorrências planejadas neste período para gerar destaques de produtividade.");
+    } else if (highlights.length === 0) {
         highlights.push("Consistência geral mantida nas tarefas planejadas.");
     }
     const finalHighlights = highlights.slice(0, 3);
@@ -5658,67 +6463,75 @@ async function loadAndRenderReport(days, containerEl) {
     }
 
     // Ponto 2: Pendência importante
-    const importantPending = allActiveTasks.filter(task => {
-        const isImportant = task.context && (task.context.important === true || task.context.important === "true");
-        if (!isImportant) return false;
-        const wasCompleted = currentCompletions.some(c => String(c.task_id) === String(task.id));
-        return !wasCompleted;
+    const importantPendingOccurrences = currentPlannedOccurrences.filter(occurrence => {
+        const context = occurrence.task.context || {};
+        const isImportant = context.important === true || context.important === "true";
+        return isImportant && !currentCompletionKeys.has(occurrence.key);
     });
-    if (importantPending.length > 0) {
-        const task = importantPending[0];
-        attentions.push(`Pendência importante: a tarefa **"${task.title}"** (guia ${task.category}) não foi concluída.`);
+    const importantPending = importantPendingOccurrences.length > 0 ? importantPendingOccurrences[0].task : null;
+    if (importantPending) {
+        attentions.push(`Pendência importante: a tarefa **"${importantPending.title}"** (guia ${importantPending.category}) teve ocorrência planejada não concluída.`);
     }
 
     // Ponto 3: Tarefas puladas
     if (attentions.length < 2) {
         const skippedTaskCounts = {};
-        skippedCompletions.forEach(c => {
-            skippedTaskCounts[c.task_id] = (skippedTaskCounts[c.task_id] || 0) + 1;
+        currentPlannedOccurrences.forEach(occurrence => {
+            if (!currentCompletionKeys.has(occurrence.key)) {
+                skippedTaskCounts[occurrence.task.id] = (skippedTaskCounts[occurrence.task.id] || 0) + 1;
+            }
         });
         const worstSkipped = Object.entries(skippedTaskCounts).sort((a, b) => b[1] - a[1])[0];
         if (worstSkipped) {
-            const task = allActiveTasks.find(t => String(t.id) === String(worstSkipped[0]));
+            const task = reportTasks.find(t => String(t.id) === String(worstSkipped[0]));
             if (task) {
                 attentions.push(`Tarefa adiada: **"${task.title}"** foi ignorada/pulada ${worstSkipped[1]}x.`);
             }
         }
     }
     
-    if (attentions.length === 0) {
+    if (currentPlannedCount === 0) {
+        attentions.push("Sem dados suficientes: nenhuma tarefa estava programada no período analisado.");
+    } else if (attentions.length === 0) {
         attentions.push("Nenhum desvio detectado. Todas as metas planejadas foram atendidas.");
     }
     const finalAttentions = attentions.slice(0, 2);
 
     // 8. Recomendação Prática (Exatamente 1)
     let recommendation = "";
-    if (lowCompletionCat) {
+    if (currentPlannedCount === 0) {
+        recommendation = "Planeje tarefas para o próximo ciclo para que o app consiga calcular evolução, destaques e pontos de atenção.";
+    } else if (lowCompletionCat) {
         recommendation = `Dedique atenção prioritária à guia **${lowCompletionCat.name}** no início do seu dia para equilibrar o progresso das atividades.`;
-    } else if (importantPending.length > 0) {
-        recommendation = `Priorize e conclua a pendência importante **"${importantPending[0].title}"** como a primeira ação do próximo ciclo.`;
+    } else if (importantPending) {
+        recommendation = `Priorize e conclua a pendência importante **"${importantPending.title}"** como a primeira ação do próximo ciclo.`;
     } else {
         recommendation = "Mantenha a consistência atual distribuindo uniformemente a conclusão das tarefas ao longo do dia.";
     }
 
     // Calcular prazo real de expiração
     let expirationMessage = "";
-    if (days === 7) {
+    if (isDebugMode) {
+        expirationMessage = "Prévia parcial do período em andamento; os resultados ainda podem mudar até o fechamento.";
+    } else if (days === 7) {
         if (now.getDay() === 6) {
             expirationMessage = "Este relatório expira no fim de domingo (amanhã).";
         } else {
             expirationMessage = "Este relatório expira no fim de hoje.";
         }
     } else if (days === 30) {
-        const remaining = 4 - now.getDate();
-        expirationMessage = `Este relatório expira no dia 4 do mês (em ${remaining} ${remaining === 1 ? 'dia' : 'dias'}).`;
+        expirationMessage = "Este relatório fica disponível até o fim do dia 3 deste mês.";
     } else {
-        const remaining = 4 - now.getDate();
-        expirationMessage = `Este relatório expira no dia 4 de janeiro (em ${remaining} ${remaining === 1 ? 'dia' : 'dias'}).`;
+        expirationMessage = "Este relatório fica disponível até o fim do dia 3 de janeiro.";
     }
+
+    const formatReportDate = date => date.toLocaleDateString("pt-BR");
+    const periodRangeLabel = `${formatReportDate(periods.currentStart)} a ${formatReportDate(periods.currentEnd)}`;
 
     const warningHtml = `
         <div style="background: rgba(245, 158, 11, 0.07); border: 1px solid rgba(245, 158, 11, 0.2); color: #eab308; padding: 12px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 0.82rem; font-weight: 600; display: flex; align-items: center; gap: 8px; line-height: 1.4;">
             <i data-lucide="clock" style="width: 18px; height: 18px; flex-shrink: 0; color: #eab308;"></i>
-            <span>📸 Tire print! ${expirationMessage}</span>
+            <span>⏱️ ${expirationMessage}</span>
         </div>
     `;
 
@@ -5734,8 +6547,8 @@ async function loadAndRenderReport(days, containerEl) {
                     <i data-lucide="activity" style="width: 14px; height: 14px;"></i> 1. Resumo do Período
                 </h6>
                 <p style="margin: 0; color: var(--text-secondary); font-size: 0.82rem;">
-                    Neste ciclo, você completou **${currentCount}** tarefas no total (validadas com a soma de **${sumCompletions}** ocorrências concluídas nas guias).
-                    ${prevCount > 0 ? ` Comparado ao ciclo anterior (onde realizou ${prevCount} tarefas), você manteve um fluxo ativo de entregas.` : ""}
+                    Período analisado: **${periodRangeLabel}**. Você concluiu **${currentCompletedPlannedCount} de ${currentPlannedCount}** ocorrências planejadas (**${currentRate}%** de aproveitamento).
+                    ${previousPlannedCount > 0 ? ` No período anterior, o aproveitamento foi de ${previousRate}% (${previousCompletedPlannedCount} de ${previousPlannedCount}).` : ""}
                 </p>
             </section>
 
@@ -5749,20 +6562,32 @@ async function loadAndRenderReport(days, containerEl) {
                 </ul>
             </section>
 
-            <!-- 3. PONTOS DE ATENÇÃO -->
+            <!-- 3. FUNÇÕES REALIZADAS -->
+            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px;">
+                <h6 style="margin: 0 0 8px 0; color: #06b6d4; font-size: 0.9rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
+                    <i data-lucide="briefcase-business" style="width: 14px; height: 14px;"></i> 3. Funções Realizadas por Categoria
+                </h6>
+                <ul style="margin: 0; padding-left: 18px; color: var(--text-secondary); font-size: 0.82rem; display: flex; flex-direction: column; gap: 4px;">
+                    ${functionSummaries.length > 0
+                        ? functionSummaries.map(summary => `<li>${summary}</li>`).join("")
+                        : "<li>Nenhuma função concluída foi registrada no período.</li>"}
+                </ul>
+            </section>
+
+            <!-- 4. PONTOS DE ATENÇÃO -->
             <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px;">
                 <h6 style="margin: 0 0 8px 0; color: #ef4444; font-size: 0.9rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <i data-lucide="alert-triangle" style="width: 14px; height: 14px;"></i> 3. Pontos de Atenção
+                    <i data-lucide="alert-triangle" style="width: 14px; height: 14px;"></i> 4. Pontos de Atenção
                 </h6>
                 <ul style="margin: 0; padding-left: 18px; color: var(--text-secondary); font-size: 0.82rem; display: flex; flex-direction: column; gap: 4px;">
                     ${finalAttentions.map(a => `<li>${a}</li>`).join("")}
                 </ul>
             </section>
 
-            <!-- 4. RECOMENDAÇÃO PRÁTICA -->
+            <!-- 5. RECOMENDAÇÃO PRÁTICA -->
             <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px;">
                 <h6 style="margin: 0 0 8px 0; color: #8b5cf6; font-size: 0.9rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <i data-lucide="lightbulb" style="width: 14px; height: 14px;"></i> 4. Recomendação Prática
+                    <i data-lucide="lightbulb" style="width: 14px; height: 14px;"></i> 5. Recomendação Prática
                 </h6>
                 <p style="margin: 0; color: var(--text-secondary); font-size: 0.82rem;">
                     ${recommendation}
@@ -6022,8 +6847,8 @@ function showWebNotification(title, body, taskId) {
             navigator.serviceWorker.ready.then(registration => {
                 registration.showNotification(title, {
                     body: body,
-                    icon: './icon-192.png',
-                    badge: './icon-192.png',
+                    icon: './icons/icon-192.png',
+                    badge: './icons/icon-192.png',
                     vibrate: [200, 100, 200],
                     data: { taskId: taskId },
                     tag: `task-important-${taskId}`
@@ -6032,10 +6857,225 @@ function showWebNotification(title, body, taskId) {
         } else {
             new Notification(title, {
                 body: body,
-                icon: './icon-192.png'
+                icon: './icons/icon-192.png'
             });
         }
     }
+}
+
+function getSmartReportAttentionKey(referenceDate = new Date()) {
+    const year = referenceDate.getFullYear();
+    const month = referenceDate.getMonth();
+    const day = referenceDate.getDate();
+    const weekday = referenceDate.getDay();
+
+    if (month === 0 && day <= 3) return `smart_report_seen_yearly_${year}`;
+    if (day <= 3) return `smart_report_seen_monthly_${year}-${String(month + 1).padStart(2, "0")}`;
+    if (weekday === 6 || weekday === 0) {
+        const saturday = new Date(referenceDate);
+        if (weekday === 0) saturday.setDate(saturday.getDate() - 1);
+        return `smart_report_seen_weekly_${getLocalDateString(saturday)}`;
+    }
+    if (new URLSearchParams(window.location.search).has("debug")) {
+        return `smart_report_seen_debug_${getLocalDateString(referenceDate)}`;
+    }
+    return null;
+}
+
+function getSmartReportReadyPeriod(referenceDate = new Date()) {
+    const month = referenceDate.getMonth();
+    const day = referenceDate.getDate();
+    const weekday = referenceDate.getDay();
+    if (month === 0 && day <= 3) return "anual";
+    if (day <= 3) return "mensal";
+    if (weekday === 6 || weekday === 0) return "semanal";
+    return "semanal";
+}
+
+function updateSmartReportReadyLabel(referenceDate = new Date()) {
+    const label = document.getElementById("smart-report-ready-label");
+    if (!label) return;
+    const period = getSmartReportReadyPeriod(referenceDate);
+    label.textContent = `Seu relatório ${period} já está pronto!`;
+}
+
+function wrapReportCanvasText(context, text, maxWidth) {
+    const paragraphs = String(text).split("\n");
+    const lines = [];
+    paragraphs.forEach((paragraph, paragraphIndex) => {
+        const words = paragraph.trim().split(/\s+/).filter(Boolean);
+        let line = "";
+        words.forEach(word => {
+            const candidate = line ? `${line} ${word}` : word;
+            if (line && context.measureText(candidate).width > maxWidth) {
+                lines.push(line);
+                line = word;
+            } else {
+                line = candidate;
+            }
+        });
+        if (line) lines.push(line);
+        if (!words.length || paragraphIndex < paragraphs.length - 1) lines.push("");
+    });
+    return lines;
+}
+
+function drawRoundedReportRect(context, x, y, width, height, radius) {
+    const r = Math.min(radius, width / 2, height / 2);
+    context.beginPath();
+    context.moveTo(x + r, y);
+    context.arcTo(x + width, y, x + width, y + height, r);
+    context.arcTo(x + width, y + height, x, y + height, r);
+    context.arcTo(x, y + height, x, y, r);
+    context.arcTo(x, y, x + width, y, r);
+    context.closePath();
+}
+
+async function saveCurrentSmartReport() {
+    const content = document.getElementById("report-summary-content");
+    const title = document.getElementById("report-summary-title");
+    if (!content || !title || content.textContent.includes("Carregando")) return;
+
+    const periodName = activeSmartReportDays === 365 ? "anual" : (activeSmartReportDays === 30 ? "mensal" : "semanal");
+    const originalButtonHtml = btnSaveSmartReport.innerHTML;
+    btnSaveSmartReport.innerHTML = '<i data-lucide="loader-circle"></i> Gerando imagem…';
+    btnSaveSmartReport.disabled = true;
+    if (window.lucide) window.lucide.createIcons();
+
+    try {
+        const rootStyles = getComputedStyle(document.documentElement);
+        const bodyStyles = getComputedStyle(document.body);
+        const colors = {
+            background: rootStyles.getPropertyValue("--bg-dark").trim() || bodyStyles.backgroundColor || "#0f172a",
+            surface: rootStyles.getPropertyValue("--bg-surface-solid").trim() || "#182033",
+            primary: rootStyles.getPropertyValue("--primary").trim() || "#8b5cf6",
+            text: rootStyles.getPropertyValue("--text-primary").trim() || "#f8fafc",
+            secondary: rootStyles.getPropertyValue("--text-secondary").trim() || "#94a3b8",
+            border: rootStyles.getPropertyValue("--border-color").trim() || "rgba(148,163,184,.2)"
+        };
+        const sourceElements = Array.from(content.querySelectorAll("h6, p, li"));
+        const blocks = sourceElements.map(element => ({
+            type: element.tagName === "H6" ? "heading" : (element.tagName === "LI" ? "list" : "body"),
+            text: element.innerText.trim()
+        })).filter(block => block.text);
+        const availabilityText = content.firstElementChild?.innerText?.trim();
+        if (availabilityText) blocks.unshift({ type: "body", text: availabilityText });
+
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        const width = 1080;
+        const contentWidth = 856;
+        context.font = "500 27px Arial, sans-serif";
+        let calculatedHeight = 390;
+        blocks.forEach(block => {
+            context.font = block.type === "heading" ? "700 30px Arial, sans-serif" : "500 27px Arial, sans-serif";
+            const prefixWidth = block.type === "list" ? 34 : 0;
+            const lines = wrapReportCanvasText(context, block.text, contentWidth - prefixWidth);
+            calculatedHeight += lines.length * (block.type === "heading" ? 42 : 40) + (block.type === "heading" ? 30 : 22);
+        });
+        calculatedHeight += 120;
+        canvas.width = width;
+        canvas.height = Math.max(1080, calculatedHeight);
+
+        context.fillStyle = colors.background;
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = colors.surface;
+        drawRoundedReportRect(context, 48, 48, 984, canvas.height - 96, 36);
+        context.fill();
+
+        context.fillStyle = colors.primary;
+        drawRoundedReportRect(context, 96, 96, 76, 76, 20);
+        context.fill();
+        context.fillStyle = "#ffffff";
+        context.font = "800 36px Arial, sans-serif";
+        context.textAlign = "center";
+        context.fillText("▥", 134, 146);
+        context.textAlign = "left";
+
+        context.fillStyle = colors.text;
+        context.font = "800 42px Arial, sans-serif";
+        context.fillText("Relatório Inteligente", 196, 128);
+        context.fillStyle = colors.secondary;
+        context.font = "500 24px Arial, sans-serif";
+        context.fillText("Análise automática de rotinas e tarefas concluídas", 196, 164);
+
+        context.strokeStyle = colors.border;
+        context.lineWidth = 2;
+        context.beginPath();
+        context.moveTo(96, 205);
+        context.lineTo(984, 205);
+        context.stroke();
+
+        context.fillStyle = colors.primary;
+        context.font = "800 26px Arial, sans-serif";
+        context.fillText(title.innerText.trim().toUpperCase(), 112, 264);
+
+        let y = 325;
+        blocks.forEach(block => {
+            const isHeading = block.type === "heading";
+            context.font = isHeading ? "800 30px Arial, sans-serif" : "500 27px Arial, sans-serif";
+            context.fillStyle = isHeading ? colors.text : colors.secondary;
+            if (isHeading) y += 12;
+            const textX = block.type === "list" ? 146 : 112;
+            const lines = wrapReportCanvasText(context, block.text, contentWidth - (block.type === "list" ? 34 : 0));
+            if (block.type === "list") {
+                context.fillStyle = colors.primary;
+                context.beginPath();
+                context.arc(119, y - 8, 6, 0, Math.PI * 2);
+                context.fill();
+                context.fillStyle = colors.secondary;
+            }
+            lines.forEach(line => {
+                if (line) context.fillText(line, textX, y);
+                y += isHeading ? 42 : 40;
+            });
+            y += isHeading ? 30 : 22;
+        });
+
+        context.strokeStyle = colors.border;
+        context.beginPath();
+        context.moveTo(96, canvas.height - 125);
+        context.lineTo(984, canvas.height - 125);
+        context.stroke();
+        context.fillStyle = colors.secondary;
+        context.font = "500 22px Arial, sans-serif";
+        context.fillText(`Gerado em ${new Date().toLocaleString("pt-BR")}`, 112, canvas.height - 78);
+
+        const imageBlob = await new Promise((resolve, reject) => {
+            canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("Não foi possível gerar a imagem.")), "image/png", 1);
+        });
+        const filename = `relatorio-${periodName}-${getLocalDateString(new Date())}.png`;
+        const imageFile = new File([imageBlob], filename, { type: "image/png" });
+
+        const isMobileShare = window.matchMedia("(max-width: 768px) and (pointer: coarse)").matches;
+        if (isMobileShare && navigator.share && navigator.canShare && navigator.canShare({ files: [imageFile] })) {
+            await navigator.share({ files: [imageFile], title: "Relatório Inteligente" });
+        } else {
+            const url = URL.createObjectURL(imageBlob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+
+        btnSaveSmartReport.innerHTML = '<i data-lucide="check"></i> Imagem pronta';
+    } catch (error) {
+        if (error && error.name === "AbortError") {
+            btnSaveSmartReport.innerHTML = originalButtonHtml;
+        } else {
+            console.error("Erro ao salvar relatório como imagem:", error);
+            btnSaveSmartReport.innerHTML = '<i data-lucide="triangle-alert"></i> Não foi possível salvar';
+        }
+    }
+    if (window.lucide) window.lucide.createIcons();
+    setTimeout(() => {
+        btnSaveSmartReport.innerHTML = originalButtonHtml;
+        btnSaveSmartReport.disabled = false;
+        if (window.lucide) window.lucide.createIcons();
+    }, 1800);
 }
 
 function updateSmartReportButtonVisibility() {
@@ -6046,6 +7086,10 @@ function updateSmartReportButtonVisibility() {
     const isDebugMode = new URLSearchParams(window.location.search).has("debug");
     if (isDebugMode) {
         btnReport.style.display = "inline-flex";
+        updateSmartReportReadyLabel();
+        const debugKey = getSmartReportAttentionKey();
+        const previewUnread = new URLSearchParams(window.location.search).has("preview-report-animation");
+        btnReport.classList.toggle("report-attention", previewUnread || localStorage.getItem(debugKey) !== "true");
         return;
     }
 
@@ -6065,8 +7109,12 @@ function updateSmartReportButtonVisibility() {
 
     if (hasWeeklyReport || hasMonthlyReport || hasYearlyReport) {
         btnReport.style.display = "inline-flex";
+        updateSmartReportReadyLabel(now);
+        const attentionKey = getSmartReportAttentionKey(now);
+        btnReport.classList.toggle("report-attention", localStorage.getItem(attentionKey) !== "true");
     } else {
         btnReport.style.display = "none";
+        btnReport.classList.remove("report-attention");
     }
 }
 

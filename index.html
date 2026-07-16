@@ -36,13 +36,13 @@
             }
         });
     </script>
-    <link rel="stylesheet" href="style.css?v=7.42">
+    <link rel="stylesheet" href="style.css?v=7.57">
     
     <!-- iOS / PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Checklist">
-    <link rel="apple-touch-icon" href="https://img.icons8.com/fluency/180/000000/todo-list.png">
+    <link rel="apple-touch-icon" href="./icons/icon-192.png">
     <link rel="manifest" href="manifest.json">
 
     <!-- Google Fonts: Plus Jakarta Sans for premium typography -->
@@ -50,7 +50,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- Lucide Icons for modern, clean icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="./vendor/lucide.min.js?v=1.24.0"></script>
     <!-- Supabase JS Client library CDN -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
@@ -97,6 +97,10 @@
             <div class="header-info">
                 <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                     <span class="organization-tag" id="org-tag">Checklist Organizacional</span>
+                    <span id="sync-status" class="sync-status" data-state="checking" role="status" aria-live="polite" title="Verificando sincronização">
+                        <span class="sync-status-dot" aria-hidden="true"></span>
+                        <span id="sync-status-label">Verificando…</span>
+                    </span>
                 </div>
                 <h1 id="app-title" style="margin: 0;">Checklist Diário</h1>
             </div>
@@ -104,8 +108,9 @@
                 <button id="btn-toggle-summary" class="icon-button" title="Mostrar/Ocultar Resumo">
                     <i data-lucide="eye"></i>
                 </button>
-                <button id="btn-smart-report" class="icon-button" title="Relatório Inteligente" style="display: none; background: rgba(139, 92, 246, 0.1); color: var(--primary);">
-                    <i data-lucide="brain-circuit"></i>
+                <button id="btn-smart-report" class="icon-button smart-report-button" title="Relatório Inteligente" aria-label="Relatório Inteligente" style="display: none;">
+                    <i data-lucide="file-chart-column"></i>
+                    <span id="smart-report-ready-label" class="smart-report-ready-label" aria-hidden="true">Seu relatório semanal já está pronto!</span>
                 </button>
                 <button id="btn-notifications" class="icon-button" title="Notificações" style="position: relative;">
                     <i data-lucide="bell"></i>
@@ -234,7 +239,10 @@
             <form id="form-add-task">
                 <div class="form-group">
                     <label for="task-title">Descrição da Tarefa</label>
-                    <input type="text" id="task-title" required placeholder="Ex: Verificar temperatura do freezer" autocomplete="off">
+                    <div class="task-title-autocomplete-wrapper">
+                        <input type="text" id="task-title" required placeholder="Ex: Verificar temperatura do freezer" autocomplete="off" aria-autocomplete="list" aria-controls="task-title-autocomplete" aria-expanded="false">
+                        <div id="task-title-autocomplete" class="task-title-autocomplete" role="listbox" aria-label="Tarefas já utilizadas"></div>
+                    </div>
                 </div>
                 <div class="form-group" style="margin-top: 10px;">
                     <label>Turno</label>
@@ -339,6 +347,12 @@
                         <i data-lucide="folder"></i> Gerenciar Categorias
                     </button>
                 </div>
+
+                <div style="margin-bottom: 24px;">
+                    <button id="btn-open-gestures-tutorial" class="btn btn-secondary btn-block gestures-settings-btn">
+                        <i data-lucide="hand"></i> Tutorial de Gestos
+                    </button>
+                </div>
                 <!-- Supabase credentials are kept fixed in code -->
                 
                 <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
@@ -352,9 +366,65 @@
                         <i data-lucide="log-out"></i> Sair da Conta
                     </button>
                     <div style="text-align: center; font-size: 0.65rem; color: var(--text-muted); margin-top: 8px;">
-                        Versão 7.95
+                        Versão 8.28
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Gestures Tutorial -->
+    <div id="modal-gestures-tutorial" class="modal">
+        <div class="modal-overlay" id="overlay-gestures-tutorial"></div>
+        <div class="modal-content gestures-tutorial-content" role="dialog" aria-modal="true" aria-labelledby="gestures-tutorial-title">
+            <div class="modal-header gestures-tutorial-header">
+                <div>
+                    <h2 id="gestures-tutorial-title">Tutorial de Gestos</h2>
+                    <p>Descubra os atalhos do checklist</p>
+                </div>
+                <button class="modal-close" id="btn-close-gestures-tutorial" aria-label="Fechar tutorial"><i data-lucide="x"></i></button>
+            </div>
+
+            <div class="gestures-carousel" id="gestures-carousel">
+                <div class="gestures-carousel-track" id="gestures-carousel-track">
+                    <article class="gesture-slide">
+                        <div class="gesture-visual"><i data-lucide="mouse-pointer-click"></i><span class="gesture-tap-ring"></span></div>
+                        <span class="gesture-kicker">CONCLUIR</span>
+                        <h3>Toque em uma tarefa</h3>
+                        <p>Um toque no cartão marca ou desmarca a tarefa imediatamente.</p>
+                    </article>
+                    <article class="gesture-slide">
+                        <div class="gesture-visual"><i data-lucide="list-checks"></i><span class="gesture-motion horizontal-left"><i data-lucide="arrow-left"></i></span></div>
+                        <span class="gesture-kicker">EDITAR OU EXCLUIR</span>
+                        <h3>Deslize a tarefa</h3>
+                        <p>Arraste uma tarefa para a esquerda para revelar as ações de editar e excluir.</p>
+                    </article>
+                    <article class="gesture-slide">
+                        <div class="gesture-visual"><i data-lucide="calendar-days"></i><span class="gesture-motion horizontal-both"><i data-lucide="move-horizontal"></i></span></div>
+                        <span class="gesture-kicker">TROCAR O DIA</span>
+                        <h3>Deslize os blocos</h3>
+                        <p>Arraste os blocos de progresso e data para avançar ou retornar um dia.</p>
+                    </article>
+                    <article class="gesture-slide">
+                        <div class="gesture-visual gesture-edge-visual"><i data-lucide="panel-left-right"></i><span class="gesture-edge-line left"></span><span class="gesture-edge-line right"></span></div>
+                        <span class="gesture-kicker">ATALHO LATERAL</span>
+                        <h3>Use as margens vazias</h3>
+                        <p>Comece o deslize bem na lateral para trocar a data sem interferir nas tarefas.</p>
+                    </article>
+                    <article class="gesture-slide">
+                        <div class="gesture-visual"><i data-lucide="panels-top-left"></i><span class="gesture-motion vertical-down"><i data-lucide="arrow-down"></i></span></div>
+                        <span class="gesture-kicker">FECHAR JANELAS</span>
+                        <h3>Deslize o modal para baixo</h3>
+                        <p>Arraste pelo topo de qualquer janela para fechá-la de forma rápida.</p>
+                    </article>
+                </div>
+            </div>
+
+            <div class="gestures-carousel-dots" id="gestures-carousel-dots" aria-label="Etapas do tutorial"></div>
+            <div class="gestures-carousel-footer">
+                <button id="btn-gesture-prev" class="gesture-nav-btn" aria-label="Gesto anterior"><i data-lucide="arrow-left"></i></button>
+                <span id="gesture-slide-counter" aria-live="polite">1 de 5</span>
+                <button id="btn-gesture-next" class="gesture-nav-btn primary" aria-label="Próximo gesto"><i data-lucide="arrow-right"></i></button>
             </div>
         </div>
     </div>
@@ -470,7 +540,7 @@
             <div class="modal-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
                 <div style="display: flex; align-items: center; gap: 10px;">
                     <div style="background: rgba(139, 92, 246, 0.1); color: var(--primary); padding: 8px; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
-                        <i data-lucide="brain-circuit"></i>
+                        <i data-lucide="file-chart-column"></i>
                     </div>
                     <div>
                         <h3 id="smart-report-modal-title" style="margin: 0; font-size: 1.15rem; font-weight: 800;">Relatório Inteligente</h3>
@@ -498,6 +568,12 @@
                         Carregando resumo...
                     </div>
                 </div>
+            </div>
+            <div class="smart-report-footer">
+                <button id="btn-save-smart-report" class="btn btn-primary smart-report-save-button">
+                    <i data-lucide="image-down"></i>
+                    Salvar como imagem
+                </button>
             </div>
         </div>
     </div>
@@ -676,6 +752,23 @@
         </div>
     </div>
 
+    <!-- Modal: explicação da janela de conclusão da noite anterior -->
+    <div id="modal-past-night-info" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content" style="max-width: 330px; text-align: center; padding: 24px;">
+            <div style="display:flex; flex-direction:column; align-items:center; width:100%;">
+                <div style="background:rgba(234,179,8,.1); color:#eab308; width:48px; height:48px; border-radius:50%; display:flex; align-items:center; justify-content:center; margin-bottom:16px;">
+                    <i data-lucide="moon-star" style="width:24px; height:24px;"></i>
+                </div>
+                <h4 style="margin:0 0 8px; font-size:1.05rem; font-weight:800; color:var(--text-primary);">Noite anterior aberta até 12h</h4>
+                <p style="margin:0 0 20px; font-size:.8rem; color:var(--text-secondary); line-height:1.55;">
+                    Entre a meia-noite e o meio-dia, ao visualizar <strong>Ontem</strong>, as tarefas do turno <strong>Noite</strong> continuam disponíveis para marcar. Isso permite concluir atividades feitas durante a madrugada. Após 12h, elas retornam ao histórico bloqueado.
+                </p>
+                <button id="btn-close-past-night-info" type="button" class="btn btn-primary" style="width:100%; padding:10px; font-weight:700; font-size:.8rem;">Entendi</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal: Custom Delete Confirmation -->
     <div id="modal-confirm-delete" class="modal">
         <div class="modal-overlay"></div>
@@ -771,13 +864,28 @@
                 
                 <!-- Seção 4: Ensine o App -->
                 <div id="settings-teach-app-wrapper" style="display: none; background: rgba(139, 92, 246, 0.03); padding: 12px; border-radius: var(--radius-md); border: 1px solid rgba(139, 92, 246, 0.15);">
-                    <label style="display:block; font-size:0.7rem; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; color:var(--primary); margin-bottom:8px;">🧠 Ensine o App (Novos Termos)</label>
+                    <label style="display:block; font-size:0.7rem; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; color:var(--primary); margin-bottom:4px;">🧠 Ensine o App (Funções)</label>
+                    <p style="margin:0 0 10px; color:var(--text-secondary); font-size:0.72rem; line-height:1.4;">Associe uma palavra à função que ela representa. O relatório reutilizará esse aprendizado automaticamente.</p>
+                    <div style="display:flex; flex-direction:column; gap:7px; padding:9px; margin-bottom:10px; border-radius:8px; background:rgba(139,92,246,.06); border:1px solid rgba(139,92,246,.14);">
+                        <input id="input-manual-learning-term" type="text" placeholder="Termo ou expressão (ex: levar caixa)" style="width:100%; padding:8px 10px; font-size:.78rem;">
+                        <div style="display:flex; gap:7px;">
+                            <select id="select-manual-learning-function" style="flex:1; min-width:0; background:var(--bg-surface); color:var(--text-primary); border:1px solid var(--border-color); padding:7px; border-radius:6px; font-size:.75rem;">
+                                <option value="" selected disabled>Selecione a função…</option>
+                                <option value="delivery">Entrega</option><option value="billing">Cobrança/Financeiro</option><option value="production">Produção/Operação</option><option value="marketing">Divulgação</option><option value="sales">Vendas/Comercial</option><option value="service">Atendimento</option><option value="supply">Compra/Abastecimento</option><option value="assessment">Avaliação/Prova</option><option value="academic_work">Trabalho acadêmico</option><option value="study">Estudo/Revisão</option><option value="exercise">Atividade física</option><option value="self_care">Saúde/Autocuidado</option><option value="home">Casa/Organização</option><option value="personal_learning">Aprendizado</option><option value="planning">Rotina/Planejamento</option><option value="other">Outra atividade</option>
+                            </select>
+                            <button id="btn-save-manual-learning" style="background:var(--primary); color:#fff; border:0; border-radius:6px; padding:7px 11px; font-size:.76rem; font-weight:800; cursor:pointer;">Ensinar</button>
+                        </div>
+                    </div>
                     <div id="settings-teach-app-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
+                    <div id="settings-learned-functions-wrapper" style="display:none; margin-top:12px; padding-top:10px; border-top:1px solid var(--border-color);">
+                        <span style="display:block; margin-bottom:7px; color:var(--text-secondary); font-size:.68rem; font-weight:800; text-transform:uppercase;">Aprendizados salvos</span>
+                        <div id="settings-learned-functions-list" style="display:flex; flex-direction:column; gap:7px;"></div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="app.js?v=7.95"></script>
+    <script src="app.js?v=8.28"></script>
 </body>
 </html>

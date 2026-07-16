@@ -1,12 +1,14 @@
-const CACHE_NAME = 'checklist-cache-v8.13';
+const CACHE_NAME = 'checklist-cache-v8.46';
 const ASSETS = [
   './',
   './index.html',
-  './style.css?v=7.42',
-  './app.js?v=7.95',
+  './style.css?v=7.57',
+  './app.js?v=8.28',
   './manifest.json',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
   'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap',
-  'https://unpkg.com/lucide@latest',
+  './vendor/lucide.min.js?v=1.24.0',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2'
 ];
 
