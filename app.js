@@ -3765,8 +3765,10 @@ function createTaskDOMElement(task) {
                 <div class="task-meta">
                     <span class="task-tag" style="${tagStyle}">${escapeHTML(task.category)}</span>
                     <span class="task-tag" style="background: rgba(255,255,255,0.02);">${getRecurrenceLabel(task)}</span>
-                    ${task.context && (task.context.important === true || task.context.important === "true") ? `
-                        <span class="task-tag" style="background: rgba(239, 68, 68, 0.12); color: #ef4444; font-weight: 800; display: inline-flex; align-items: center; gap: 3px; border: 1px solid rgba(239, 68, 68, 0.2);"><i data-lucide="star" style="width: 10px; height: 10px; fill: #ef4444;"></i> Importante</span>
+                    ${task.context && task.context.reminder_time && (task.context.important === true || task.context.important === "true") ? `
+                        <span class="task-reminder-indicator" title="Lembrete programado para ${escapeHTML(task.context.reminder_time)}" aria-label="Lembrete programado para ${escapeHTML(task.context.reminder_time)}">
+                            <i data-lucide="alarm-clock"></i>
+                        </span>
                     ` : ''}
                     ${task.context && task.context.turnos && task.context.turnos.length > 0 ? task.context.turnos.map(t => {
                         let iconName = 'sun';

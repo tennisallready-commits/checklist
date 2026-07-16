@@ -1630,6 +1630,32 @@ body {
     white-space: nowrap;
 }
 
+.task-reminder-indicator {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border: 1px solid rgba(139, 92, 246, .28);
+    border-radius: 6px;
+    color: var(--primary);
+    background: rgba(139, 92, 246, .1);
+    box-shadow: 0 2px 7px rgba(139, 92, 246, .08);
+}
+
+.task-reminder-indicator svg {
+    width: 12px;
+    height: 12px;
+    stroke-width: 2.4;
+}
+
+body.theme-girly .task-reminder-indicator {
+    border-color: rgba(219, 39, 119, .24);
+    color: var(--primary);
+    background: rgba(219, 39, 119, .08);
+}
+
 .task-assignee-avatar {
     font-size: 0.65rem;
     font-weight: 800;
