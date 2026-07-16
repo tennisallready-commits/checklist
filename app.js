@@ -541,8 +541,9 @@ async function initApp() {
     const cachedTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
     const hasUsefulCache = cachedCategories.some(category => category.is_active !== false)
         || cachedTasks.some(task => task.is_active !== false);
+    const isWarmDevice = localPrefs.getItem("checklist_device_cache_ready") === "true";
     document.body.dataset.hasChecklistCache = hasUsefulCache ? "true" : "false";
-    if (hasUsefulCache) {
+    if (hasUsefulCache || isWarmDevice) {
         loadDataOffline();
         renderCategories();
         renderChecklist();
@@ -1558,7 +1559,7 @@ function setupEventListeners() {
             const queuedSharedTask = Boolean(assignedTo) && !navigator.onLine;
             await addTask(inputTaskTitle.value.trim(), selectTaskCategory.value, selectTaskRecurring.value, taskDate, repeatDays, assignedTo, shifts, important);
             if (queuedSharedTask) {
-                showAppNotice("Você está sem internet. A tarefa atribuída será enviada automaticamente quando a conexão voltar. O responsável receberá quando estiver conectado.", "warning");
+                showAppNotice("Tarefa salva neste celular, mas ainda não enviada ao responsável. Para a outra pessoa receber, este celular precisa recuperar a internet e sincronizar o app.", "warning");
             }
             inputTaskTitle.value = "";
             // Reset day toggles
@@ -4854,7 +4855,7 @@ async function inviteCollaborator(catId, email) {
         }
         localStorage.setItem("offline_collaboration_invites_queue", JSON.stringify(queue));
         if (inputCollabEmail) inputCollabEmail.value = "";
-        showAppNotice("Você está sem internet. O convite será enviado automaticamente quando a conexão voltar. A outra pessoa receberá quando estiver conectada.", "warning");
+        showAppNotice("Convite salvo neste celular, mas ainda não enviado. Para a outra pessoa receber, este celular precisa recuperar a internet e sincronizar o app.", "warning");
         scheduleSyncStatusRefresh();
         return;
     }
@@ -5978,14 +5979,12 @@ function setupSupabaseAuth() {
         }
 
         if (session) {
+            const restoredFromCache = document.body.dataset.hasChecklistCache === "true";
             currentUser = session.user;
             learningCloudState = "idle";
             reportsCloudState = "idle";
             document.getElementById("auth-container").style.display = "none";
-            document.querySelector(".app-container").style.display = "flex";
-
-            // Toda conta precisa definir um ID público antes de continuar.
-            await ensureUserIdentifier();
+            if (!restoredFromCache) document.querySelector(".app-container").style.display = "none";
 
             // Com cache visível, não substitui os cartões enquanto o usuário
             // inicia um swipe, toque ou edição logo após abrir o PWA.
@@ -6001,6 +6000,19 @@ function setupSupabaseAuth() {
             await loadCollaborationIdentityLabels();
             renderChecklist();
             renderNotifications();
+            localPrefs.setItem("checklist_device_cache_ready", "true");
+            document.documentElement.classList.add("checklist-device-ready");
+
+            // Sem cache, encerra completamente a tela curta antes de revelar
+            // o checklist ou o tutorial de primeira categoria.
+            if (!restoredFromCache) {
+                if (appSessionLoader) appSessionLoader.classList.add("hidden");
+                await new Promise(resolve => setTimeout(resolve, 280));
+                document.querySelector(".app-container").style.display = "flex";
+            }
+
+            // Toda conta precisa definir um ID público antes de continuar.
+            await ensureUserIdentifier();
             subscribeToCollaborationUpdates();
             updateNotificationsSettingUI();
             if (areNotificationsEnabled() && "Notification" in window && Notification.permission === "granted") {
@@ -6024,7 +6036,7 @@ function setupSupabaseAuth() {
                 }, 250);
             }
             lucide.createIcons();
-            if (appSessionLoader) appSessionLoader.classList.add("hidden");
+            if (restoredFromCache && appSessionLoader) appSessionLoader.classList.add("hidden");
         } else {
             if (collaborationRealtimeChannel && supabaseClient) {
                 supabaseClient.removeChannel(collaborationRealtimeChannel);
@@ -6048,6 +6060,8 @@ function setupSupabaseAuth() {
             localStorage.removeItem("offline_completions_queue");
             localStorage.removeItem("offline_task_updates_queue");
             localStorage.removeItem("offline_collaboration_invites_queue");
+            localPrefs.removeItem("checklist_device_cache_ready");
+            document.documentElement.classList.remove("checklist-device-ready");
             
             tasks = [];
             categories = [];

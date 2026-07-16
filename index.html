@@ -5,6 +5,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Checklist Diário Organizacional</title>
+    <script>
+        if (localStorage.getItem("checklist_device_cache_ready") === "true") {
+            document.documentElement.classList.add("checklist-device-ready");
+        }
+    </script>
 
     <!-- Global Error Catcher for Debugging -->
     <script>
@@ -36,7 +41,7 @@
             }
         });
     </script>
-    <link rel="stylesheet" href="style.css?v=7.87">
+    <link rel="stylesheet" href="style.css?v=7.89">
     
     <!-- iOS / PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -473,7 +478,7 @@
 
                 <div class="settings-version">
                     <span>Checklist</span>
-                        <strong>Versão 8.77</strong>
+                        <strong>Versão 8.81</strong>
                 </div>
             </div>
         </div>
@@ -1015,6 +1020,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=8.77"></script>
+    <script src="app.js?v=8.81"></script>
 </body>
 </html>
