@@ -247,6 +247,8 @@ let collaborationRealtimeChannel = null;
 let categoryOnboardingTimer = null;
 let categoryOnboardingSlide = 0;
 let lastStartupInteractionAt = 0;
+let isSwipeRevealInteracting = false;
+let pendingSwipeSafeRender = null;
 
 function registerStartupInteraction() {
     lastStartupInteractionAt = Date.now();
@@ -490,6 +492,8 @@ document.addEventListener("DOMContentLoaded", () => {
         navigator.serviceWorker.addEventListener('message', event => {
             if (event.data && event.data.type === 'OPEN_SHARED_TASK' && event.data.taskId) {
                 focusSharedTaskFromNotification({ task_id: event.data.taskId });
+            } else if (event.data && event.data.type === 'OPEN_TASK_REMINDER' && event.data.taskId) {
+                openTaskReminderAction(event.data.taskId);
             } else if (event.data && event.data.type === 'OPEN_COLLABORATION_INVITE' && event.data.inviteId) {
                 promptCollaborationInviteNavigation(event.data.inviteId);
             } else if (event.data && event.data.type === 'OPEN_NOTIFICATIONS') {
@@ -3485,6 +3489,19 @@ function renderChecklist() {
     // Aborta a renderização se o usuário estiver arrastando uma tarefa para não causar flash/zerar a tela
     if (isDraggingTask) return;
 
+    // A sincronização inicial pode terminar durante o primeiro swipe. Nesse caso,
+    // aguarda o gesto acabar para não substituir o cartão sob o dedo.
+    if (isSwipeRevealInteracting) {
+        clearTimeout(pendingSwipeSafeRender);
+        pendingSwipeSafeRender = setTimeout(renderChecklist, 180);
+        return;
+    }
+
+    // Preserva as ações abertas caso uma atualização em segundo plano realmente
+    // precise reconstruir a lista logo após o gesto.
+    const openSwipeTask = tasksListEl.querySelector(".task-item.swiped");
+    const openSwipeTaskId = openSwipeTask ? String(openSwipeTask.dataset.id) : null;
+
     tasksListEl.innerHTML = "";
     
     // Filter tasks
@@ -3685,6 +3702,19 @@ function renderChecklist() {
             });
         }
         
+        if (openSwipeTaskId) {
+            const restoredSwipe = Array.from(tasksListEl.querySelectorAll(".task-item"))
+                .find(item => String(item.dataset.id) === openSwipeTaskId);
+            if (restoredSwipe) {
+                restoredSwipe.classList.add("swiped");
+                const foreground = restoredSwipe.querySelector(".task-item-foreground");
+                if (foreground) {
+                    foreground.style.transition = "none";
+                    foreground.style.transform = "translateX(-136px)";
+                }
+            }
+        }
+
         lucide.createIcons();
     }
 }
@@ -4851,7 +4881,7 @@ async function inviteCollaborator(catId, email) {
 
     if (!navigator.onLine) {
         const queue = JSON.parse(localStorage.getItem("offline_collaboration_invites_queue")) || [];
-        const identifier = email.trim().toLowerCase().replace(/^@/, "");
+        const identifier = normalizeUserIdentifier(email.replace(/^@/, ""));
         if (!queue.some(item => String(item.category_id) === String(catId) && item.identifier === identifier)) {
             queue.push({ category_id: catId, category_name: cat.name, identifier, queued_at: new Date().toISOString() });
         }
@@ -4862,7 +4892,9 @@ async function inviteCollaborator(catId, email) {
         return;
     }
     
-    const enteredIdentity = email.trim().toLowerCase().replace(/^@/, "");
+    const enteredIdentity = email.includes("@") && !email.trim().startsWith("@")
+        ? normalizeAccountEmail(email)
+        : normalizeUserIdentifier(email.replace(/^@/, ""));
     let cleanEmail = enteredIdentity;
     if (!enteredIdentity.includes("@")) {
         const { data: resolvedEmail, error: resolveError } = await supabaseClient.rpc("resolve_collaboration_email", { identifier: enteredIdentity });
@@ -4874,7 +4906,7 @@ async function inviteCollaborator(catId, email) {
     }
     
     // Evita convidar a si mesmo ou convidar duplicado
-    if (cleanEmail === currentUser.email.toLowerCase()) {
+    if (normalizeAccountEmail(cleanEmail) === normalizeAccountEmail(currentUser.email)) {
         alert("Você já é o dono e participa desta guia.");
         return;
     }
@@ -5160,6 +5192,106 @@ async function focusSharedTaskFromNotification(notification) {
     updateDateDisplay();
     await loadChecklistAndProgress();
     setTimeout(() => highlightRenderedTask(notification.task_id), 220);
+}
+
+function getTaskById(taskId) {
+    return (allActiveTasks || []).find(task => String(task.id) === String(taskId))
+        || (tasks || []).find(task => String(task.id) === String(taskId))
+        || null;
+}
+
+async function updateTaskReminderContext(taskId, updater) {
+    let task = getTaskById(taskId);
+    if (!task && supabaseClient && currentUser) {
+        const { data } = await supabaseClient.from("tasks").select("*").eq("id", taskId).maybeSingle();
+        task = data || null;
+    }
+    if (!task) throw new Error("Tarefa não encontrada.");
+
+    let context = task.context || {};
+    if (typeof context === "string") {
+        try { context = JSON.parse(context); } catch (_) { context = {}; }
+    }
+    context = updater({ ...context });
+    task.context = context;
+    renderChecklist();
+
+    if (!supabaseClient || !currentUser || !navigator.onLine || isTemporaryId(taskId)) {
+        const queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+        queue[taskId] = { ...(queue[taskId] || {}), context };
+        localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
+        return;
+    }
+    const { error } = await supabaseClient.from("tasks").update({ context }).eq("id", taskId);
+    if (error) throw error;
+}
+
+async function openTaskReminderAction(taskId) {
+    focusSharedTaskFromNotification({ task_id: taskId });
+    const task = getTaskById(taskId);
+    const snoozeDefault = new Date(Date.now() + 30 * 60 * 1000).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false });
+    const layer = document.createElement("div");
+    layer.className = "task-reminder-action-layer";
+    layer.innerHTML = `<div class="task-reminder-action-backdrop"></div><div class="task-reminder-action-card" role="dialog" aria-modal="true"><span class="task-reminder-action-icon"><i data-lucide="alarm-clock"></i></span><small>Lembrete de tarefa</small><h3>${escapeHTML(task ? task.title : "Hora da sua tarefa")}</h3><p>Quer começar agora ou prefere receber um novo lembrete?</p><div class="task-reminder-action-buttons"><button type="button" class="btn task-reminder-do-now"><i data-lucide="check"></i><span><strong>Vou fazer agora</strong><small>Encerrar este lembrete</small></span></button><button type="button" class="btn btn-primary task-reminder-snooze"><i data-lucide="clock-3"></i><span><strong>Adiar lembrete</strong><small>Escolher outro horário</small></span></button></div><div class="task-reminder-snooze-panel" hidden><strong>Adiar por quanto tempo?</strong><div class="task-reminder-snooze-presets"><button type="button" data-minutes="10">+10 min</button><button type="button" data-minutes="30" class="selected">+30 min</button><button type="button" data-minutes="60">+1 hora</button></div><label>Escolher horário<input type="time" class="task-reminder-snooze-time" value="${snoozeDefault}"></label><button type="button" class="btn btn-primary task-reminder-snooze-save">Salvar novo horário</button></div></div>`;
+    document.body.appendChild(layer);
+    requestAnimationFrame(() => layer.classList.add("visible"));
+    if (window.lucide) lucide.createIcons();
+
+    const close = () => { layer.classList.remove("visible"); setTimeout(() => layer.remove(), 220); };
+    layer.querySelector(".task-reminder-do-now").addEventListener("click", async () => {
+        const button = layer.querySelector(".task-reminder-do-now");
+        button.disabled = true;
+        try {
+            await updateTaskReminderContext(taskId, context => {
+                context.important = false;
+                delete context.reminder_time;
+                delete context.reminder_offset_days;
+                delete context.reminder_timezone;
+                return context;
+            });
+            close();
+            showAppNotice("Lembrete encerrado. Esta tarefa não enviará outro aviso.", "success");
+        } catch (error) {
+            button.disabled = false;
+            showAppNotice(`Não foi possível encerrar o lembrete: ${error.message}`, "error");
+        }
+    });
+    const snoozePanel = layer.querySelector(".task-reminder-snooze-panel");
+    const snoozeInput = layer.querySelector(".task-reminder-snooze-time");
+    layer.querySelector(".task-reminder-snooze").addEventListener("click", () => {
+        snoozePanel.hidden = false;
+        layer.querySelector(".task-reminder-action-buttons").hidden = true;
+        snoozeInput.focus();
+    });
+    layer.querySelectorAll(".task-reminder-snooze-presets button").forEach(button => button.addEventListener("click", () => {
+        const date = new Date(Date.now() + Number(button.dataset.minutes) * 60 * 1000);
+        snoozeInput.value = date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false });
+        layer.querySelectorAll(".task-reminder-snooze-presets button").forEach(item => item.classList.toggle("selected", item === button));
+    }));
+    snoozeInput.addEventListener("input", () => layer.querySelectorAll(".task-reminder-snooze-presets button").forEach(item => item.classList.remove("selected")));
+    layer.querySelector(".task-reminder-snooze-save").addEventListener("click", async () => {
+        const reminderTime = snoozeInput.value;
+        const [hours, minutes] = reminderTime.split(":").map(Number);
+        const scheduledAt = new Date();
+        scheduledAt.setHours(hours, minutes, 0, 0);
+        if (!reminderTime || scheduledAt.getTime() <= Date.now()) {
+            showAppNotice("Escolha um horário posterior ao atual para adiar.", "warning");
+            return;
+        }
+        try {
+            await updateTaskReminderContext(taskId, context => {
+                context.important = true;
+                context.reminder_time = reminderTime;
+                context.reminder_offset_days = 0;
+                context.reminder_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
+                return context;
+            });
+            close();
+            showAppNotice(`Novo lembrete programado para ${reminderTime}.`, "success");
+        } catch (error) {
+            showAppNotice(`Não foi possível adiar o lembrete: ${error.message}`, "error");
+        }
+    });
 }
 
 async function acceptInvitation(shareId, openCategory = false) {
@@ -6021,9 +6153,13 @@ function setupSupabaseAuth() {
                 ensurePushSubscription().catch(error => console.warn("Não foi possível restaurar a inscrição Web Push:", error.message));
             }
             const notificationTaskId = new URLSearchParams(window.location.search).get("notification_task");
+            const reminderTaskId = new URLSearchParams(window.location.search).get("reminder_task");
             const shouldOpenNotifications = new URLSearchParams(window.location.search).get("open_notifications") === "1";
             const collaborationInviteId = new URLSearchParams(window.location.search).get("collaboration_invite");
-            if (notificationTaskId) {
+            if (reminderTaskId) {
+                history.replaceState({}, "", window.location.pathname);
+                setTimeout(() => openTaskReminderAction(reminderTaskId), 250);
+            } else if (notificationTaskId) {
                 history.replaceState({}, "", window.location.pathname);
                 setTimeout(() => focusSharedTaskFromNotification({ task_id: notificationTaskId }), 250);
             } else if (collaborationInviteId) {
@@ -6692,6 +6828,7 @@ function setupSwipeToReveal(taskEl) {
     // Touch events (Mobile)
     foreground.addEventListener("touchstart", (e) => {
         if (isEditMode) return;
+        isSwipeRevealInteracting = true;
         closeAllOtherSwipes();
         startX = e.touches[0].clientX;
         startY = e.touches[0].clientY;
@@ -6735,8 +6872,12 @@ function setupSwipeToReveal(taskEl) {
     }, { passive: true });
 
     foreground.addEventListener("touchend", () => {
-        if (!isDragging) return;
+        if (!isDragging) {
+            isSwipeRevealInteracting = false;
+            return;
+        }
         isDragging = false;
+        isSwipeRevealInteracting = false;
         
         if (isScrollConfirmed) return;
         
@@ -6757,6 +6898,7 @@ function setupSwipeToReveal(taskEl) {
     // Mouse events (Desktop testing support)
     foreground.addEventListener("mousedown", (e) => {
         if (isEditMode) return;
+        isSwipeRevealInteracting = true;
         closeAllOtherSwipes();
         startX = e.clientX;
         isDragging = true;
@@ -6782,6 +6924,7 @@ function setupSwipeToReveal(taskEl) {
     window.addEventListener("mouseup", () => {
         if (!isDragging) return;
         isDragging = false;
+        isSwipeRevealInteracting = false;
         document.body.style.userSelect = "";
 
         const style = window.getComputedStyle(foreground);
@@ -6796,6 +6939,11 @@ function setupSwipeToReveal(taskEl) {
             taskEl.classList.remove("swiped");
         }
     });
+
+    foreground.addEventListener("touchcancel", () => {
+        isDragging = false;
+        isSwipeRevealInteracting = false;
+    }, { passive: true });
 }
 
 // ----------------------------------------------------
@@ -8034,7 +8182,7 @@ function checkImportantTaskNotifications() {
             reminderDateTime.setDate(reminderDateTime.getDate() - offsetDays);
             const reminderKey = `reminder-${task.id}-${targetDateStr}-${reminderTime}`;
             if (now >= reminderDateTime && now.getTime() - reminderDateTime.getTime() < 60 * 60 * 1000 && !shownAlerts[reminderKey]) {
-                showWebNotification("⏰ Lembrete de tarefa", offsetDays === 1 ? `Amanhã: “${task.title}”.` : `Está na hora de “${task.title}”.`, task.id, reminderKey);
+                showWebNotification("⏰ Lembrete de tarefa", offsetDays === 1 ? `Amanhã: “${task.title}”.` : `Está na hora de “${task.title}”.`, task.id, reminderKey, "task-reminder");
                 shownAlerts[reminderKey] = true;
                 updated = true;
             }
@@ -8106,7 +8254,7 @@ function checkImportantTaskNotifications() {
     }
 }
 
-function showWebNotification(title, body, taskId, customTag = null) {
+function showWebNotification(title, body, taskId, customTag = null, notificationType = null) {
     if (areNotificationsEnabled() && "Notification" in window && Notification.permission === "granted") {
         if (navigator.serviceWorker && navigator.serviceWorker.ready) {
             navigator.serviceWorker.ready.then(registration => {
@@ -8115,7 +8263,7 @@ function showWebNotification(title, body, taskId, customTag = null) {
                     icon: './icons/icon-192.png',
                     badge: './icons/icon-192.png',
                     vibrate: [200, 100, 200],
-                    data: { taskId: taskId },
+                    data: { taskId: taskId, notificationType },
                     tag: customTag || `task-important-${taskId}`
                 });
             });

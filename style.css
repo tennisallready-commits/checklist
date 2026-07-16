@@ -1635,25 +1635,33 @@ body {
     flex: 0 0 auto;
     align-items: center;
     justify-content: center;
-    width: 20px;
-    height: 20px;
-    border: 1px solid rgba(139, 92, 246, .28);
-    border-radius: 6px;
-    color: var(--primary);
-    background: rgba(139, 92, 246, .1);
-    box-shadow: 0 2px 7px rgba(139, 92, 246, .08);
+    width: 22px;
+    height: 22px;
+    border: 1px solid rgba(167, 139, 250, .72);
+    border-radius: 7px;
+    color: #f5f3ff;
+    background: linear-gradient(145deg, #8b5cf6, #6d28d9);
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, .12), 0 4px 11px rgba(109, 40, 217, .38);
 }
 
 .task-reminder-indicator svg {
-    width: 12px;
-    height: 12px;
-    stroke-width: 2.4;
+    width: 13px;
+    height: 13px;
+    stroke-width: 2.7;
+}
+
+body.theme-light .task-reminder-indicator {
+    border-color: rgba(109, 40, 217, .5);
+    color: #fff;
+    background: linear-gradient(145deg, #7c3aed, #5b21b6);
+    box-shadow: 0 0 0 2px rgba(124, 58, 237, .11), 0 4px 10px rgba(91, 33, 182, .3);
 }
 
 body.theme-girly .task-reminder-indicator {
-    border-color: rgba(219, 39, 119, .24);
-    color: var(--primary);
-    background: rgba(219, 39, 119, .08);
+    border-color: rgba(244, 114, 182, .72);
+    color: #fff;
+    background: linear-gradient(145deg, #ec4899, #be185d);
+    box-shadow: 0 0 0 2px rgba(236, 72, 153, .11), 0 4px 11px rgba(190, 24, 93, .3);
 }
 
 .task-assignee-avatar {
@@ -3318,6 +3326,36 @@ body.theme-girly .reminder-custom-label:focus-within { border-color: rgba(219,39
 .reminder-picker-actions { display: grid; grid-template-columns: 1fr 1.4fr; gap: 8px; margin-top: 16px; }
 .reminder-picker-actions .btn { min-height: 43px; border-radius: 11px; }
 .reminder-cancel { border: 1px solid var(--border-color); background: rgba(255,255,255,.03); color: var(--text-secondary); }
+
+.task-reminder-action-layer { position: fixed; inset: 0; z-index: 22500; display: grid; place-items: center; padding: 18px; opacity: 0; transition: opacity .22s ease; }
+.task-reminder-action-layer.visible { opacity: 1; }
+.task-reminder-action-backdrop { position: absolute; inset: 0; background: rgba(3,5,12,.84); backdrop-filter: blur(12px); }
+.task-reminder-action-card { position: relative; width: min(390px,100%); padding: 25px; overflow: hidden; border: 1px solid var(--border-color); border-radius: 22px; background: var(--bg-surface-solid); box-shadow: 0 28px 80px rgba(0,0,0,.52); text-align: center; transform: translateY(14px) scale(.97); transition: transform .22s ease; }
+.task-reminder-action-layer.visible .task-reminder-action-card { transform: translateY(0) scale(1); }
+.task-reminder-action-card::before { content: ""; position: absolute; top: -80px; left: 50%; width: 220px; height: 150px; border-radius: 50%; background: rgba(139,92,246,.16); filter: blur(35px); transform: translateX(-50%); pointer-events: none; }
+.task-reminder-action-icon { position: relative; display: grid; place-items: center; width: 58px; height: 58px; margin: 0 auto 11px; border-radius: 18px; color: #fff; background: var(--primary-gradient); box-shadow: 0 12px 30px rgba(139,92,246,.3); }
+.task-reminder-action-icon svg { width: 27px; height: 27px; }
+.task-reminder-action-card > small { position: relative; color: var(--primary); font-size: .65rem; font-weight: 800; text-transform: uppercase; letter-spacing: .09em; }
+.task-reminder-action-card h3 { position: relative; margin: 6px 0; color: var(--text-primary); font-size: 1.08rem; }
+.task-reminder-action-card > p { position: relative; margin: 0 0 18px; color: var(--text-secondary); font-size: .75rem; line-height: 1.5; }
+.task-reminder-action-buttons { position: relative; display: grid; gap: 9px; }
+.task-reminder-action-buttons .btn { display: grid; grid-template-columns: 34px 1fr; align-items: center; min-height: 57px; padding: 10px 13px; border-radius: 13px; text-align: left; }
+.task-reminder-action-buttons .btn > svg { width: 20px; height: 20px; }
+.task-reminder-action-buttons .btn span { display: flex; flex-direction: column; gap: 2px; }
+.task-reminder-action-buttons .btn strong { font-size: .78rem; }
+.task-reminder-action-buttons .btn small { font-size: .61rem; font-weight: 600; opacity: .72; }
+.task-reminder-do-now { border: 1px solid var(--border-color); color: var(--text-primary); background: rgba(255,255,255,.025); }
+.task-reminder-do-now > svg { color: #10b981; }
+.task-reminder-snooze-panel { position: relative; display: grid; gap: 11px; text-align: left; }
+.task-reminder-snooze-panel[hidden], .task-reminder-action-buttons[hidden] { display: none; }
+.task-reminder-snooze-panel > strong { color: var(--text-primary); font-size: .8rem; text-align: center; }
+.task-reminder-snooze-presets { display: grid; grid-template-columns: repeat(3,1fr); gap: 7px; }
+.task-reminder-snooze-presets button { min-height: 37px; border: 1px solid var(--border-color); border-radius: 10px; color: var(--text-secondary); background: rgba(255,255,255,.025); font-family: inherit; font-size: .67rem; font-weight: 800; cursor: pointer; }
+.task-reminder-snooze-presets button.selected { border-color: var(--primary); color: var(--primary); background: rgba(139,92,246,.11); box-shadow: 0 0 0 2px rgba(139,92,246,.07); }
+.task-reminder-snooze-panel label { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 11px; border: 1px solid var(--border-color); border-radius: 12px; color: var(--text-secondary); background: rgba(255,255,255,.018); font-size: .7rem; font-weight: 700; }
+.task-reminder-snooze-time { width: 126px !important; min-height: 38px !important; padding: 6px 10px !important; border: 1px solid rgba(139,92,246,.28) !important; border-radius: 10px !important; color: var(--text-primary) !important; background: rgba(139,92,246,.09) !important; color-scheme: dark; font-family: inherit; font-weight: 800; text-align: center; }
+body.theme-light .task-reminder-snooze-time, body.theme-girly .task-reminder-snooze-time { color-scheme: light; }
+.task-reminder-snooze-save { min-height: 45px; border-radius: 11px; }
 
 .shared-task-notification-item {
     display: flex;
