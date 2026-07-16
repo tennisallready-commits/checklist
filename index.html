@@ -36,7 +36,7 @@
             }
         });
     </script>
-    <link rel="stylesheet" href="style.css?v=7.81">
+    <link rel="stylesheet" href="style.css?v=7.82">
     
     <!-- iOS / PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -68,8 +68,8 @@
             
             <form id="form-auth" autocomplete="on">
                 <div class="form-group">
-                    <label for="auth-email">E-mail</label>
-                    <input type="email" id="auth-email" placeholder="nome@exemplo.com" required autocomplete="email">
+                    <label for="auth-email" id="auth-identity-label">E-mail ou ID</label>
+                    <input type="text" id="auth-email" placeholder="seu_id ou nome@exemplo.com" required autocomplete="username">
                 </div>
                 
                 <div class="form-group" style="margin-top: 16px;">
@@ -88,6 +88,23 @@
                 <span id="auth-toggle-text">Não tem uma conta?</span>
                 <button id="btn-auth-toggle" class="btn-link" style="background: transparent; border: none; font-weight: 700; color: var(--primary); cursor: pointer; text-decoration: underline; margin-left: 4px; font-size: 0.88rem;">Cadastre-se</button>
             </div>
+        </div>
+    </div>
+
+    <div id="modal-create-identifier" class="modal identifier-modal" aria-hidden="true">
+        <div class="modal-overlay"></div>
+        <div class="modal-content identifier-modal-content" role="dialog" aria-modal="true" aria-labelledby="identifier-title">
+            <div class="identifier-icon"><i data-lucide="at-sign"></i></div>
+            <span class="identifier-kicker">Sua identidade no Checklist</span>
+            <h2 id="identifier-title">Crie seu ID</h2>
+            <p>Ele será usado para entrar na conta e aparecer em convites, tarefas e colaborações.</p>
+            <form id="form-create-identifier">
+                <label for="input-user-identifier">ID único</label>
+                <div class="identifier-input-shell"><span>@</span><input id="input-user-identifier" type="text" minlength="3" maxlength="24" placeholder="luiggi_cassol" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>
+                <small>Use de 3 a 24 caracteres: letras minúsculas, números, ponto, hífen ou _ — sem espaços.</small>
+                <div id="identifier-error" class="identifier-error" role="alert"></div>
+                <button id="btn-confirm-identifier" type="submit" class="btn btn-primary">Confirmar meu ID</button>
+            </form>
         </div>
     </div>
 
@@ -454,7 +471,7 @@
 
                 <div class="settings-version">
                     <span>Checklist</span>
-                        <strong>Versão 8.57</strong>
+                        <strong>Versão 8.60</strong>
                 </div>
             </div>
         </div>
@@ -817,7 +834,7 @@
                     </div>
                     <div>
                         <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800;">Colaboradores da Guia</h3>
-                        <p style="margin: 0; font-size: 0.75rem; color: var(--text-secondary);" id="collab-modal-subtitle">Compartilhe esta guia com outros e-mails</p>
+                        <p style="margin: 0; font-size: 0.75rem; color: var(--text-secondary);" id="collab-modal-subtitle">Compartilhe esta guia com outro ID</p>
                     </div>
                 </div>
                 <button id="btn-close-collaborators-modal" class="icon-button" style="padding: 6px;"><i data-lucide="x"></i></button>
@@ -830,7 +847,7 @@
                 <div id="collab-invite-section">
                     <label style="display:block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); margin-bottom:8px;">Convidar Colaborador</label>
                     <div class="collab-email-row" style="display: flex; gap: 8px; margin-bottom: 20px;">
-                        <input type="email" id="input-collab-email" placeholder="email@exemplo.com" autocomplete="off" style="flex: 1; padding: 12px 14px;">
+                        <input type="text" id="input-collab-email" placeholder="ID da pessoa" autocomplete="off" autocapitalize="none" style="flex: 1; padding: 12px 14px;">
                         <button id="btn-add-collab" class="btn btn-primary" style="padding: 10px 16px; font-weight: 700;">Convidar</button>
                     </div>
                 </div>
@@ -997,6 +1014,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=8.57"></script>
+    <script src="app.js?v=8.60"></script>
 </body>
 </html>

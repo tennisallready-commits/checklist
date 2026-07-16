@@ -185,6 +185,9 @@ let pendingToggles = new Set();
 
 // Authentication State
 let currentUser = null;
+let currentUsername = "";
+const collaborationIdentityByEmail = new Map();
+let identifierSetupResolver = null;
 let isAuthModeLogin = true;
 let localDataVersion = 0; // Previne race conditions de sync
 let dataLoadRequestVersion = 0; // Impede respostas antigas de outra data de sobrescreverem a tela
@@ -318,6 +321,10 @@ const notificationsBadge = document.getElementById("notifications-badge");
 const collabInviteReadyLabel = document.getElementById("collab-invite-ready-label");
 const notificationsEnabledToggle = document.getElementById("notifications-enabled-toggle");
 const notificationsPermissionStatus = document.getElementById("notifications-permission-status");
+const modalCreateIdentifier = document.getElementById("modal-create-identifier");
+const formCreateIdentifier = document.getElementById("form-create-identifier");
+const inputUserIdentifier = document.getElementById("input-user-identifier");
+const identifierError = document.getElementById("identifier-error");
 const btnOpenManualChecklist = document.getElementById("btn-open-manual-checklist");
 const modalManualChecklist = document.getElementById("modal-manual-checklist");
 const btnCloseManualChecklistModal = document.getElementById("btn-close-manual-checklist-modal");
@@ -372,6 +379,10 @@ document.addEventListener("DOMContentLoaded", () => {
         navigator.serviceWorker.addEventListener('message', event => {
             if (event.data && event.data.type === 'OPEN_SHARED_TASK' && event.data.taskId) {
                 focusSharedTaskFromNotification({ task_id: event.data.taskId });
+            } else if (event.data && event.data.type === 'OPEN_NOTIFICATIONS') {
+                renderNotifications();
+                openModal(modalNotifications);
+                markCurrentInvitesAsSeen();
             }
         });
 
@@ -1685,7 +1696,45 @@ function setupEventListeners() {
     const authTitle = document.getElementById("auth-title");
     const authSubtitle = document.getElementById("auth-subtitle");
     const authErrorMsg = document.getElementById("auth-error-msg");
+    const authIdentityLabel = document.getElementById("auth-identity-label");
     const btnLogout = document.getElementById("btn-logout");
+
+    if (inputUserIdentifier) {
+        inputUserIdentifier.addEventListener("input", () => {
+            const normalized = normalizeUserIdentifier(inputUserIdentifier.value);
+            if (inputUserIdentifier.value !== normalized) inputUserIdentifier.value = normalized;
+            if (identifierError) identifierError.textContent = "";
+        });
+    }
+
+    if (formCreateIdentifier) {
+        formCreateIdentifier.addEventListener("submit", async event => {
+            event.preventDefault();
+            const desiredUsername = normalizeUserIdentifier(inputUserIdentifier.value);
+            if (!/^[a-z0-9._-]{3,24}$/.test(desiredUsername)) {
+                identifierError.textContent = "Use 3 a 24 caracteres válidos e não coloque espaços.";
+                return;
+            }
+            const button = document.getElementById("btn-confirm-identifier");
+            button.disabled = true;
+            button.textContent = "Confirmando…";
+            const { data, error } = await supabaseClient.rpc("claim_user_identifier", { desired_username: desiredUsername });
+            if (error) {
+                identifierError.textContent = error.message.includes("já está") ? "Este ID já está em uso. Escolha outro." : error.message;
+                button.disabled = false;
+                button.textContent = "Confirmar meu ID";
+                return;
+            }
+            currentUsername = data || desiredUsername;
+            collaborationIdentityByEmail.set(normalizeAccountEmail(currentUser.email), currentUsername);
+            modalCreateIdentifier.classList.remove("active");
+            modalCreateIdentifier.setAttribute("aria-hidden", "true");
+            button.disabled = false;
+            button.textContent = "Confirmar meu ID";
+            if (identifierSetupResolver) identifierSetupResolver();
+            identifierSetupResolver = null;
+        });
+    }
 
     if (btnAuthToggle) {
         btnAuthToggle.addEventListener("click", () => {
@@ -1698,12 +1747,18 @@ function setupEventListeners() {
                 btnAuthSubmit.textContent = "Entrar";
                 document.getElementById("auth-toggle-text").textContent = "Não tem uma conta?";
                 btnAuthToggle.textContent = "Cadastre-se";
+                authIdentityLabel.textContent = "E-mail ou ID";
+                inputAuthEmail.type = "text";
+                inputAuthEmail.placeholder = "seu_id ou nome@exemplo.com";
             } else {
                 authTitle.textContent = "Criar Conta";
                 authSubtitle.textContent = "Cadastre-se gratuitamente para manter seu checklist salvo na nuvem.";
                 btnAuthSubmit.textContent = "Cadastrar Conta";
                 document.getElementById("auth-toggle-text").textContent = "Já tem uma conta?";
                 btnAuthToggle.textContent = "Fazer Login";
+                authIdentityLabel.textContent = "E-mail";
+                inputAuthEmail.type = "email";
+                inputAuthEmail.placeholder = "nome@exemplo.com";
             }
         });
     }
@@ -1721,11 +1776,16 @@ function setupEventListeners() {
             const originalText = btnAuthSubmit.innerHTML;
             btnAuthSubmit.innerHTML = `<span class="loading-spinner"></span> Carregando...`;
 
-            const email = inputAuthEmail.value.trim();
+            let email = inputAuthEmail.value.trim();
             const password = inputAuthPassword.value;
 
             try {
                 if (isAuthModeLogin) {
+                    if (!email.includes("@")) {
+                        const { data: resolvedEmail, error: resolveError } = await supabaseClient.rpc("resolve_login_email", { login_identifier: normalizeUserIdentifier(email) });
+                        if (resolveError || !resolvedEmail) throw new Error("ID ou senha incorretos.");
+                        email = resolvedEmail;
+                    }
                     const { error } = await supabaseClient.auth.signInWithPassword({
                         email,
                         password
@@ -1850,7 +1910,7 @@ function setupEventListeners() {
     });
 
     // Habilita deslize para baixo (swipe-down-to-close) em todos os modais
-    document.querySelectorAll(".modal").forEach(setupModalSwipeToClose);
+    document.querySelectorAll(".modal:not(.identifier-modal)").forEach(setupModalSwipeToClose);
 }
 
 // ----------------------------------------------------
@@ -2019,6 +2079,46 @@ function normalizeAccountEmail(email) {
     return String(email || "").trim().toLowerCase();
 }
 
+function normalizeUserIdentifier(value) {
+    return String(value || "").trim().toLowerCase().replace(/\s+/g, "");
+}
+
+function getIdentityLabel(email) {
+    const normalized = normalizeAccountEmail(email);
+    if (currentUser && normalized === normalizeAccountEmail(currentUser.email) && currentUsername) return `@${currentUsername}`;
+    const username = collaborationIdentityByEmail.get(normalized);
+    return username ? `@${username}` : normalized;
+}
+
+async function loadCollaborationIdentityLabels() {
+    if (!supabaseClient || !currentUser) return;
+    const emails = new Set([currentUser.email]);
+    (categoryShares || []).forEach(share => {
+        if (share.owner_email) emails.add(share.owner_email);
+        if (share.collaborator_email) emails.add(share.collaborator_email);
+    });
+    (allActiveTasks || []).forEach(task => { if (task.assigned_to) emails.add(task.assigned_to); });
+    const { data, error } = await supabaseClient.rpc("resolve_collaboration_identifiers", { lookup_emails: [...emails] });
+    if (error) return console.warn("Não foi possível carregar IDs públicos:", error.message);
+    collaborationIdentityByEmail.clear();
+    (data || []).forEach(item => collaborationIdentityByEmail.set(normalizeAccountEmail(item.email), item.username));
+}
+
+async function ensureUserIdentifier() {
+    if (!supabaseClient || !currentUser) return;
+    const { data, error } = await supabaseClient.rpc("get_my_identifier");
+    if (error) throw new Error("A migração de ID ainda não foi aplicada no Supabase: " + error.message);
+    if (data) {
+        currentUsername = data;
+        collaborationIdentityByEmail.set(normalizeAccountEmail(currentUser.email), data);
+        return;
+    }
+    modalCreateIdentifier.classList.add("active");
+    modalCreateIdentifier.setAttribute("aria-hidden", "false");
+    setTimeout(() => inputUserIdentifier && inputUserIdentifier.focus(), 250);
+    await new Promise(resolve => { identifierSetupResolver = resolve; });
+}
+
 function getNotificationsPreferenceKey() {
     return `notifications_enabled_${currentUser ? currentUser.id : "local"}`;
 }
@@ -2141,7 +2241,7 @@ function canCurrentUserCheckTask(task) {
 }
 
 function showTaskCheckPermissionNotice(task) {
-    const responsible = normalizeAccountEmail(task && task.assigned_to) || "o responsável";
+    const responsible = task && task.assigned_to ? getIdentityLabel(task.assigned_to) : "o responsável";
     const toast = document.createElement("div");
     toast.className = "shared-task-toast task-check-permission-toast";
     toast.setAttribute("role", "status");
@@ -3497,7 +3597,7 @@ function createTaskDOMElement(task) {
         </div>
         <!-- Main content of the task (on top) -->
         <div class="task-item-foreground">
-            <div class="task-checkbox-wrapper" ${canCheckTask ? '' : `title="Somente ${escapeHTML(task.assigned_to)} pode dar check" aria-disabled="true"`}>
+            <div class="task-checkbox-wrapper" ${canCheckTask ? '' : `title="Somente ${escapeHTML(getIdentityLabel(task.assigned_to))} pode dar check" aria-disabled="true"`}>
                 <div class="task-checkbox">
                     <i data-lucide="${task.completed || canCheckTask ? 'check' : 'lock-keyhole'}"></i>
                 </div>
@@ -3517,9 +3617,10 @@ function createTaskDOMElement(task) {
                         return `<span class="task-tag shift-tag" style="background: rgba(139, 92, 246, 0.06); color: var(--primary); font-weight: 700; display: inline-flex; align-items: center; gap: 3px;"><i data-lucide="${iconName}" style="width: 10px; height: 10px;"></i>${escapeHTML(t)}</span>`;
                     }).join('') : ''}
                     ${task.assigned_to ? (() => {
-                        const initials = task.assigned_to.split('@')[0].substring(0, 2).toUpperCase();
+                        const identityLabel = getIdentityLabel(task.assigned_to);
+                        const initials = identityLabel.replace('@', '').substring(0, 2).toUpperCase();
                         const isMe = currentUser && task.assigned_to.toLowerCase() === currentUser.email.toLowerCase();
-                        return `<span class="task-assignee-avatar ${isMe ? '' : 'partner'}" title="Atribuído a: ${escapeHTML(task.assigned_to)}">${escapeHTML(initials)}</span>`;
+                        return `<span class="task-assignee-avatar ${isMe ? '' : 'partner'}" title="Atribuído a: ${escapeHTML(identityLabel)}">${escapeHTML(initials)}</span>`;
                     })() : ''}
                 </div>
             </div>
@@ -4522,7 +4623,7 @@ function renderCollaborators(cat) {
     ownerItem.className = "manage-item";
     ownerItem.style.cssText = "background:rgba(255,255,255,0.01); border:1px solid var(--border-color); padding:10px 14px; border-radius:var(--radius-sm); display:flex; justify-content:space-between; align-items:center;";
     ownerItem.innerHTML = `
-        <span style="font-size:0.85rem; font-weight:700; color:var(--text-secondary);">${escapeHTML(isOwner ? currentUser.email : 'Dono da Guia')} (Criador)</span>
+        <span style="font-size:0.85rem; font-weight:700; color:var(--text-secondary);">${escapeHTML(isOwner ? `@${currentUsername}` : getIdentityLabel(categoryShares.find(share => String(share.category_id) === String(cat.id))?.owner_email || ''))} (Criador)</span>
     `;
     collaboratorsList.appendChild(ownerItem);
     
@@ -4543,7 +4644,7 @@ function renderCollaborators(cat) {
         }
         
         item.innerHTML = `
-            <span style="font-size:0.85rem; font-weight:600; color:var(--text-primary);">${escapeHTML(share.collaborator_email)}</span>
+            <span style="font-size:0.85rem; font-weight:600; color:var(--text-primary);">${escapeHTML(getIdentityLabel(share.collaborator_email))}</span>
             ${removeBtn}
         `;
         
@@ -4582,7 +4683,16 @@ async function inviteCollaborator(catId, email) {
         return;
     }
     
-    const cleanEmail = email.trim().toLowerCase();
+    const enteredIdentity = email.trim().toLowerCase().replace(/^@/, "");
+    let cleanEmail = enteredIdentity;
+    if (!enteredIdentity.includes("@")) {
+        const { data: resolvedEmail, error: resolveError } = await supabaseClient.rpc("resolve_collaboration_email", { identifier: enteredIdentity });
+        if (resolveError || !resolvedEmail) {
+            alert("Nenhuma conta foi encontrada com esse ID.");
+            return;
+        }
+        cleanEmail = resolvedEmail;
+    }
     
     // Evita convidar a si mesmo ou convidar duplicado
     if (cleanEmail === currentUser.email.toLowerCase()) {
@@ -4610,10 +4720,20 @@ async function inviteCollaborator(catId, email) {
     }
     
     try {
-        const { error } = await supabaseClient
+        const { data: createdShares, error } = await supabaseClient
             .from('category_shares')
-            .insert(newShare);
+            .insert(newShare)
+            .select("id");
         if (error) throw error;
+
+        const createdInvite = createdShares && createdShares[0];
+        if (createdInvite) {
+            supabaseClient.functions.invoke("send-task-push", { body: { invite_id: createdInvite.id } })
+                .then(({ error: pushError }) => {
+                    if (pushError) console.warn("Convite salvo, mas o push não pôde ser enviado:", pushError.message);
+                })
+                .catch(pushError => console.warn("Erro ao solicitar push do convite:", pushError));
+        }
         
         alert("Colaborador convidado com sucesso!");
         if (inputCollabEmail) inputCollabEmail.value = "";
@@ -4673,7 +4793,7 @@ function renderNotifications() {
                     <div style="flex: 1;">
                         <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 800; color: var(--text-primary);">Convite de Colaboração</h4>
                         <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">
-                            <strong>${escapeHTML(invite.owner_email || 'Um usuário')}</strong> convidou você para compartilhar a guia <strong>${escapeHTML(invite.category_name || 'Compartilhada')}</strong>.
+                            <strong>${escapeHTML(invite.owner_email ? getIdentityLabel(invite.owner_email) : 'Um usuário')}</strong> convidou você para compartilhar a guia <strong>${escapeHTML(invite.category_name || 'Compartilhada')}</strong>.
                         </p>
                     </div>
                 </div>
@@ -4716,7 +4836,7 @@ function renderNotifications() {
             <div class="shared-task-notification-copy">
                 <strong>Nova tarefa compartilhada</strong>
                 <span>“${escapeHTML(notification.task_title || "Nova tarefa")}” foi adicionada${notification.category_name ? ` em <b>${escapeHTML(notification.category_name)}</b>` : ""}.</span>
-                ${notification.assigned_to ? `<small>Atribuída a ${escapeHTML(notification.assigned_to)}${timeLabel ? ` • ${escapeHTML(timeLabel)}` : ""}</small>` : (timeLabel ? `<small>${escapeHTML(timeLabel)}</small>` : "")}
+                ${notification.assigned_to ? `<small>Atribuída a ${escapeHTML(getIdentityLabel(notification.assigned_to))}${timeLabel ? ` • ${escapeHTML(timeLabel)}` : ""}</small>` : (timeLabel ? `<small>${escapeHTML(timeLabel)}</small>` : "")}
             </div>
         `;
         item.setAttribute("role", "button");
@@ -4905,7 +5025,7 @@ function updateTaskAssigneeDropdown(categoryName, selectEl, groupEl) {
     const ownerEmail = isOwnerMe ? currentUser.email : (shares[0].owner_email || "Dono da Guia");
     const optOwner = document.createElement("option");
     optOwner.value = ownerEmail;
-    optOwner.textContent = `${ownerEmail} (Dono)`;
+    optOwner.textContent = `${getIdentityLabel(ownerEmail)} (Dono)`;
     selectEl.appendChild(optOwner);
     
     // Collaborator Options
@@ -4916,7 +5036,7 @@ function updateTaskAssigneeDropdown(categoryName, selectEl, groupEl) {
         addedEmails.add(normalizedEmail);
         const optCollab = document.createElement("option");
         optCollab.value = share.collaborator_email;
-        optCollab.textContent = share.collaborator_email;
+        optCollab.textContent = getIdentityLabel(share.collaborator_email);
         selectEl.appendChild(optCollab);
     });
     
@@ -5623,6 +5743,9 @@ function setupSupabaseAuth() {
             reportsCloudState = "idle";
             document.getElementById("auth-container").style.display = "none";
             document.querySelector(".app-container").style.display = "flex";
+
+            // Toda conta precisa definir um ID público antes de continuar.
+            await ensureUserIdentifier();
             
             // Sync local data to cloud
             await syncOfflineDataToCloud();
@@ -5631,15 +5754,26 @@ function setupSupabaseAuth() {
             await loadUserProfile();
             
             await loadChecklistAndProgress();
+            await loadCollaborationIdentityLabels();
+            renderChecklist();
+            renderNotifications();
             subscribeToCollaborationUpdates();
             updateNotificationsSettingUI();
             if (areNotificationsEnabled() && "Notification" in window && Notification.permission === "granted") {
                 ensurePushSubscription().catch(error => console.warn("Não foi possível restaurar a inscrição Web Push:", error.message));
             }
             const notificationTaskId = new URLSearchParams(window.location.search).get("notification_task");
+            const shouldOpenNotifications = new URLSearchParams(window.location.search).get("open_notifications") === "1";
             if (notificationTaskId) {
                 history.replaceState({}, "", window.location.pathname);
                 setTimeout(() => focusSharedTaskFromNotification({ task_id: notificationTaskId }), 250);
+            } else if (shouldOpenNotifications) {
+                history.replaceState({}, "", window.location.pathname);
+                setTimeout(() => {
+                    renderNotifications();
+                    openModal(modalNotifications);
+                    markCurrentInvitesAsSeen();
+                }, 250);
             }
             lucide.createIcons();
         } else {
@@ -5649,6 +5783,8 @@ function setupSupabaseAuth() {
             }
             if (currentUser) await removePushSubscription().catch(() => {});
             currentUser = null;
+            currentUsername = "";
+            collaborationIdentityByEmail.clear();
             learningCloudState = "idle";
             reportsCloudState = "idle";
             document.getElementById("auth-container").style.display = "flex";

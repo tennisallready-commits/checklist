@@ -1,9 +1,9 @@
-const CACHE_NAME = 'checklist-cache-v8.75';
+const CACHE_NAME = 'checklist-cache-v8.78';
 const ASSETS = [
   './',
   './index.html',
-  './style.css?v=7.81',
-  './app.js?v=8.57',
+  './style.css?v=7.82',
+  './app.js?v=8.60',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -65,14 +65,17 @@ self.addEventListener('notificationclick', (event) => {
   const targetUrl = event.notification.data && event.notification.data.url
     ? event.notification.data.url
     : (taskId ? `./?notification_task=${encodeURIComponent(taskId)}` : './');
+  const absoluteTargetUrl = new URL(targetUrl, self.registration.scope).href;
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       const existingClient = clientList.find((client) => 'focus' in client);
       if (existingClient) {
-        existingClient.postMessage({ type: 'OPEN_SHARED_TASK', taskId });
+        existingClient.postMessage(taskId
+          ? { type: 'OPEN_SHARED_TASK', taskId }
+          : { type: 'OPEN_NOTIFICATIONS' });
         return existingClient.focus();
       }
-      return clients.openWindow(targetUrl);
+      return clients.openWindow(absoluteTargetUrl);
     })
   );
 });

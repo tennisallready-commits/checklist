@@ -4108,6 +4108,25 @@ body.theme-girly select:focus {
     margin-top: 8px;
 }
 
+.identifier-modal { z-index: 10000; }
+.identifier-modal .modal-overlay { background: rgba(3, 5, 12, .88); backdrop-filter: blur(14px); }
+.identifier-modal-content { align-items: center; max-width: 390px; padding: 30px 24px max(28px, env(safe-area-inset-bottom)); text-align: center; }
+.identifier-modal-content::before { display: none; }
+.identifier-icon { display: grid; place-items: center; width: 58px; height: 58px; margin-bottom: 12px; border-radius: 18px; color: #fff; background: var(--primary-gradient); box-shadow: 0 12px 30px rgba(139,92,246,.3); }
+.identifier-icon svg { width: 27px; height: 27px; }
+.identifier-kicker { color: var(--primary); font-size: .66rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.identifier-modal-content h2 { margin: 7px 0 5px; color: var(--text-primary); font-size: 1.45rem; }
+.identifier-modal-content > p { max-width: 310px; margin: 0 0 20px; color: var(--text-secondary); font-size: .78rem; line-height: 1.5; }
+#form-create-identifier { display: flex; width: 100%; flex-direction: column; gap: 9px; text-align: left; }
+#form-create-identifier > label { color: var(--text-secondary); font-size: .67rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.identifier-input-shell { display: flex; align-items: center; min-height: 50px; padding: 0 14px; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(255,255,255,.035); }
+.identifier-input-shell:focus-within { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(139,92,246,.13); }
+.identifier-input-shell > span { color: var(--primary); font-size: 1rem; font-weight: 800; }
+.identifier-input-shell input { flex: 1; min-width: 0; border: 0 !important; background: transparent !important; box-shadow: none !important; color: var(--text-primary); font-size: .95rem; font-weight: 700; }
+#form-create-identifier small { color: var(--text-muted); font-size: .64rem; line-height: 1.4; }
+.identifier-error { min-height: 18px; color: #ef4444; font-size: .7rem; font-weight: 700; }
+#btn-confirm-identifier { width: 100%; min-height: 46px; margin-top: 2px; border-radius: 12px; }
+
 .btn-block {
     width: 100%;
 }
