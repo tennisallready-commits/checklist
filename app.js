@@ -4,6 +4,7 @@
 // ----------------------------------------------------
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
+const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
 
 // ----------------------------------------------------
 // IndexedDB & Shadow Storage Configuration
@@ -149,7 +150,7 @@ const localStorage = {
     },
     removeItem(key) {
         if (dbCache.hasOwnProperty(key)) {
-            dbCache[key] = (key === "offline_completions_queue" || key === "offline_task_updates_queue") ? {} : [];
+            dbCache[key] = (key === "offline_completions_queue" || key === "offline_task_updates_queue" || key === "user_term_associations" || key === "user_function_associations") ? {} : [];
             idb.delete(key);
             scheduleSyncStatusRefresh();
             return;
@@ -158,8 +159,9 @@ const localStorage = {
     }
 };
 
-// Default categories/places
-const DEFAULT_CATEGORIES = ["Tio Nan", "Cassol", "PUCRS"];
+// Novas contas e restaurações começam sem categorias pessoais pré-cadastradas.
+const DEFAULT_CATEGORIES = [];
+const LEGACY_AUTO_SEEDED_CATEGORIES = ["Tio Nan", "Cassol", "PUCRS"];
 
 // Default tasks database for initial setup (offline fallback and reset option)
 const DEFAULT_TASKS = [];
@@ -187,6 +189,13 @@ let isAuthModeLogin = true;
 let localDataVersion = 0; // Previne race conditions de sync
 let dataLoadRequestVersion = 0; // Impede respostas antigas de outra data de sobrescreverem a tela
 let scrollPosition = 0;
+let learningCloudState = "idle";
+let reportsCloudState = "idle";
+let currentReportCorrectionTasks = {};
+let pendingAutocompleteDetailsTask = null;
+let collaborationRealtimeChannel = null;
+let categoryOnboardingTimer = null;
+let categoryOnboardingSlide = 0;
 
 // Supabase Client instance
 let supabaseClient = null;
@@ -194,6 +203,8 @@ let supabaseClient = null;
 // DOM Elements
 const tasksListEl = document.getElementById("tasks-list");
 const emptyStateEl = document.getElementById("empty-state");
+const btnOnboardingCreateCategory = document.getElementById("btn-onboarding-create-category");
+const taskCreationOnboarding = document.getElementById("task-creation-onboarding");
 const progressPercentageEl = document.getElementById("progress-percentage");
 const progressTasksCountEl = document.getElementById("progress-tasks-count");
 const progressCircle = document.getElementById("progress-circle");
@@ -279,6 +290,7 @@ let confirmDeleteCallback = null;
 let switchReportTab = null;
 let categoryShares = [];
 let pendingInvites = [];
+let sharedTaskNotifications = [];
 
 // Forms & Inputs
 const formAddTask = document.getElementById("form-add-task");
@@ -303,6 +315,9 @@ const modalNotifications = document.getElementById("modal-notifications");
 const btnCloseNotificationsModal = document.getElementById("btn-close-notifications-modal");
 const notificationsListContainer = document.getElementById("notifications-list-container");
 const notificationsBadge = document.getElementById("notifications-badge");
+const collabInviteReadyLabel = document.getElementById("collab-invite-ready-label");
+const notificationsEnabledToggle = document.getElementById("notifications-enabled-toggle");
+const notificationsPermissionStatus = document.getElementById("notifications-permission-status");
 const btnOpenManualChecklist = document.getElementById("btn-open-manual-checklist");
 const modalManualChecklist = document.getElementById("modal-manual-checklist");
 const btnCloseManualChecklistModal = document.getElementById("btn-close-manual-checklist-modal");
@@ -328,8 +343,6 @@ const btnCloseManageCategoriesModal = document.getElementById("btn-close-manage-
 const btnOpenGesturesTutorial = document.getElementById("btn-open-gestures-tutorial");
 const btnCloseGesturesTutorial = document.getElementById("btn-close-gestures-tutorial");
 
-const btnResetDefault = document.getElementById("btn-reset-default");
-const btnClearAll = document.getElementById("btn-clear-all");
 const btnAddCategory = document.getElementById("btn-add-category");
 
 const btnCloseCalendar = document.getElementById("btn-close-calendar");
@@ -354,6 +367,12 @@ document.addEventListener("DOMContentLoaded", () => {
             if (reloadingForServiceWorkerUpdate) return;
             reloadingForServiceWorkerUpdate = true;
             window.location.reload();
+        });
+
+        navigator.serviceWorker.addEventListener('message', event => {
+            if (event.data && event.data.type === 'OPEN_SHARED_TASK' && event.data.taskId) {
+                focusSharedTaskFromNotification({ task_id: event.data.taskId });
+            }
         });
 
         navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
@@ -466,33 +485,75 @@ function setupEventListeners() {
     const tabWeekly = document.getElementById("tab-report-weekly");
     const tabMonthly = document.getElementById("tab-report-monthly");
     const tabYearly = document.getElementById("tab-report-yearly");
+    const tabHistory = document.getElementById("tab-report-history");
     const reportSummaryTitle = document.getElementById("report-summary-title");
     const reportSummaryContent = document.getElementById("report-summary-content");
 
     switchReportTab = (days) => {
         activeSmartReportDays = days;
-        [tabWeekly, tabMonthly, tabYearly].forEach(tab => {
+        [tabWeekly, tabMonthly, tabYearly, tabHistory].forEach(tab => {
             if (tab) tab.classList.remove("active");
         });
         
         if (days === 7) {
+            if (btnSaveSmartReport) btnSaveSmartReport.style.display = "inline-flex";
             if (tabWeekly) tabWeekly.classList.add("active");
             if (reportSummaryTitle) reportSummaryTitle.innerHTML = `<i data-lucide="sparkles" style="width: 16px; height: 16px;"></i> Resumo Semanal`;
             loadAndRenderReport(7, reportSummaryContent);
         } else if (days === 30) {
+            if (btnSaveSmartReport) btnSaveSmartReport.style.display = "inline-flex";
             if (tabMonthly) tabMonthly.classList.add("active");
             if (reportSummaryTitle) reportSummaryTitle.innerHTML = `<i data-lucide="sparkles" style="width: 16px; height: 16px;"></i> Resumo Mensal`;
             loadAndRenderReport(30, reportSummaryContent);
         } else if (days === 365) {
+            if (btnSaveSmartReport) btnSaveSmartReport.style.display = "inline-flex";
             if (tabYearly) tabYearly.classList.add("active");
             if (reportSummaryTitle) reportSummaryTitle.innerHTML = `<i data-lucide="sparkles" style="width: 16px; height: 16px;"></i> Resumo Anual`;
             loadAndRenderReport(365, reportSummaryContent);
+        } else if (days === "history") {
+            if (btnSaveSmartReport) btnSaveSmartReport.style.display = "none";
+            if (tabHistory) tabHistory.classList.add("active");
+            if (reportSummaryTitle) reportSummaryTitle.innerHTML = `<i data-lucide="archive" style="width: 16px; height: 16px;"></i> Histórico de Relatórios`;
+            loadAndRenderReportHistory(reportSummaryContent, reportSummaryTitle);
         }
     };
 
     if (tabWeekly) tabWeekly.addEventListener("click", () => switchReportTab(7));
     if (tabMonthly) tabMonthly.addEventListener("click", () => switchReportTab(30));
     if (tabYearly) tabYearly.addEventListener("click", () => switchReportTab(365));
+    if (tabHistory) tabHistory.addEventListener("click", () => switchReportTab("history"));
+
+    const modalReportCorrection = document.getElementById("modal-report-correction");
+    const selectCorrectionTask = document.getElementById("select-report-correction-task");
+    const selectCorrectionFunction = document.getElementById("select-report-correction-function");
+    const btnSaveCorrection = document.getElementById("btn-save-report-correction");
+    const closeCorrection = () => closeModal(modalReportCorrection);
+    document.getElementById("btn-close-report-correction")?.addEventListener("click", closeCorrection);
+    modalReportCorrection?.querySelector(".modal-overlay")?.addEventListener("click", closeCorrection);
+    document.addEventListener("click", event => {
+        const correctionButton = event.target.closest(".btn-correct-report-function");
+        if (!correctionButton || !selectCorrectionTask) return;
+        const categoryName = decodeURIComponent(correctionButton.dataset.category || "");
+        const correctionTasks = currentReportCorrectionTasks[categoryName] || [];
+        selectCorrectionTask.innerHTML = correctionTasks.map(task => `<option value="${encodeURIComponent(String(task.id))}">${escapeHTML(task.title)}</option>`).join("");
+        selectCorrectionFunction.value = "";
+        openModal(modalReportCorrection);
+    });
+    btnSaveCorrection?.addEventListener("click", async () => {
+        if (!selectCorrectionTask?.value || !selectCorrectionFunction?.value) return;
+        const taskId = decodeURIComponent(selectCorrectionTask.value);
+        const task = Object.values(currentReportCorrectionTasks).flat().find(item => String(item.id) === taskId);
+        if (!task) return;
+        saveLearnedFunctionAssociation(task.title, selectCorrectionFunction.value);
+        btnSaveCorrection.textContent = "Correção aprendida ✓";
+        btnSaveCorrection.disabled = true;
+        setTimeout(() => {
+            btnSaveCorrection.textContent = "Salvar correção";
+            btnSaveCorrection.disabled = false;
+            closeCorrection();
+            if (typeof activeSmartReportDays === "number") switchReportTab(activeSmartReportDays);
+        }, 700);
+    });
 
     if (btnSmartReport) {
         btnSmartReport.addEventListener("click", () => {
@@ -946,7 +1007,15 @@ function setupEventListeners() {
         }
 
         if (isEditMode || (isHistoryMode && !isPastNightShiftException) || isFutureDate) return;
-        
+
+        const taskId = String(item.dataset.id).match(/^\d+$/) ? parseInt(item.dataset.id, 10) : item.dataset.id;
+        const selectedTask = tasks.find(task => String(task.id) === String(taskId));
+        if (!canCurrentUserCheckTask(selectedTask)) {
+            if (navigator.vibrate) navigator.vibrate([18, 35, 18]);
+            showTaskCheckPermissionNotice(selectedTask);
+            return;
+        }
+
         const isCompleting = !item.classList.contains("completed");
         if (isCompleting) {
             const checkbox = item.querySelector(".task-checkbox");
@@ -958,7 +1027,6 @@ function setupEventListeners() {
             }
         }
         
-        const taskId = String(item.dataset.id).match(/^\d+$/) ? parseInt(item.dataset.id, 10) : item.dataset.id; // handle uuid string or int
         toggleTask(taskId);
     });
 
@@ -988,7 +1056,10 @@ function setupEventListeners() {
     });
 
     // Settings Modal
-    btnManageTasks.addEventListener("click", () => openModal(modalManageTasks));
+    btnManageTasks.addEventListener("click", () => {
+        updateNotificationsSettingUI();
+        openModal(modalManageTasks);
+    });
     btnCloseManageModal.addEventListener("click", () => closeModal(modalManageTasks));
 
     // Gestures tutorial carousel
@@ -1059,6 +1130,14 @@ function setupEventListeners() {
     }
 
     // Categories Management Modal
+    if (btnOnboardingCreateCategory) {
+        btnOnboardingCreateCategory.addEventListener("click", () => {
+            openModal(modalManageCategories);
+            renderCategories();
+            setTimeout(() => document.getElementById("input-new-category")?.focus(), 380);
+        });
+    }
+
     if (btnOpenManageCategories) {
         btnOpenManageCategories.addEventListener("click", () => {
             closeModal(modalManageTasks);
@@ -1090,13 +1169,17 @@ function setupEventListeners() {
     const selectNewCategoryType = document.getElementById("select-new-category-type");
     const wrapperCustomType = document.getElementById("wrapper-custom-type");
     const inputNewCategoryCustomType = document.getElementById("input-new-category-custom-type");
+    const categoryTypeRow = document.getElementById("category-type-row");
 
     if (selectNewCategoryType && wrapperCustomType) {
         selectNewCategoryType.addEventListener("change", () => {
             if (selectNewCategoryType.value === "Outro") {
                 wrapperCustomType.style.display = "flex";
+                if (categoryTypeRow) categoryTypeRow.classList.add("has-custom-type");
             } else {
                 wrapperCustomType.style.display = "none";
+                if (categoryTypeRow) categoryTypeRow.classList.remove("has-custom-type");
+                if (inputNewCategoryCustomType) inputNewCategoryCustomType.value = "";
             }
         });
     }
@@ -1157,6 +1240,7 @@ function setupEventListeners() {
             if (selectNewCategoryType) {
                 selectNewCategoryType.value = "Trabalho"; // reset
                 wrapperCustomType.style.display = "none";
+                document.getElementById("category-type-row")?.classList.remove("has-custom-type");
             }
         } finally {
             btnAddCategory.disabled = false;
@@ -1426,13 +1510,16 @@ function setupEventListeners() {
     // Notifications Modal Events
     if (btnNotifications) {
         btnNotifications.addEventListener("click", () => {
-            if (notificationsBadge) {
-                notificationsBadge.style.display = "none";
-                localStorage.setItem("notifications_badge_read", "true");
-            }
+            markCurrentInvitesAsSeen();
             renderNotifications();
             openModal(modalNotifications);
+            markSharedTaskNotificationsAsRead();
         });
+    }
+
+    if (notificationsEnabledToggle) {
+        notificationsEnabledToggle.addEventListener("click", toggleNotificationsPreference);
+        updateNotificationsSettingUI();
     }
 
     if (btnCloseNotificationsModal) {
@@ -1515,23 +1602,7 @@ function setupEventListeners() {
         });
     }
 
-    // Restore default database state
-    btnResetDefault.addEventListener("click", async () => {
-        if (confirm("Atenção: Isso restaurará as categorias (Tio Nan, Cassol, PUCRS) e tarefas padrão. O histórico anterior será mantido. Continuar?")) {
-            await restoreDefaultSettings();
-            closeModal(modalManageTasks);
-        }
-    });
-
-    // Clear all tasks
-    btnClearAll.addEventListener("click", async () => {
-        if (confirm("Atenção: Isso ocultará todas as tarefas atuais. Suas categorias e histórico serão mantidos. Deseja continuar?")) {
-            await clearAllTasks();
-            closeModal(modalManageTasks);
-        }
-    });
-
-    // Share report via WhatsApp
+    // Compartilhar checklist pelo menu nativo do aparelho
     const handleShareReport = (e) => {
         const now = Date.now();
         // Cooldown de 300ms para evitar duplo acionamento (pointerdown + click)
@@ -1896,9 +1967,7 @@ async function loadChecklistAndProgress(skipOfflineReload = false) {
         checkImportantTaskNotifications();
     }
 
-    if (pendingInvites.length > 0 && notificationsBadge) {
-        notificationsBadge.style.display = "block";
-    }
+    updateCollaborationInviteAttention();
 
     // 2. Revalida com o Supabase em segundo plano sem travar a interface do usuário
     if (supabaseClient && currentUser) {
@@ -1939,13 +2008,243 @@ async function loadChecklistAndProgress(skipOfflineReload = false) {
             if (catFingerprintAfter !== catFingerprintBefore) {
                 renderCategories();
             }
-            if (pendingInvites.length > 0 && notificationsBadge) {
-                notificationsBadge.style.display = "block";
-            }
+            updateCollaborationInviteAttention();
         }).catch(err => {
             console.warn("Erro silencioso ao revalidar dados do Supabase:", err);
         });
     }
+}
+
+function normalizeAccountEmail(email) {
+    return String(email || "").trim().toLowerCase();
+}
+
+function getNotificationsPreferenceKey() {
+    return `notifications_enabled_${currentUser ? currentUser.id : "local"}`;
+}
+
+function urlBase64ToUint8Array(value) {
+    const padding = "=".repeat((4 - value.length % 4) % 4);
+    const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const raw = atob(base64);
+    return Uint8Array.from([...raw].map(character => character.charCodeAt(0)));
+}
+
+async function savePushSubscription(subscription) {
+    if (!supabaseClient || !currentUser || !subscription) return;
+    const json = subscription.toJSON();
+    const { error } = await supabaseClient.from("push_subscriptions").upsert({
+        user_id: currentUser.id,
+        endpoint: json.endpoint,
+        p256dh: json.keys && json.keys.p256dh,
+        auth: json.keys && json.keys.auth,
+        user_agent: navigator.userAgent,
+        updated_at: new Date().toISOString()
+    }, { onConflict: "endpoint" });
+    if (error) throw error;
+}
+
+async function ensurePushSubscription() {
+    if (!areNotificationsEnabled() || !currentUser || Notification.permission !== "granted") return null;
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+        throw new Error("Este navegador não oferece suporte a Web Push.");
+    }
+    const registration = await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+        });
+    }
+    await savePushSubscription(subscription);
+    return subscription;
+}
+
+async function removePushSubscription() {
+    if (!("serviceWorker" in navigator)) return;
+    const registration = await navigator.serviceWorker.ready;
+    const subscription = await registration.pushManager.getSubscription();
+    if (!subscription) return;
+    if (supabaseClient && currentUser) {
+        const { error } = await supabaseClient.from("push_subscriptions").delete().eq("endpoint", subscription.endpoint);
+        if (error) console.warn("Não foi possível remover a inscrição push do banco:", error.message);
+    }
+    await subscription.unsubscribe();
+}
+
+function areNotificationsEnabled() {
+    const storedPreference = localStorage.getItem(getNotificationsPreferenceKey());
+    if (storedPreference !== null) return storedPreference === "true";
+    return "Notification" in window && Notification.permission === "granted";
+}
+
+function updateNotificationsSettingUI() {
+    if (!notificationsEnabledToggle) return;
+    const enabled = areNotificationsEnabled();
+    notificationsEnabledToggle.classList.toggle("is-on", enabled);
+    notificationsEnabledToggle.setAttribute("aria-checked", enabled ? "true" : "false");
+
+    if (!notificationsPermissionStatus) return;
+    if (!("Notification" in window)) {
+        notificationsPermissionStatus.textContent = "Este navegador não oferece notificações do dispositivo.";
+    } else if (!enabled) {
+        notificationsPermissionStatus.textContent = "Os avisos push estão desativados neste aparelho.";
+    } else if (Notification.permission === "denied") {
+        notificationsPermissionStatus.textContent = "Permissão bloqueada pelo navegador. Libere-a nas configurações do site.";
+    } else if (Notification.permission === "granted") {
+        notificationsPermissionStatus.textContent = "Notificações permitidas neste aparelho.";
+    } else {
+        notificationsPermissionStatus.textContent = "Toque no botão para autorizar as notificações.";
+    }
+}
+
+async function toggleNotificationsPreference() {
+    const shouldEnable = !areNotificationsEnabled();
+    if (!shouldEnable) {
+        localStorage.setItem(getNotificationsPreferenceKey(), "false");
+        await removePushSubscription().catch(error => console.warn("Erro ao desativar Web Push:", error));
+        updateNotificationsSettingUI();
+        return;
+    }
+
+    if (!("Notification" in window)) {
+        localStorage.setItem(getNotificationsPreferenceKey(), "false");
+        updateNotificationsSettingUI();
+        return;
+    }
+
+    // Salva primeiro a intenção do usuário. Se a permissão ainda não existe,
+    // o pedido ocorre dentro deste clique (exigência de iOS/Chrome).
+    localStorage.setItem(getNotificationsPreferenceKey(), "true");
+    let permission = Notification.permission;
+    if (permission === "default") permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+        localStorage.setItem(getNotificationsPreferenceKey(), "false");
+        if (permission === "denied") {
+            alert("As notificações estão bloqueadas pelo navegador. Abra as configurações deste site ou web app, permita Notificações e tente novamente.");
+        }
+    } else {
+        try {
+            await ensurePushSubscription();
+        } catch (error) {
+            localStorage.setItem(getNotificationsPreferenceKey(), "false");
+            alert("Não foi possível registrar este aparelho para notificações: " + error.message);
+        }
+    }
+    updateNotificationsSettingUI();
+}
+
+function canCurrentUserCheckTask(task) {
+    if (!task || !normalizeAccountEmail(task.assigned_to)) return true;
+    return Boolean(currentUser) && normalizeAccountEmail(task.assigned_to) === normalizeAccountEmail(currentUser.email);
+}
+
+function showTaskCheckPermissionNotice(task) {
+    const responsible = normalizeAccountEmail(task && task.assigned_to) || "o responsável";
+    const toast = document.createElement("div");
+    toast.className = "shared-task-toast task-check-permission-toast";
+    toast.setAttribute("role", "status");
+    toast.innerHTML = `<i data-lucide="lock-keyhole"></i><div><strong>Check restrito</strong><span>Esta tarefa foi atribuída a ${escapeHTML(responsible)}. Somente essa pessoa pode dar check.</span></div>`;
+    document.body.appendChild(toast);
+    if (window.lucide) window.lucide.createIcons();
+    requestAnimationFrame(() => toast.classList.add("active"));
+    setTimeout(() => {
+        toast.classList.remove("active");
+        setTimeout(() => toast.remove(), 300);
+    }, 4200);
+}
+
+function getInviteSeenKey(inviteId) {
+    const account = currentUser ? currentUser.id : "anonymous";
+    return `collab_invite_seen_${account}_${inviteId}`;
+}
+
+function updateCollaborationInviteAttention() {
+    if (!btnNotifications) return;
+    const unseenInvites = (pendingInvites || []).filter(invite => localStorage.getItem(getInviteSeenKey(invite.id)) !== "true");
+    const unreadTasks = (sharedTaskNotifications || []).filter(notification => !notification.read_at);
+    const needsAttention = unseenInvites.length > 0 || unreadTasks.length > 0;
+    if (notificationsBadge) notificationsBadge.style.display = needsAttention ? "block" : "none";
+    btnNotifications.classList.toggle("invite-attention", needsAttention);
+    if (collabInviteReadyLabel) {
+        collabInviteReadyLabel.textContent = unseenInvites.length > 0
+            ? "Você recebeu um convite"
+            : "Você recebeu uma nova tarefa";
+        collabInviteReadyLabel.setAttribute("aria-hidden", needsAttention ? "false" : "true");
+    }
+}
+
+function markCurrentInvitesAsSeen() {
+    (pendingInvites || []).forEach(invite => localStorage.setItem(getInviteSeenKey(invite.id), "true"));
+    if (btnNotifications) btnNotifications.classList.remove("invite-attention");
+    if (collabInviteReadyLabel) collabInviteReadyLabel.setAttribute("aria-hidden", "true");
+}
+
+async function markSharedTaskNotificationsAsRead() {
+    const unreadIds = (sharedTaskNotifications || []).filter(item => !item.read_at).map(item => item.id);
+    if (!unreadIds.length) return;
+    const readAt = new Date().toISOString();
+    sharedTaskNotifications = sharedTaskNotifications.map(item => unreadIds.includes(item.id) ? { ...item, read_at: readAt } : item);
+    updateCollaborationInviteAttention();
+    if (!supabaseClient || !currentUser) return;
+    const { error } = await supabaseClient.from("shared_task_notifications").update({ read_at: readAt }).in("id", unreadIds);
+    if (error) console.warn("Não foi possível marcar as notificações como lidas:", error.message);
+}
+
+function subscribeToCollaborationUpdates() {
+    if (!supabaseClient || !currentUser) return;
+    if (collaborationRealtimeChannel) supabaseClient.removeChannel(collaborationRealtimeChannel);
+    const email = normalizeAccountEmail(currentUser.email);
+    collaborationRealtimeChannel = supabaseClient
+        .channel(`collaboration-invites-${currentUser.id}`)
+        .on("postgres_changes", {
+            event: "*",
+            schema: "public",
+            table: "category_shares",
+            filter: `collaborator_email=eq.${email}`
+        }, () => loadChecklistAndProgress())
+        .on("postgres_changes", {
+            event: "*",
+            schema: "public",
+            table: "category_shares",
+            filter: `owner_id=eq.${currentUser.id}`
+        }, () => loadChecklistAndProgress())
+        .on("postgres_changes", {
+            event: "INSERT",
+            schema: "public",
+            table: "shared_task_notifications",
+            filter: `recipient_id=eq.${currentUser.id}`
+        }, payload => {
+            const notification = payload.new || {};
+            if (!sharedTaskNotifications.some(item => String(item.id) === String(notification.id))) {
+                sharedTaskNotifications.unshift(notification);
+            }
+            updateCollaborationInviteAttention();
+            if (areNotificationsEnabled()) showSharedTaskAlert(notification);
+            loadChecklistAndProgress();
+        })
+        .subscribe();
+}
+
+function showSharedTaskAlert(notification) {
+    const title = "Nova tarefa compartilhada";
+    const categoryText = notification.category_name ? ` em ${notification.category_name}` : "";
+    const body = `“${notification.task_title || "Nova tarefa"}” foi adicionada${categoryText}.`;
+
+    const toast = document.createElement("div");
+    toast.className = "shared-task-toast";
+    toast.setAttribute("role", "status");
+    toast.innerHTML = `<i data-lucide="users"></i><div><strong>${escapeHTML(title)}</strong><span>${escapeHTML(body)}</span></div>`;
+    document.body.appendChild(toast);
+    if (window.lucide) window.lucide.createIcons();
+    requestAnimationFrame(() => toast.classList.add("active"));
+    setTimeout(() => {
+        toast.classList.remove("active");
+        setTimeout(() => toast.remove(), 300);
+    }, 5200);
+
+    showWebNotification(title, body, notification.task_id, `shared-task-${notification.id || notification.task_id}`);
 }
 
 async function loadData() {
@@ -1954,6 +2253,7 @@ async function loadData() {
     const requestVersionAtFetchStart = ++dataLoadRequestVersion;
     if (supabaseClient && currentUser) {
         try {
+            await loadFunctionAssociationsFromCloud();
             // Executa as consultas ao banco de dados em paralelo usando Promise.all para máxima velocidade de carregamento
             const [
                 catsResult,
@@ -1962,7 +2262,8 @@ async function loadData() {
                 compTodayResult,
                 compBeforeResult,
                 sharesOwnerResult,
-                sharesCollabResult
+                sharesCollabResult,
+                sharedNotificationsResult
             ] = await Promise.all([
                 supabaseClient.from('categories').select('*').eq('is_active', true),
                 supabaseClient.from('categories').select('*', { count: 'exact', head: true }),
@@ -1975,6 +2276,10 @@ async function loadData() {
                 }),
                 supabaseClient.from('category_shares').select('*').ilike('collaborator_email', currentUser.email.trim()).then(r => r, err => {
                     console.warn("Tabela 'category_shares' não encontrada ou inacessível ao buscar colaborador.", err);
+                    return { data: [], error: null };
+                }),
+                supabaseClient.from('shared_task_notifications').select('*').eq('recipient_id', currentUser.id).order('created_at', { ascending: false }).limit(50).then(r => r, err => {
+                    console.warn("Tabela de notificações compartilhadas não encontrada ou inacessível.", err);
                     return { data: [], error: null };
                 })
             ]);
@@ -2006,9 +2311,29 @@ async function loadData() {
             if (errCompToday) throw errCompToday;
             if (errCompBefore) throw errCompBefore;
 
+            // Remove o antigo conjunto pessoal que versões anteriores copiavam
+            // automaticamente para contas vazias. A condição estrita evita
+            // tocar em contas que já criaram categorias ou tarefas próprias.
+            const ownedActiveCats = dbCats.filter(cat => String(cat.user_id) === String(currentUser.id));
+            const ownedNames = ownedActiveCats.map(cat => cat.name).sort();
+            const legacyNames = [...LEGACY_AUTO_SEEDED_CATEGORIES].sort();
+            const isUntouchedLegacyAccount = dbTasks.length === 0
+                && ownedNames.length === legacyNames.length
+                && ownedNames.every((name, index) => name === legacyNames[index]);
+            if (isUntouchedLegacyAccount) {
+                const legacyIds = ownedActiveCats.map(cat => cat.id);
+                const { error: cleanupError } = await supabaseClient
+                    .from('categories')
+                    .update({ is_active: false })
+                    .in('id', legacyIds);
+                if (!cleanupError) dbCats = dbCats.filter(cat => !legacyIds.some(id => String(id) === String(cat.id)));
+                else console.warn("Não foi possível limpar categorias legadas desta conta:", cleanupError.message);
+            }
+
             // Mescla compartilhamentos únicos
             const sharesOwner = sharesOwnerResult.data || [];
             const sharesCollab = sharesCollabResult.data || [];
+            sharedTaskNotifications = sharedNotificationsResult.data || [];
             const mergedSharesMap = new Map();
             sharesOwner.forEach(s => mergedSharesMap.set(String(s.id), s));
             sharesCollab.forEach(s => mergedSharesMap.set(String(s.id), s));
@@ -2016,11 +2341,21 @@ async function loadData() {
             localStorage.setItem("offline_category_shares", JSON.stringify(categoryShares));
 
             // Filtra os convites pendentes recebidos
-            pendingInvites = categoryShares.filter(s => s.collaborator_email === currentUser.email && s.accepted !== true);
-            const collaboratorShares = categoryShares.filter(s => s.collaborator_email === currentUser.email && s.accepted === true);
+            const signedInEmail = normalizeAccountEmail(currentUser.email);
+            pendingInvites = categoryShares.filter(s => normalizeAccountEmail(s.collaborator_email) === signedInEmail && s.accepted !== true);
+            const collaboratorShares = categoryShares.filter(s => normalizeAccountEmail(s.collaborator_email) === signedInEmail && s.accepted === true);
+            const acceptedSharedCategoryIds = new Set(collaboratorShares.map(share => String(share.category_id)));
+
+            // A política do banco permite ler a categoria de um convite pendente
+            // para exibir seu nome no sininho. Isso não significa que ela já
+            // deva entrar na navegação: somente categorias próprias ou aceitas.
+            dbCats = dbCats.filter(cat =>
+                String(cat.user_id) === String(currentUser.id)
+                || acceptedSharedCategoryIds.has(String(cat.id))
+            );
 
             // Busca as categorias compartilhadas comigo (aceitas e pendentes)
-            const allSharedShares = categoryShares.filter(s => s.collaborator_email === currentUser.email && s.owner_id !== currentUser.id);
+            const allSharedShares = categoryShares.filter(s => normalizeAccountEmail(s.collaborator_email) === signedInEmail && s.owner_id !== currentUser.id);
             const allSharedCatIds = allSharedShares.map(s => s.category_id);
             
             if (allSharedCatIds.length > 0) {
@@ -2038,9 +2373,9 @@ async function loadData() {
                         });
 
                         // 2. Mescla apenas as categorias que já foram aceitas
-                        const acceptedCatIds = collaboratorShares.map(s => s.category_id);
+                        const acceptedCatIds = collaboratorShares.map(s => String(s.category_id));
                         sharedCats.forEach(sc => {
-                            if (acceptedCatIds.includes(sc.id) && !dbCats.some(c => c.id === sc.id)) {
+                            if (acceptedCatIds.includes(String(sc.id)) && !dbCats.some(c => String(c.id) === String(sc.id))) {
                                 dbCats.push(sc);
                             }
                         });
@@ -2050,32 +2385,8 @@ async function loadData() {
                 }
             }
             
-            // Seed default categories ONLY if the user has absolutely ZERO categories in their account (active or inactive)
-            if (!errCount && count === 0) {
-                const seedCats = DEFAULT_CATEGORIES.map(name => ({ 
-                    name, 
-                    is_active: true,
-                    user_id: currentUser ? currentUser.id : null
-                }));
-                const { data: seededCats, error: errSeedCats } = await supabaseClient
-                    .from('categories')
-                    .upsert(seedCats, { onConflict: 'name,user_id' })
-                    .select();
-                if (errSeedCats) throw errSeedCats;
-                dbCats = seededCats;
-
-                // Seed default tasks (in our case it's empty by default, but kept for structure)
-                if (DEFAULT_TASKS.length > 0) {
-                    const seedTasks = DEFAULT_TASKS.map(t => ({
-                        title: t.title,
-                        category: t.category,
-                        is_recurring: t.is_recurring,
-                        is_active: true,
-                        user_id: currentUser ? currentUser.id : null
-                    }));
-                    await supabaseClient.from('tasks').insert(seedTasks);
-                }
-            }
+            // Contas novas começam vazias. Os padrões só são criados quando o
+            // usuário escolhe explicitamente "Restaurar Padrões do App".
             if (
                 localDataVersion !== versionAtFetchStart ||
                 requestVersionAtFetchStart !== dataLoadRequestVersion ||
@@ -2179,6 +2490,7 @@ async function loadData() {
                 id: task.id,
                 title: task.title,
                 category: task.category,
+                category_id: task.category_id || null,
                 is_recurring: task.is_recurring,
                 repeat_days: task.repeat_days || null,
                 context: typeof task.context === 'string' ? ( () => { try { return JSON.parse(task.context); } catch(e) { return {}; } } )() : task.context || null,
@@ -2268,31 +2580,10 @@ function loadDataOffline() {
     categoryShares = JSON.parse(localStorage.getItem("offline_category_shares")) || [];
     pendingInvites = [];
     let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
-    const isSeeded = localStorage.getItem("checklist_categories_seeded");
-    if (localCats.length === 0 && !isSeeded) {
-        localCats = DEFAULT_CATEGORIES.map((name, i) => ({
-            id: i + 1,
-            name: name,
-            is_active: true
-        }));
-        localStorage.setItem("checklist_categories_seeded", "true");
-        localStorage.setItem("offline_categories", JSON.stringify(localCats));
-    }
     categories = localCats.filter(c => c.is_active);
 
     // 2. Fetch tasks offline
     let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
-    if (localTasks.length === 0) {
-        localTasks = DEFAULT_TASKS.map((t, i) => ({
-            id: i + 1,
-            title: t.title,
-            category: t.category,
-            is_recurring: true,
-            is_active: true,
-            created_at: new Date().toISOString()
-        }));
-        localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
-    }
     allActiveTasks = localTasks || [];
 
     // 3. Fetch completions
@@ -2451,7 +2742,7 @@ function renderCategories() {
     } else {
         categories.forEach(cat => {
             const item = document.createElement("div");
-            item.className = "manage-item";
+            item.className = "manage-item category-manager-card";
             
             const hasType = !!cat.type;
             item.style.cssText = `
@@ -2472,6 +2763,7 @@ function renderCategories() {
             }
             
             const isOwner = currentUser && cat.user_id === currentUser.id;
+            item.classList.toggle("shared-category-readonly", !isOwner);
             let collabBtnHtml = "";
             if (currentUser) {
                 collabBtnHtml = `
@@ -2487,18 +2779,18 @@ function renderCategories() {
 
             item.innerHTML = `
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;">
-                    <input type="text" class="input-edit-cat-name" value="${escapeHTML(cat.name)}" style="flex: 1; min-width: 0; padding: 7px 10px; font-size: 0.82rem; font-weight: 600; background: rgba(0,0,0,0.15); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; outline: none; transition: border-color 0.2s;" placeholder="Nome da Categoria">
+                    <input type="text" class="input-edit-cat-name" value="${escapeHTML(cat.name)}" ${isOwner ? "" : "readonly"} style="flex: 1; min-width: 0; padding: 7px 10px; font-size: 0.82rem; font-weight: 600; background: rgba(0,0,0,0.15); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; outline: none; transition: border-color 0.2s;" placeholder="Nome da Categoria">
                     <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
                         ${collabBtnHtml}
-                        <button class="btn-delete-cat" data-id="${cat.id}" style="background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; transition: background-color 0.2s, color 0.2s;" onmouseover="this.style.color='#ef4444'; this.style.backgroundColor='rgba(239,68,68,0.1)';" onmouseout="this.style.color='var(--text-muted)'; this.style.backgroundColor='transparent';" title="Excluir">
-                            <i data-lucide="trash-2" style="width: 14px; height: 14px;"></i>
+                        <button class="btn-delete-cat ${isOwner ? "" : "btn-leave-shared-category"}" data-id="${cat.id}" style="background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; transition: background-color 0.2s, color 0.2s;" title="${isOwner ? "Excluir" : "Sair da categoria"}">
+                            <i data-lucide="${isOwner ? "trash-2" : "log-out"}" style="width: 14px; height: 14px;"></i>
                         </button>
                     </div>
                 </div>
                 <div style="display: flex; gap: 8px; width: 100%; align-items: center;">
                     <div style="display: flex; align-items: center; gap: 6px; flex: 1;">
                         <span style="font-size: 0.65rem; font-weight: 800; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.02em;">Tipo:</span>
-                        <select class="select-edit-cat-type" style="flex: 1; padding: 6px 10px; font-size: 0.78rem; background: rgba(0,0,0,0.15); color: var(--text-primary); border: 1px solid ${hasType ? 'var(--border-color)' : '#f59e0b'}; border-radius: 6px; outline: none; cursor: pointer; font-weight: 500;">
+                        <select class="select-edit-cat-type" ${isOwner ? "" : "disabled"} style="flex: 1; padding: 6px 10px; font-size: 0.78rem; background: rgba(0,0,0,0.15); color: var(--text-primary); border: 1px solid ${hasType ? 'var(--border-color)' : '#f59e0b'}; border-radius: 6px; outline: none; cursor: pointer; font-weight: 500;">
                             <option value="" disabled ${!selectedType ? "selected" : ""}>Não classificada</option>
                             ${typeOptions.map(t => `<option value="${t}" ${selectedType === t ? "selected" : ""}>${t}</option>`).join("")}
                         </select>
@@ -2506,14 +2798,15 @@ function renderCategories() {
                 </div>
                 <div class="edit-custom-type-wrapper" style="display: ${selectedType === "Outro" ? "flex" : "none"}; align-items: center; gap: 6px; width: 100%;">
                     <span style="font-size: 0.65rem; font-weight: 800; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.02em;">Custom:</span>
-                    <input type="text" class="input-edit-cat-custom-type" value="${escapeHTML(isCustomType ? cat.type : "")}" placeholder="Ex: Viagens" style="flex: 1; padding: 6px 10px; font-size: 0.78rem; background: rgba(0,0,0,0.15); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; outline: none;">
+                    <input type="text" class="input-edit-cat-custom-type" value="${escapeHTML(isCustomType ? cat.type : "")}" ${isOwner ? "" : "readonly"} placeholder="Ex: Viagens" style="flex: 1; padding: 6px 10px; font-size: 0.78rem; background: rgba(0,0,0,0.15); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; outline: none;">
                 </div>
             `;
             
             const btnDel = item.querySelector(".btn-delete-cat");
             btnDel.addEventListener("click", (e) => {
                 e.stopPropagation();
-                deleteCategory(cat.id);
+                if (isOwner) deleteCategory(cat.id);
+                else leaveSharedCategory(cat);
             });
 
             if (currentUser) {
@@ -2541,7 +2834,7 @@ function renderCategories() {
                 await updateCategoryFields(cat.id, nameVal, typeVal);
             };
 
-            selectType.addEventListener("change", () => {
+            if (isOwner) selectType.addEventListener("change", () => {
                 if (selectType.value === "Outro") {
                     customWrapper.style.display = "flex";
                 } else {
@@ -2550,8 +2843,10 @@ function renderCategories() {
                 }
             });
 
-            inputName.addEventListener("change", triggerUpdate);
-            inputCustom.addEventListener("change", triggerUpdate);
+            if (isOwner) {
+                inputName.addEventListener("change", triggerUpdate);
+                inputCustom.addEventListener("change", triggerUpdate);
+            }
             
             manageList.appendChild(item);
         });
@@ -2562,7 +2857,7 @@ function renderCategories() {
     const settingsClassifyList = document.getElementById("settings-unclassified-cats-list");
     
     if (settingsClassifyWrapper && settingsClassifyList) {
-        const unclassifiedCats = categories.filter(c => !c.type && c.is_active);
+        const unclassifiedCats = categories.filter(c => !c.type && c.is_active && currentUser && String(c.user_id) === String(currentUser.id));
         if (unclassifiedCats.length > 0) {
             settingsClassifyWrapper.style.display = "block";
             settingsClassifyList.innerHTML = unclassifiedCats.map(cat => `
@@ -2687,6 +2982,7 @@ function renderCategories() {
                     const latestLearned = JSON.parse(localStorage.getItem("user_function_associations")) || {};
                     delete latestLearned[term];
                     localStorage.setItem("user_function_associations", JSON.stringify(latestLearned));
+                    syncFunctionAssociationsToCloud(latestLearned);
                     renderCategories();
                 });
             });
@@ -2804,6 +3100,47 @@ function setupTaskTitleAutocomplete() {
     input.dataset.autocompleteReady = "true";
     let suggestions = [];
     let activeIndex = -1;
+    const autofillOffer = document.getElementById("task-autofill-offer");
+    const btnTitleOnly = document.getElementById("btn-autofill-title-only");
+    const btnAutofillDetails = document.getElementById("btn-autofill-details");
+
+    const hideAutofillOffer = () => {
+        autofillOffer?.classList.remove("open");
+        pendingAutocompleteDetailsTask = null;
+    };
+
+    const applyTaskDetails = task => {
+        if (!task) return;
+        const categorySelect = document.getElementById("task-category");
+        if (categorySelect && Array.from(categorySelect.options).some(option => option.value === task.category)) {
+            categorySelect.value = task.category;
+        }
+        const recurringSelect = document.getElementById("task-recurring");
+        const repeatDays = Array.isArray(task.repeat_days) ? task.repeat_days.map(Number) : [];
+        if (recurringSelect) {
+            recurringSelect.value = repeatDays.length > 0 ? "repeat" : (task.is_recurring ? "daily" : "once");
+            recurringSelect.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        document.querySelectorAll("#repeat-days-group .day-toggle").forEach(button => {
+            button.classList.toggle("active", repeatDays.includes(Number(button.dataset.day)));
+        });
+        let context = task.context || {};
+        if (typeof context === "string") {
+            try { context = JSON.parse(context); } catch (error) { context = {}; }
+        }
+        const shifts = Array.isArray(context.turnos) ? context.turnos : [];
+        document.querySelectorAll("#add-shift-selector .shift-toggle-btn").forEach(button => {
+            button.classList.toggle("active", shifts.includes(button.dataset.shift));
+        });
+        const importantInput = document.getElementById("task-important");
+        if (importantInput) importantInput.checked = context.important === true || context.important === "true";
+    };
+
+    btnTitleOnly?.addEventListener("click", hideAutofillOffer);
+    btnAutofillDetails?.addEventListener("click", () => {
+        applyTaskDetails(pendingAutocompleteDetailsTask);
+        hideAutofillOffer();
+    });
 
     const closeSuggestions = () => {
         dropdown.classList.remove("open");
@@ -2818,6 +3155,8 @@ function setupTaskTitleAutocomplete() {
         input.value = task.title;
         input.dispatchEvent(new Event("change", { bubbles: true }));
         closeSuggestions();
+        pendingAutocompleteDetailsTask = task;
+        autofillOffer?.classList.add("open");
         input.focus();
         input.setSelectionRange(input.value.length, input.value.length);
     };
@@ -2855,6 +3194,9 @@ function setupTaskTitleAutocomplete() {
     };
 
     input.addEventListener("input", renderSuggestions);
+    input.addEventListener("input", () => {
+        if (pendingAutocompleteDetailsTask && input.value !== pendingAutocompleteDetailsTask.title) hideAutofillOffer();
+    });
     input.addEventListener("focus", () => {
         if (input.value.trim().length >= 2) renderSuggestions();
     });
@@ -2898,6 +3240,11 @@ function renderChecklist() {
     } else {
         tasksListEl.classList.remove("edit-mode");
     }
+
+    const needsCategoryOnboarding = categories.length === 0;
+    emptyStateEl.classList.toggle("category-onboarding-active", needsCategoryOnboarding);
+    updateCategoryOnboardingPlayback(needsCategoryOnboarding);
+    updateTaskCreationOnboarding();
 
     if (filteredTasks.length === 0) {
         emptyStateEl.classList.remove("hidden");
@@ -3084,9 +3431,40 @@ function renderChecklist() {
     }
 }
 
+function showCategoryOnboardingSlide(index) {
+    const slides = Array.from(document.querySelectorAll(".category-onboarding-slide"));
+    const dots = Array.from(document.querySelectorAll(".category-onboarding-dots span"));
+    if (!slides.length) return;
+    categoryOnboardingSlide = ((index % slides.length) + slides.length) % slides.length;
+    slides.forEach((slide, slideIndex) => slide.classList.toggle("active", slideIndex === categoryOnboardingSlide));
+    dots.forEach((dot, dotIndex) => dot.classList.toggle("active", dotIndex === categoryOnboardingSlide));
+}
+
+function updateCategoryOnboardingPlayback(shouldPlay) {
+    if (!shouldPlay) {
+        if (categoryOnboardingTimer) clearInterval(categoryOnboardingTimer);
+        categoryOnboardingTimer = null;
+        categoryOnboardingSlide = 0;
+        return;
+    }
+    showCategoryOnboardingSlide(categoryOnboardingSlide);
+    if (!categoryOnboardingTimer) {
+        categoryOnboardingTimer = setInterval(() => showCategoryOnboardingSlide(categoryOnboardingSlide + 1), 3200);
+    }
+}
+
+function updateTaskCreationOnboarding() {
+    if (!taskCreationOnboarding) return;
+    const hasActiveTask = (allActiveTasks || []).some(task => task.is_active !== false);
+    const shouldShow = categories.length > 0 && !hasActiveTask && !isHistoryMode;
+    taskCreationOnboarding.hidden = !shouldShow;
+    document.body.classList.toggle("task-onboarding-visible", shouldShow);
+}
+
 // Cria e configura o elemento DOM de um card de tarefa reutilizável
 function createTaskDOMElement(task) {
     const taskEl = document.createElement("div");
+    const canCheckTask = canCurrentUserCheckTask(task);
     
     // Exception for completing night shift tasks of the previous day during the morning (before 12 PM)
     const now = new Date();
@@ -3100,7 +3478,7 @@ function createTaskDOMElement(task) {
         isPastNightShiftException = true;
     }
     
-    taskEl.className = `task-item ${task.completed ? 'completed' : ''} ${isPastNightShiftException ? 'editable-past-night' : ''}`;
+    taskEl.className = `task-item ${task.completed ? 'completed' : ''} ${isPastNightShiftException ? 'editable-past-night' : ''} ${canCheckTask ? '' : 'check-locked'}`;
     taskEl.dataset.id = task.id;
 
     // Estilo dinâmico da categoria
@@ -3119,9 +3497,9 @@ function createTaskDOMElement(task) {
         </div>
         <!-- Main content of the task (on top) -->
         <div class="task-item-foreground">
-            <div class="task-checkbox-wrapper">
+            <div class="task-checkbox-wrapper" ${canCheckTask ? '' : `title="Somente ${escapeHTML(task.assigned_to)} pode dar check" aria-disabled="true"`}>
                 <div class="task-checkbox">
-                    <i data-lucide="check"></i>
+                    <i data-lucide="${task.completed || canCheckTask ? 'check' : 'lock-keyhole'}"></i>
                 </div>
             </div>
             <div class="task-content">
@@ -3510,6 +3888,10 @@ async function toggleTask(id) {
     
     let isPastNightShiftException = false;
     let task = tasks.find(t => String(t.id) === String(id));
+    if (!canCurrentUserCheckTask(task)) {
+        showTaskCheckPermissionNotice(task);
+        return;
+    }
     const turnos = (task && task.context && task.context.turnos) ? task.context.turnos : [];
     
     if (selectedDate === yesterdayStr && now.getHours() < 12 && turnos.includes("Noite")) {
@@ -3608,6 +3990,8 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
         is_active: true,
         created_at: createdAt
     };
+    const selectedCategory = categories.find(cat => cat.name === category);
+    if (selectedCategory && !isTemporaryId(selectedCategory.id)) newTask.category_id = selectedCategory.id;
     if (repeatDays) newTask.repeat_days = repeatDays;
     if (context && Object.keys(context).length > 0) newTask.context = context;
     if (assignedTo) newTask.assigned_to = assignedTo;
@@ -3625,7 +4009,7 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
 
     // 2. ENVIA PARA A NUVEM EM SEGUNDO PLANO (Sem bloquear a interface do usuário!)
     if (supabaseClient && currentUser) {
-        supabaseClient.from('tasks').insert(newTask).select()
+        insertTaskWithCategoryFallback(newTask)
             .then(({ data, error }) => {
                 if (error) {
                     console.warn("Falha ao salvar tarefa na nuvem. Mantendo localmente.", error.message);
@@ -3640,12 +4024,30 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
                     let currentLocalTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
                     currentLocalTasks = currentLocalTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
                     localStorage.setItem("offline_tasks", JSON.stringify(currentLocalTasks));
+                    if (realTask.category_id) {
+                        supabaseClient.functions.invoke("send-task-push", { body: { task_id: realTask.id } })
+                            .then(({ error: pushError }) => {
+                                if (pushError) console.warn("A tarefa foi salva, mas o push não pôde ser enviado:", pushError.message);
+                            })
+                            .catch(pushError => console.warn("Erro ao solicitar push da tarefa:", pushError));
+                    }
                 }
             })
             .catch(err => {
                 console.error("Erro assíncrono ao adicionar tarefa:", err);
             });
     }
+}
+
+async function insertTaskWithCategoryFallback(taskPayload) {
+    let result = await supabaseClient.from('tasks').insert(taskPayload).select();
+    if (result.error && taskPayload.category_id && /category_id|schema cache/i.test(result.error.message || "")) {
+        const legacyPayload = { ...taskPayload };
+        delete legacyPayload.category_id;
+        console.warn("A migração de colaboração ainda não foi aplicada; salvando a tarefa no formato antigo.");
+        result = await supabaseClient.from('tasks').insert(legacyPayload).select();
+    }
+    return result;
 }
 
 async function addTaskOffline(title, category, isRecurring, id, createdAt, repeatDays, context, assignedTo) {
@@ -4125,7 +4527,7 @@ function renderCollaborators(cat) {
     collaboratorsList.appendChild(ownerItem);
     
     // Lista os colaboradores da categoria
-    const shares = categoryShares.filter(s => s.category_id === cat.id);
+    const shares = categoryShares.filter(s => String(s.category_id) === String(cat.id) && s.accepted === true);
     shares.forEach(share => {
         const item = document.createElement("div");
         item.className = "manage-item";
@@ -4200,6 +4602,7 @@ async function inviteCollaborator(catId, email) {
         owner_email: currentUser.email,
         collaborator_email: cleanEmail
     };
+    requestCollaborationNotificationPermission();
     
     if (btn) {
         btn.disabled = true;
@@ -4299,7 +4702,38 @@ function renderNotifications() {
         });
     }
 
-    // 2. Renderizar notificações estáticas do sistema
+    // 2. Tarefas recebidas em categorias compartilhadas
+    (sharedTaskNotifications || []).forEach(notification => {
+        const item = document.createElement("div");
+        const isUnread = !notification.read_at;
+        const createdAt = notification.created_at ? new Date(notification.created_at) : null;
+        const timeLabel = createdAt && !Number.isNaN(createdAt.getTime())
+            ? createdAt.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
+            : "";
+        item.className = `shared-task-notification-item ${isUnread ? "unread" : ""}`;
+        item.innerHTML = `
+            <div class="shared-task-notification-icon"><i data-lucide="list-checks"></i></div>
+            <div class="shared-task-notification-copy">
+                <strong>Nova tarefa compartilhada</strong>
+                <span>“${escapeHTML(notification.task_title || "Nova tarefa")}” foi adicionada${notification.category_name ? ` em <b>${escapeHTML(notification.category_name)}</b>` : ""}.</span>
+                ${notification.assigned_to ? `<small>Atribuída a ${escapeHTML(notification.assigned_to)}${timeLabel ? ` • ${escapeHTML(timeLabel)}` : ""}</small>` : (timeLabel ? `<small>${escapeHTML(timeLabel)}</small>` : "")}
+            </div>
+        `;
+        item.setAttribute("role", "button");
+        item.setAttribute("tabindex", "0");
+        item.title = "Abrir esta tarefa no checklist";
+        const openTask = () => focusSharedTaskFromNotification(notification);
+        item.addEventListener("click", openTask);
+        item.addEventListener("keydown", event => {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                openTask();
+            }
+        });
+        notificationsListContainer.appendChild(item);
+    });
+
+    // 3. Renderizar notificações estáticas do sistema
     const staticNotifications = [
         {
             icon: "cloud-lightning",
@@ -4342,8 +4776,56 @@ function renderNotifications() {
     lucide.createIcons();
 }
 
+function findRenderedTaskElement(taskId) {
+    return Array.from(tasksListEl.querySelectorAll(".task-item"))
+        .find(item => String(item.dataset.id) === String(taskId)) || null;
+}
+
+function highlightRenderedTask(taskId) {
+    const taskElement = findRenderedTaskElement(taskId);
+    if (!taskElement) return false;
+    taskElement.scrollIntoView({ behavior: "smooth", block: "center" });
+    taskElement.classList.remove("shared-task-focus");
+    void taskElement.offsetWidth;
+    taskElement.classList.add("shared-task-focus");
+    setTimeout(() => taskElement.classList.remove("shared-task-focus"), 2000);
+    return true;
+}
+
+async function focusSharedTaskFromNotification(notification) {
+    if (!notification || !notification.task_id) return;
+    closeModal(modalNotifications);
+    currentFilter = "all";
+    renderCategories();
+    renderChecklist();
+
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    if (highlightRenderedTask(notification.task_id)) return;
+
+    let targetTask = (allActiveTasks || []).find(task => String(task.id) === String(notification.task_id));
+    if (!targetTask && supabaseClient && currentUser) {
+        const { data } = await supabaseClient.from("tasks").select("*").eq("id", notification.task_id).maybeSingle();
+        targetTask = data || null;
+    }
+
+    if (targetTask && targetTask.created_at) {
+        selectedDate = extractDateFromTimestamp(targetTask.created_at);
+        updateDateDisplay();
+        await loadChecklistAndProgress();
+        await new Promise(resolve => setTimeout(resolve, 180));
+        if (highlightRenderedTask(notification.task_id)) return;
+    }
+
+    // Tarefas pendentes não recorrentes podem ter rolado para o dia atual.
+    selectedDate = getLocalDateString(new Date());
+    updateDateDisplay();
+    await loadChecklistAndProgress();
+    setTimeout(() => highlightRenderedTask(notification.task_id), 220);
+}
+
 async function acceptInvitation(shareId) {
     if (!supabaseClient) return;
+    requestCollaborationNotificationPermission();
     try {
         const { error } = await supabaseClient
             .from('category_shares')
@@ -4358,6 +4840,12 @@ async function acceptInvitation(shareId) {
     } catch (err) {
         console.error("Erro ao aceitar convite:", err);
         alert("Erro ao aceitar convite: " + err.message);
+    }
+}
+
+function requestCollaborationNotificationPermission() {
+    if (areNotificationsEnabled() && "Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission().catch(() => {});
     }
 }
 
@@ -4395,7 +4883,7 @@ function updateTaskAssigneeDropdown(categoryName, selectEl, groupEl) {
     if (shares.length === 0) {
         // Not a shared category
         groupEl.style.display = "none";
-        selectEl.innerHTML = '<option value="">Todos (Sem atribuição)</option>';
+        selectEl.innerHTML = '<option value="">Ambos</option>';
         return;
     }
 
@@ -4409,7 +4897,7 @@ function updateTaskAssigneeDropdown(categoryName, selectEl, groupEl) {
     // Todos Option
     const optAll = document.createElement("option");
     optAll.value = "";
-    optAll.textContent = "Todos (Sem atribuição)";
+    optAll.textContent = "Ambos";
     selectEl.appendChild(optAll);
     
     // Owner Option (Creator)
@@ -4421,7 +4909,11 @@ function updateTaskAssigneeDropdown(categoryName, selectEl, groupEl) {
     selectEl.appendChild(optOwner);
     
     // Collaborator Options
+    const addedEmails = new Set([normalizeAccountEmail(ownerEmail)]);
     shares.forEach(share => {
+        const normalizedEmail = normalizeAccountEmail(share.collaborator_email);
+        if (!normalizedEmail || addedEmails.has(normalizedEmail)) return;
+        addedEmails.add(normalizedEmail);
         const optCollab = document.createElement("option");
         optCollab.value = share.collaborator_email;
         optCollab.textContent = share.collaborator_email;
@@ -4567,58 +5059,132 @@ async function updateCategoryFields(id, newName, newType) {
 
 async function deleteCategory(id) {
     localDataVersion++;
-    if (confirm("Deseja mesmo excluir este local? As tarefas dele não aparecerão hoje. O histórico passado será mantido.")) {
-        // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
-        const cat = categories.find(c => String(c.id) === String(id));
-        categories = categories.filter(c => String(c.id) !== String(id));
-        
-        let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
-        localCats = localCats.map(c => {
-            if (String(c.id) === String(id)) return { ...c, is_active: false };
-            return c;
-        });
-        localStorage.setItem("offline_categories", JSON.stringify(localCats));
+    const cat = categories.find(c => String(c.id) === String(id));
+    if (!cat) return;
+    if (!confirm(`Deseja excluir a categoria “${cat.name}”? Todas as tarefas e conclusões relacionadas a ela também serão excluídas permanentemente.`)) return;
 
-        if (cat && currentFilter === cat.name) {
-            currentFilter = "all";
+    try {
+        if (supabaseClient && currentUser && !isTemporaryId(id)) {
+            // Remove tarefas legadas que ainda não possuem category_id.
+            const { error: legacyTasksError } = await supabaseClient
+                .from("tasks")
+                .delete()
+                .is("category_id", null)
+                .eq("user_id", currentUser.id)
+                .eq("category", cat.name);
+            if (legacyTasksError) throw legacyTasksError;
+
+            // Remove convites/participações antes da categoria para funcionar
+            // também em bancos antigos cuja FK ainda não possua cascade.
+            const { error: sharesError } = await supabaseClient
+                .from("category_shares")
+                .delete()
+                .eq("category_id", id);
+            if (sharesError) throw sharesError;
+
+            // A FK tasks.category_id usa ON DELETE CASCADE: ao remover a
+            // categoria, tarefas vinculadas e seus registros dependentes saem juntos.
+            const { error: categoryError } = await supabaseClient
+                .from("categories")
+                .delete()
+                .eq("id", id);
+            if (categoryError) throw categoryError;
         }
+
+        removeCategoryAndTasksFromLocalState(cat);
         renderCategories();
         renderChecklist();
         updateProgress();
+    } catch (error) {
+        console.error("Erro ao excluir categoria e tarefas:", error);
+        alert("Não foi possível excluir a categoria: " + error.message);
+        await loadChecklistAndProgress();
+    }
+}
 
-        // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
-        if (supabaseClient && currentUser && !isTemporaryId(id)) {
-            supabaseClient.from('categories').update({ is_active: false }).eq('id', id)
-                .then(({ error }) => {
-                    if (error) {
-                        console.warn("Erro ao deletar categoria no Supabase:", error.message);
-                    }
-                })
-                .catch(err => {
-                    console.error("Erro assíncrono ao deletar categoria:", err);
-                });
-        }
+function removeCategoryAndTasksFromLocalState(cat) {
+    const belongsToCategory = task =>
+        String(task.category_id || "") === String(cat.id)
+        || (!task.category_id && task.category === cat.name);
+    const affectedIds = new Set(
+        (JSON.parse(localStorage.getItem("offline_tasks")) || [])
+            .filter(belongsToCategory)
+            .map(task => String(task.id))
+    );
+
+    categories = categories.filter(item => String(item.id) !== String(cat.id));
+    tasks = tasks.filter(task => !belongsToCategory(task));
+    allActiveTasks = allActiveTasks.filter(task => !belongsToCategory(task));
+
+    const localCats = (JSON.parse(localStorage.getItem("offline_categories")) || [])
+        .filter(item => String(item.id) !== String(cat.id));
+    const localTasks = (JSON.parse(localStorage.getItem("offline_tasks")) || [])
+        .filter(task => !belongsToCategory(task));
+    const localCompletions = (JSON.parse(localStorage.getItem("offline_completions")) || [])
+        .filter(completion => !affectedIds.has(String(completion.task_id)));
+    localStorage.setItem("offline_categories", JSON.stringify(localCats));
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+    localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
+
+    const completionQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+    Object.keys(completionQueue).forEach(key => {
+        if ([...affectedIds].some(taskId => key.startsWith(`${taskId}_`))) delete completionQueue[key];
+    });
+    localStorage.setItem("offline_completions_queue", JSON.stringify(completionQueue));
+
+    const updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+    affectedIds.forEach(taskId => delete updatesQueue[taskId]);
+    localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
+
+    if (currentFilter === cat.name) currentFilter = "all";
+}
+
+async function leaveSharedCategory(cat) {
+    if (!supabaseClient || !currentUser || !cat) return;
+    const myEmail = normalizeAccountEmail(currentUser.email);
+    const share = categoryShares.find(item =>
+        String(item.category_id) === String(cat.id)
+        && normalizeAccountEmail(item.collaborator_email) === myEmail
+    );
+    if (!share) {
+        alert("Não foi possível localizar sua participação nesta categoria.");
+        return;
+    }
+    if (!confirm(`Deseja sair da categoria “${cat.name}”? Você poderá ser convidado novamente pelo administrador.`)) return;
+
+    try {
+        const { error } = await supabaseClient
+            .from("category_shares")
+            .delete()
+            .eq("id", share.id);
+        if (error) throw error;
+
+        categoryShares = categoryShares.filter(item => String(item.id) !== String(share.id));
+        categories = categories.filter(item => String(item.id) !== String(cat.id));
+        if (currentFilter === cat.name) currentFilter = "all";
+
+        const localCats = (JSON.parse(localStorage.getItem("offline_categories")) || [])
+            .filter(item => String(item.id) !== String(cat.id));
+        localStorage.setItem("offline_categories", JSON.stringify(localCats));
+        localStorage.setItem("offline_category_shares", JSON.stringify(categoryShares));
+
+        renderCategories();
+        renderChecklist();
+        updateProgress();
+        alert("Você saiu da categoria compartilhada.");
+        await loadChecklistAndProgress();
+    } catch (error) {
+        console.error("Erro ao sair da categoria compartilhada:", error);
+        alert("Não foi possível sair da categoria: " + error.message);
     }
 }
 
 function deleteCategoryOffline(id) {
     localDataVersion++;
-    let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
-    localCats = localCats.map(c => {
-        if (String(c.id) === String(id)) return { ...c, is_active: false };
-        return c;
-    });
-    localStorage.setItem("offline_categories", JSON.stringify(localCats));
-    
-    loadDataOffline();
-    renderCategories();
-    
     const cat = categories.find(c => String(c.id) === String(id));
-    if (cat && currentFilter === cat.name) {
-        currentFilter = "all";
-    }
-    
-    loadDataOffline();
+    if (!cat) return;
+    removeCategoryAndTasksFromLocalState(cat);
+    renderCategories();
     renderChecklist();
     updateProgress();
 }
@@ -4786,7 +5352,7 @@ function escapeHTML(str) {
         .replace(/'/g, "&#039;");
 }
 
-function shareReport() {
+async function shareReport() {
     if (tasks.length === 0) {
         alert("Adicione tarefas antes de exportar um relatório.");
         return;
@@ -4817,24 +5383,30 @@ function shareReport() {
         }
     });
 
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(reportText).then(() => {
-            const encodedText = encodeURIComponent(reportText);
-            const whatsappUrl = `https://api.whatsapp.com/send?text=${encodedText}`;
-            alert("Relatório copiado para a área de transferência! Abrindo o WhatsApp...");
-            window.location.href = whatsappUrl;
-        }).catch(err => {
-            console.error("Falha ao copiar relatório: ", err);
-            const encodedText = encodeURIComponent(reportText);
-            const whatsappUrl = `https://api.whatsapp.com/send?text=${encodedText}`;
-            window.location.href = whatsappUrl;
-        });
-    } else {
-        // Fallback direto se o clipboard não for suportado ou não estiver em contexto seguro (HTTPS)
-        console.warn("Clipboard API indisponível (HTTP ou restrição). Abrindo WhatsApp direto.");
-        const encodedText = encodeURIComponent(reportText);
-        const whatsappUrl = `https://api.whatsapp.com/send?text=${encodedText}`;
-        window.location.href = whatsappUrl;
+    const shareData = {
+        title: `Checklist de ${formattedDateStr}`,
+        text: reportText.trim()
+    };
+
+    if (typeof navigator.share === "function") {
+        try {
+            await navigator.share(shareData);
+            return;
+        } catch (error) {
+            // Fechar o menu nativo não é um erro e não deve disparar o fallback.
+            if (error?.name === "AbortError") return;
+            console.warn("Compartilhamento nativo indisponível; usando cópia como alternativa.", error);
+        }
+    }
+
+    // Alternativa para computadores e navegadores sem suporte ao Web Share.
+    try {
+        if (!navigator.clipboard?.writeText) throw new Error("Clipboard API indisponível");
+        await navigator.clipboard.writeText(shareData.text);
+        alert("Checklist copiado! Agora você pode colar onde desejar.");
+    } catch (error) {
+        console.error("Não foi possível compartilhar ou copiar o checklist:", error);
+        alert("Seu navegador não permite compartilhar diretamente. Tente abrir o app instalado ou usar HTTPS.");
     }
 }
 
@@ -5037,12 +5609,18 @@ function setupSupabaseAuth() {
 
         // Ignora renovações de token e eventos secundários para evitar re-renderizações desnecessárias
         if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
-            if (session) currentUser = session.user;
+            if (session) {
+                currentUser = session.user;
+                learningCloudState = "idle";
+                reportsCloudState = "idle";
+            }
             return;
         }
 
         if (session) {
             currentUser = session.user;
+            learningCloudState = "idle";
+            reportsCloudState = "idle";
             document.getElementById("auth-container").style.display = "none";
             document.querySelector(".app-container").style.display = "flex";
             
@@ -5053,9 +5631,26 @@ function setupSupabaseAuth() {
             await loadUserProfile();
             
             await loadChecklistAndProgress();
+            subscribeToCollaborationUpdates();
+            updateNotificationsSettingUI();
+            if (areNotificationsEnabled() && "Notification" in window && Notification.permission === "granted") {
+                ensurePushSubscription().catch(error => console.warn("Não foi possível restaurar a inscrição Web Push:", error.message));
+            }
+            const notificationTaskId = new URLSearchParams(window.location.search).get("notification_task");
+            if (notificationTaskId) {
+                history.replaceState({}, "", window.location.pathname);
+                setTimeout(() => focusSharedTaskFromNotification({ task_id: notificationTaskId }), 250);
+            }
             lucide.createIcons();
         } else {
+            if (collaborationRealtimeChannel && supabaseClient) {
+                supabaseClient.removeChannel(collaborationRealtimeChannel);
+                collaborationRealtimeChannel = null;
+            }
+            if (currentUser) await removePushSubscription().catch(() => {});
             currentUser = null;
+            learningCloudState = "idle";
+            reportsCloudState = "idle";
             document.getElementById("auth-container").style.display = "flex";
             document.querySelector(".app-container").style.display = "none";
             
@@ -5063,6 +5658,9 @@ function setupSupabaseAuth() {
             localStorage.removeItem("offline_categories");
             localStorage.removeItem("offline_tasks");
             localStorage.removeItem("offline_completions");
+            localStorage.removeItem("offline_category_shares");
+            localStorage.removeItem("offline_completions_queue");
+            localStorage.removeItem("offline_task_updates_queue");
             
             tasks = [];
             categories = [];
@@ -5116,9 +5714,14 @@ async function syncOfflineDataToCloud() {
             if (pending.repeat_days) newTaskPayload.repeat_days = pending.repeat_days;
             if (pending.context) newTaskPayload.context = pending.context;
             if (pending.assigned_to) newTaskPayload.assigned_to = pending.assigned_to;
+            if (pending.category_id) newTaskPayload.category_id = pending.category_id;
+            if (!newTaskPayload.category_id) {
+                const matchingCategory = categories.find(cat => cat.name === pending.category && !isTemporaryId(cat.id));
+                if (matchingCategory) newTaskPayload.category_id = matchingCategory.id;
+            }
             newTaskPayload.user_id = currentUser.id;
 
-            const { data, error } = await supabaseClient.from('tasks').insert(newTaskPayload).select();
+            const { data, error } = await insertTaskWithCategoryFallback(newTaskPayload);
             if (error) throw error;
             if (data && data.length > 0) {
                 const realTask = data[0];
@@ -6184,7 +6787,46 @@ function saveLearnedFunctionAssociation(term, functionId) {
     const learned = JSON.parse(localStorage.getItem("user_function_associations")) || {};
     learned[normalizedTerm] = functionId;
     localStorage.setItem("user_function_associations", JSON.stringify(learned));
+    syncFunctionAssociationsToCloud(learned);
     return true;
+}
+
+async function loadFunctionAssociationsFromCloud() {
+    if (!supabaseClient || !currentUser || learningCloudState !== "idle") return;
+    learningCloudState = "loading";
+    try {
+        const { data, error } = await supabaseClient
+            .from("user_preferences")
+            .select("function_associations")
+            .eq("user_id", currentUser.id)
+            .maybeSingle();
+        if (error) throw error;
+        const local = JSON.parse(localStorage.getItem("user_function_associations")) || {};
+        const cloud = data?.function_associations || {};
+        const merged = { ...cloud, ...local };
+        localStorage.setItem("user_function_associations", JSON.stringify(merged));
+        learningCloudState = "ready";
+        if (Object.keys(local).length > 0) syncFunctionAssociationsToCloud(merged);
+    } catch (error) {
+        learningCloudState = "unavailable";
+        console.warn("Sincronização de aprendizados indisponível; usando armazenamento local.", error.message);
+    }
+}
+
+async function syncFunctionAssociationsToCloud(associations) {
+    if (!supabaseClient || !currentUser || learningCloudState === "unavailable") return;
+    try {
+        const { error } = await supabaseClient.from("user_preferences").upsert({
+            user_id: currentUser.id,
+            function_associations: associations,
+            updated_at: new Date().toISOString()
+        }, { onConflict: "user_id" });
+        if (error) throw error;
+        learningCloudState = "ready";
+    } catch (error) {
+        learningCloudState = "unavailable";
+        console.warn("Não foi possível enviar os aprendizados para a nuvem.", error.message);
+    }
 }
 
 function getLearnedTaskFunction(normalizedTitle) {
@@ -6257,6 +6899,124 @@ function classifyTaskFunction(task) {
 
 function formatReportFunctionCount(functionInfo, count) {
     return `**${count} ${count === 1 ? functionInfo.singular : functionInfo.plural}**`;
+}
+
+function getReportPeriodType(days) {
+    return days === 365 ? "yearly" : (days === 30 ? "monthly" : "weekly");
+}
+
+function getReportPeriodLabel(days) {
+    return days === 365 ? "Anual" : (days === 30 ? "Mensal" : "Semanal");
+}
+
+function getLocalReportHistory() {
+    const history = JSON.parse(localStorage.getItem("smart_report_history")) || [];
+    return Array.isArray(history) ? history : [];
+}
+
+async function saveSmartReportSnapshot({ days, periods, html, rate, completed, planned }) {
+    const periodType = getReportPeriodType(days);
+    const key = `${periodType}_${periods.currentStartStr}_${periods.currentEndStr}`;
+    const snapshot = {
+        key,
+        days,
+        periodType,
+        periodLabel: getReportPeriodLabel(days),
+        periodStart: periods.currentStartStr,
+        periodEnd: periods.currentEndStr,
+        generatedAt: new Date().toISOString(),
+        rate,
+        completed,
+        planned,
+        html
+    };
+    const history = getLocalReportHistory().filter(report => report.key !== key);
+    history.unshift(snapshot);
+    localStorage.setItem("smart_report_history", JSON.stringify(history.slice(0, 30)));
+
+    if (!supabaseClient || !currentUser || reportsCloudState === "unavailable") return;
+    try {
+        const { error } = await supabaseClient.from("smart_reports").upsert({
+            user_id: currentUser.id,
+            period_type: periodType,
+            period_start: periods.currentStartStr,
+            period_end: periods.currentEndStr,
+            report_html: html,
+            report_data: { days, rate, completed, planned, periodLabel: snapshot.periodLabel },
+            generated_at: snapshot.generatedAt
+        }, { onConflict: "user_id,period_type,period_start,period_end" });
+        if (error) throw error;
+        reportsCloudState = "ready";
+    } catch (error) {
+        reportsCloudState = "unavailable";
+        console.warn("Histórico de relatórios indisponível na nuvem; mantendo cópia local.", error.message);
+    }
+}
+
+async function loadReportHistoryFromCloud() {
+    let history = getLocalReportHistory();
+    if (supabaseClient && currentUser && reportsCloudState !== "unavailable") {
+        try {
+            const { data, error } = await supabaseClient
+                .from("smart_reports")
+                .select("period_type,period_start,period_end,report_html,report_data,generated_at")
+                .order("generated_at", { ascending: false })
+                .limit(30);
+            if (error) throw error;
+            const cloudHistory = (data || []).map(report => ({
+                key: `${report.period_type}_${report.period_start}_${report.period_end}`,
+                days: report.report_data?.days || (report.period_type === "yearly" ? 365 : report.period_type === "monthly" ? 30 : 7),
+                periodType: report.period_type,
+                periodLabel: report.report_data?.periodLabel || report.period_type,
+                periodStart: report.period_start,
+                periodEnd: report.period_end,
+                generatedAt: report.generated_at,
+                rate: report.report_data?.rate || 0,
+                completed: report.report_data?.completed || 0,
+                planned: report.report_data?.planned || 0,
+                html: report.report_html
+            }));
+            const merged = new Map();
+            [...cloudHistory, ...history].forEach(report => {
+                if (!merged.has(report.key)) merged.set(report.key, report);
+            });
+            history = Array.from(merged.values()).sort((a, b) => new Date(b.generatedAt) - new Date(a.generatedAt)).slice(0, 30);
+            localStorage.setItem("smart_report_history", JSON.stringify(history));
+            reportsCloudState = "ready";
+        } catch (error) {
+            reportsCloudState = "unavailable";
+            console.warn("Carregamento do histórico na nuvem indisponível; usando cópias locais.", error.message);
+        }
+    }
+    return history;
+}
+
+async function loadAndRenderReportHistory(containerEl, titleEl) {
+    containerEl.innerHTML = '<span style="color:var(--text-secondary);font-size:.8rem;">Carregando histórico…</span>';
+    const history = await loadReportHistoryFromCloud();
+    if (history.length === 0) {
+        containerEl.innerHTML = '<div class="report-history-empty"><i data-lucide="archive"></i><strong>Nenhum relatório arquivado</strong><span>Os próximos relatórios oficiais serão salvos automaticamente aqui.</span></div>';
+        if (window.lucide) window.lucide.createIcons();
+        return;
+    }
+    containerEl.innerHTML = `<div class="report-history-list">${history.map((report, index) => `
+        <button type="button" class="report-history-item" data-index="${index}">
+            <span><strong>${escapeHTML(report.periodLabel)}</strong><small>${escapeHTML(report.periodStart.split('-').reverse().join('/'))} a ${escapeHTML(report.periodEnd.split('-').reverse().join('/'))}</small></span>
+            <span class="report-history-rate">${report.rate}%<i data-lucide="chevron-right"></i></span>
+        </button>`).join("")}</div>`;
+    containerEl.querySelectorAll(".report-history-item").forEach(button => {
+        button.addEventListener("click", () => {
+            const report = history[Number(button.dataset.index)];
+            if (!report) return;
+            activeSmartReportDays = report.days;
+            if (btnSaveSmartReport) btnSaveSmartReport.style.display = "inline-flex";
+            currentReportCorrectionTasks = {};
+            if (titleEl) titleEl.innerHTML = `<i data-lucide="archive" style="width:16px;height:16px;"></i> Relatório ${escapeHTML(report.periodLabel)} Arquivado`;
+            containerEl.innerHTML = report.html;
+            if (window.lucide) window.lucide.createIcons();
+        });
+    });
+    if (window.lucide) window.lucide.createIcons();
 }
 
 async function loadAndRenderReport(days, containerEl) {
@@ -6392,9 +7152,14 @@ async function loadAndRenderReport(days, containerEl) {
 
     // 5.1. Ler a função executada dentro de cada categoria/setor.
     const functionStatsByCategory = {};
+    currentReportCorrectionTasks = {};
     currentPlannedOccurrences.forEach(occurrence => {
         if (!currentCompletionKeys.has(occurrence.key)) return;
         const categoryName = occurrence.task.category || "Sem categoria";
+        if (!currentReportCorrectionTasks[categoryName]) currentReportCorrectionTasks[categoryName] = [];
+        if (!currentReportCorrectionTasks[categoryName].some(task => String(task.id) === String(occurrence.task.id))) {
+            currentReportCorrectionTasks[categoryName].push(occurrence.task);
+        }
         const functionInfo = classifyTaskFunction(occurrence.task);
         if (!functionStatsByCategory[categoryName]) functionStatsByCategory[categoryName] = {};
         if (!functionStatsByCategory[categoryName][functionInfo.singular]) {
@@ -6411,7 +7176,8 @@ async function loadAndRenderReport(days, containerEl) {
             const functions = Object.values(stats)
                 .sort((a, b) => b.count - a.count)
                 .map(item => formatReportFunctionCount(item, item.count));
-            return `**${categoryName}**${categoryType}: ${functions.join(", ")}.`;
+            return `**${categoryName}**${categoryType}: ${functions.join(", ")}.
+                <button type="button" class="btn-correct-report-function" data-category="${encodeURIComponent(categoryName)}"><i data-lucide="pencil"></i> Corrigir</button>`;
         });
 
     // 6. Principais destaques (Máximo 3)
@@ -6597,8 +7363,22 @@ async function loadAndRenderReport(days, containerEl) {
         </div>
     `;
 
-    containerEl.innerHTML = contentHtml.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+    const renderedReportHtml = contentHtml.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+    containerEl.innerHTML = renderedReportHtml;
     lucide.createIcons();
+    if (!isDebugMode) {
+        const archiveContainer = document.createElement("div");
+        archiveContainer.innerHTML = renderedReportHtml;
+        archiveContainer.querySelectorAll(".btn-correct-report-function").forEach(button => button.remove());
+        saveSmartReportSnapshot({
+            days,
+            periods,
+            html: archiveContainer.innerHTML,
+            rate: currentRate,
+            completed: currentCompletedPlannedCount,
+            planned: currentPlannedCount
+        });
+    }
 }
 
 window.saveCategoryType = function(catId, type, days) {
@@ -6841,8 +7621,8 @@ function checkImportantTaskNotifications() {
     }
 }
 
-function showWebNotification(title, body, taskId) {
-    if (Notification.permission === "granted") {
+function showWebNotification(title, body, taskId, customTag = null) {
+    if (areNotificationsEnabled() && "Notification" in window && Notification.permission === "granted") {
         if (navigator.serviceWorker && navigator.serviceWorker.ready) {
             navigator.serviceWorker.ready.then(registration => {
                 registration.showNotification(title, {
@@ -6851,7 +7631,7 @@ function showWebNotification(title, body, taskId) {
                     badge: './icons/icon-192.png',
                     vibrate: [200, 100, 200],
                     data: { taskId: taskId },
-                    tag: `task-important-${taskId}`
+                    tag: customTag || `task-important-${taskId}`
                 });
             });
         } else {

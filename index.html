@@ -36,7 +36,7 @@
             }
         });
     </script>
-    <link rel="stylesheet" href="style.css?v=7.57">
+    <link rel="stylesheet" href="style.css?v=7.81">
     
     <!-- iOS / PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -112,8 +112,9 @@
                     <i data-lucide="file-chart-column"></i>
                     <span id="smart-report-ready-label" class="smart-report-ready-label" aria-hidden="true">Seu relatório semanal já está pronto!</span>
                 </button>
-                <button id="btn-notifications" class="icon-button" title="Notificações" style="position: relative;">
+                <button id="btn-notifications" class="icon-button notifications-button" title="Notificações" style="position: relative;">
                     <i data-lucide="bell"></i>
+                    <span id="collab-invite-ready-label" class="collab-invite-ready-label" aria-hidden="true">Você recebeu uma notificação</span>
                     <span id="notifications-badge" style="position: absolute; top: 5px; right: 5px; width: 8px; height: 8px; background: #ef4444; border-radius: 50%; border: 1.5px solid var(--bg-surface-solid);"></span>
                 </button>
                 <button id="btn-manage-tasks" class="icon-button" title="Configurações">
@@ -207,19 +208,65 @@
             
             <!-- Empty state -->
             <div id="empty-state" class="empty-state hidden">
-                <div class="empty-state-icon">
-                    <i data-lucide="clipboard-list"></i>
+                <div class="standard-empty-content">
+                    <div class="empty-state-icon">
+                        <i data-lucide="clipboard-list"></i>
+                    </div>
+                    <h3>Nenhuma tarefa cadastrada</h3>
+                    <p>Toque no botão abaixo ou nas configurações para adicionar tarefas ao seu checklist.</p>
                 </div>
-                <h3>Nenhuma tarefa cadastrada</h3>
-                <p>Toque no botão abaixo ou nas configurações para adicionar tarefas ao seu checklist.</p>
+
+                <section class="category-onboarding" aria-labelledby="category-onboarding-title">
+                    <span class="category-onboarding-kicker">PRIMEIROS PASSOS</span>
+                    <h3 id="category-onboarding-title">Crie sua primeira categoria</h3>
+                    <p class="category-onboarding-intro">As categorias organizam suas tarefas por empresa, estudos, rotina ou qualquer área que você quiser.</p>
+
+                    <div class="category-onboarding-carousel">
+                        <article class="category-onboarding-slide active" data-onboarding-slide="0">
+                            <div class="category-onboarding-visual"><i data-lucide="settings"></i><span class="onboarding-tap"></span></div>
+                            <span>1 de 3</span>
+                            <strong>Abra as Configurações</strong>
+                            <small>Toque no ícone de engrenagem no canto superior.</small>
+                        </article>
+                        <article class="category-onboarding-slide" data-onboarding-slide="1">
+                            <div class="category-onboarding-visual"><i data-lucide="folder-cog"></i><span class="onboarding-route"></span></div>
+                            <span>2 de 3</span>
+                            <strong>Gerencie as categorias</strong>
+                            <small>Entre em “Gerenciar Categorias” para organizar suas áreas.</small>
+                        </article>
+                        <article class="category-onboarding-slide" data-onboarding-slide="2">
+                            <div class="category-onboarding-visual"><i data-lucide="folder-plus"></i><span class="onboarding-pulse"></span></div>
+                            <span>3 de 3</span>
+                            <strong>Adicione a primeira</strong>
+                            <small>Escolha um nome e um tipo. Depois, você já poderá criar tarefas.</small>
+                        </article>
+                    </div>
+
+                    <div class="category-onboarding-dots" aria-hidden="true">
+                        <span class="active"></span><span></span><span></span>
+                    </div>
+                    <button type="button" id="btn-onboarding-create-category" class="btn btn-primary category-onboarding-action">
+                        <i data-lucide="plus"></i> Criar minha primeira categoria
+                    </button>
+                    <small class="category-onboarding-hint">Você poderá editar, compartilhar ou excluir categorias quando quiser.</small>
+                </section>
             </div>
         </main>
 
+        <aside id="task-creation-onboarding" class="task-creation-onboarding" aria-live="polite" hidden>
+            <div class="task-creation-onboarding-icon"><i data-lucide="list-plus"></i></div>
+            <div>
+                <strong>Agora, crie sua primeira tarefa</strong>
+                <span>Toque no botão <b>+</b> e depois em <b>Nova tarefa</b>.</span>
+            </div>
+            <span class="task-creation-onboarding-arrow" aria-hidden="true"><i data-lucide="arrow-down-right"></i></span>
+        </aside>
+
         <!-- Bottom Actions (Floating Stacked FAB Menu at Bottom-Left) -->
         <div class="fab-menu-container" id="fab-menu">
-            <button id="btn-share-report" class="fab-btn fab-share" title="Relatório WhatsApp">
+            <button id="btn-share-report" class="fab-btn fab-share" title="Compartilhar checklist">
                 <i data-lucide="share-2" style="width: 24px; height: 24px;"></i>
-                <span class="fab-label">Relatório WhatsApp</span>
+                <span class="fab-label">Compartilhar checklist</span>
             </button>
             <button id="btn-add-task-modal" class="fab-btn fab-menu-trigger" title="Nova Tarefa">
                 <i data-lucide="plus" style="width: 24px; height: 24px;"></i>
@@ -242,6 +289,16 @@
                     <div class="task-title-autocomplete-wrapper">
                         <input type="text" id="task-title" required placeholder="Ex: Verificar temperatura do freezer" autocomplete="off" aria-autocomplete="list" aria-controls="task-title-autocomplete" aria-expanded="false">
                         <div id="task-title-autocomplete" class="task-title-autocomplete" role="listbox" aria-label="Tarefas já utilizadas"></div>
+                        <div id="task-autofill-offer" class="task-autofill-offer" aria-live="polite">
+                            <span class="task-autofill-message">
+                                <strong>Tarefa reconhecida</strong>
+                                <small>Reutilizar categoria, turno e recorrência?</small>
+                            </span>
+                            <div>
+                                <button type="button" id="btn-autofill-title-only">Só título</button>
+                                <button type="button" id="btn-autofill-details">Preencher detalhes</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div class="form-group" style="margin-top: 10px;">
@@ -320,15 +377,18 @@
                 <button class="modal-close" id="btn-close-manage-modal"><i data-lucide="x"></i></button>
             </div>
             <div class="manage-tasks-body">
-                <div class="form-group" style="margin-bottom: 16px;">
-                    <label for="input-org-name">Nome da Organização</label>
-                    <input type="text" id="input-org-name" placeholder="Ex: Minha Empresa" autocomplete="off">
-                </div>
-                
-                <!-- Themes Section -->
-                <div style="margin-bottom: 24px;">
-                    <label style="display:block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); margin-bottom:8px;">Tema do Aplicativo</label>
-                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
+                <section class="settings-section">
+                    <div class="settings-section-heading">
+                        <div class="settings-section-icon"><i data-lucide="palette"></i></div>
+                        <div><strong>Aparência</strong><span>Personalize como o checklist é apresentado.</span></div>
+                    </div>
+                    <div class="form-group settings-field">
+                        <label for="input-org-name">Nome da organização</label>
+                        <input type="text" id="input-org-name" placeholder="Ex: Minha Empresa" autocomplete="off">
+                    </div>
+                    <div>
+                        <label class="settings-control-label">Tema do aplicativo</label>
+                        <div class="settings-theme-grid">
                         <button class="btn theme-selector-btn active" data-theme="default" style="padding: 10px; font-size: 0.75rem; font-weight: 700; border: 1px solid rgba(255,255,255,0.15); border-radius: var(--radius-sm); background: #161e31; color: #e2e8f0;">
                             🌙 Escuro
                         </button>
@@ -338,36 +398,63 @@
                         <button class="btn theme-selector-btn" data-theme="girly" style="padding: 10px; font-size: 0.75rem; font-weight: 700; border: 1px solid rgba(219,39,119,0.3); border-radius: var(--radius-sm); background: #ffe4e6; color: #9d174d;">
                             🩷 Rosa
                         </button>
+                        </div>
                     </div>
-                </div>
-                
-                <!-- Manage Categories Section -->
-                <div style="margin-bottom: 24px;">
-                    <button id="btn-open-manage-categories" class="btn btn-secondary btn-block" style="border: 1px solid var(--border-color); display: flex; align-items: center; justify-content: center; gap: 8px; font-weight: 700; padding: 12px; width: 100%;">
-                        <i data-lucide="folder"></i> Gerenciar Categorias
-                    </button>
-                </div>
+                </section>
 
-                <div style="margin-bottom: 24px;">
-                    <button id="btn-open-gestures-tutorial" class="btn btn-secondary btn-block gestures-settings-btn">
-                        <i data-lucide="hand"></i> Tutorial de Gestos
-                    </button>
-                </div>
-                <!-- Supabase credentials are kept fixed in code -->
-                
-                <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
-                    <button id="btn-reset-default" class="btn btn-secondary btn-block" style="border: 1px solid var(--border-color);">
-                        <i data-lucide="rotate-ccw"></i> Restaurar Padrões do App
-                    </button>
-                    <button id="btn-clear-all" class="btn btn-danger-outline btn-block">
-                        <i data-lucide="trash-2"></i> Limpar Todas as Tarefas
-                    </button>
-                    <button id="btn-logout" class="btn btn-danger btn-block" style="background: var(--danger); color: #fff; border: none; font-weight: 700;">
-                        <i data-lucide="log-out"></i> Sair da Conta
-                    </button>
-                    <div style="text-align: center; font-size: 0.65rem; color: var(--text-muted); margin-top: 8px;">
-                        Versão 8.28
+                <section class="settings-section">
+                    <div class="settings-section-heading">
+                        <div class="settings-section-icon"><i data-lucide="bell-ring"></i></div>
+                        <div><strong>Notificações</strong><span>Escolha se o aparelho pode exibir avisos e tarefas compartilhadas.</span></div>
                     </div>
+                    <div class="settings-notification-row">
+                        <span><strong>Notificações push</strong><small>Permitir que este aparelho exiba avisos do checklist</small></span>
+                        <button id="notifications-enabled-toggle" class="settings-toggle is-on" type="button" role="switch" aria-checked="true" aria-label="Ativar notificações">
+                            <span></span>
+                        </button>
+                    </div>
+                    <p id="notifications-permission-status" class="settings-notification-status"></p>
+                </section>
+
+                <section class="settings-section">
+                    <div class="settings-section-heading">
+                        <div class="settings-section-icon"><i data-lucide="layout-grid"></i></div>
+                        <div><strong>Organização</strong><span>Configure as áreas usadas nas suas tarefas.</span></div>
+                    </div>
+                    <button id="btn-open-manage-categories" class="settings-action-row">
+                        <span class="settings-action-icon primary"><i data-lucide="folders"></i></span>
+                        <span><strong>Gerenciar categorias</strong><small>Criar, editar, classificar e compartilhar</small></span>
+                        <i data-lucide="chevron-right" class="settings-action-chevron"></i>
+                    </button>
+                </section>
+
+                <section class="settings-section">
+                    <div class="settings-section-heading">
+                        <div class="settings-section-icon"><i data-lucide="circle-help"></i></div>
+                        <div><strong>Ajuda</strong><span>Conheça os atalhos disponíveis no aplicativo.</span></div>
+                    </div>
+                    <button id="btn-open-gestures-tutorial" class="settings-action-row">
+                        <span class="settings-action-icon"><i data-lucide="hand"></i></span>
+                        <span><strong>Tutorial de gestos</strong><small>Veja como tocar, deslizar e navegar</small></span>
+                        <i data-lucide="chevron-right" class="settings-action-chevron"></i>
+                    </button>
+                </section>
+
+                <section class="settings-section settings-account-section">
+                    <div class="settings-section-heading">
+                        <div class="settings-section-icon"><i data-lucide="user-round"></i></div>
+                        <div><strong>Conta e dados</strong><span>Controle sua sessão e as tarefas armazenadas.</span></div>
+                    </div>
+                    <button id="btn-logout" class="settings-action-row">
+                        <span class="settings-action-icon"><i data-lucide="log-out"></i></span>
+                        <span><strong>Sair da conta</strong><small>Encerrar a sessão neste aparelho</small></span>
+                        <i data-lucide="chevron-right" class="settings-action-chevron"></i>
+                    </button>
+                </section>
+
+                <div class="settings-version">
+                    <span>Checklist</span>
+                        <strong>Versão 8.57</strong>
                 </div>
             </div>
         </div>
@@ -555,6 +642,7 @@
                 <button id="tab-report-weekly" class="category-chip active" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 12px;">Semanal</button>
                 <button id="tab-report-monthly" class="category-chip" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 12px;">Mensal</button>
                 <button id="tab-report-yearly" class="category-chip" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 12px;">Anual</button>
+                <button id="tab-report-history" class="category-chip" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 10px;">Histórico</button>
             </div>
 
             <div class="modal-body" style="padding-top: 20px; max-height: 60vh; overflow-y: auto;">
@@ -578,10 +666,33 @@
         </div>
     </div>
 
+    <!-- Modal: corrigir função reconhecida no relatório -->
+    <div id="modal-report-correction" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content" style="max-width:360px; padding:24px;">
+            <div class="modal-header" style="margin-bottom:16px;">
+                <h3 style="margin:0;">Corrigir função</h3>
+                <button id="btn-close-report-correction" type="button" class="modal-close"><i data-lucide="x"></i></button>
+            </div>
+            <p style="margin:0 0 14px; color:var(--text-secondary); font-size:.78rem; line-height:1.5;">Escolha uma tarefa concluída e informe a função correta. O app aprenderá o título para os próximos relatórios.</p>
+            <div class="form-group">
+                <label for="select-report-correction-task">Tarefa</label>
+                <select id="select-report-correction-task"></select>
+            </div>
+            <div class="form-group" style="margin-top:10px;">
+                <label for="select-report-correction-function">Função correta</label>
+                <select id="select-report-correction-function">
+                    <option value="" selected disabled>Selecione…</option><option value="delivery">Entrega</option><option value="billing">Cobrança/Financeiro</option><option value="production">Produção/Operação</option><option value="marketing">Divulgação</option><option value="sales">Vendas/Comercial</option><option value="service">Atendimento</option><option value="supply">Compra/Abastecimento</option><option value="assessment">Avaliação/Prova</option><option value="academic_work">Trabalho acadêmico</option><option value="study">Estudo/Revisão</option><option value="exercise">Atividade física</option><option value="self_care">Saúde/Autocuidado</option><option value="home">Casa/Organização</option><option value="personal_learning">Aprendizado</option><option value="planning">Rotina/Planejamento</option><option value="other">Outra atividade</option>
+                </select>
+            </div>
+            <button id="btn-save-report-correction" type="button" class="btn btn-primary" style="width:100%; margin-top:16px;">Salvar correção</button>
+        </div>
+    </div>
+
     <!-- Modal: Notifications -->
     <div id="modal-notifications" class="modal">
         <div class="modal-overlay"></div>
-        <div class="modal-content" style="max-width: 380px; padding: 24px;">
+        <div class="modal-content collaborators-modal-content" style="max-width: 380px; padding: 24px;">
             <div class="modal-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
                 <div style="display: flex; align-items: center; gap: 10px;">
                     <div style="background: rgba(59, 130, 246, 0.1); color: #3b82f6; padding: 8px; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
@@ -696,7 +807,7 @@
     </div>
 
     <!-- Modal: Collaborators -->
-    <div id="modal-collaborators" class="modal">
+    <div id="modal-collaborators" class="modal modal-collaborators-layer">
         <div class="modal-overlay"></div>
         <div class="modal-content" style="max-width: 380px; padding: 24px;">
             <div class="modal-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
@@ -718,7 +829,7 @@
                 <!-- Invite Form -->
                 <div id="collab-invite-section">
                     <label style="display:block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); margin-bottom:8px;">Convidar Colaborador</label>
-                    <div style="display: flex; gap: 8px; margin-bottom: 20px;">
+                    <div class="collab-email-row" style="display: flex; gap: 8px; margin-bottom: 20px;">
                         <input type="email" id="input-collab-email" placeholder="email@exemplo.com" autocomplete="off" style="flex: 1; padding: 12px 14px;">
                         <button id="btn-add-collab" class="btn btn-primary" style="padding: 10px 16px; font-weight: 700;">Convidar</button>
                     </div>
@@ -804,16 +915,16 @@
     <div id="modal-manage-categories" class="modal">
         <div class="modal-overlay" id="overlay-manage-categories"></div>
         <div class="modal-content manage-modal-content categories-modal-content">
-            <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 16px;">
+            <div class="modal-header categories-manager-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 16px;">
                 <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800; display: flex; align-items: center; gap: 8px;">
                     <i data-lucide="folder" style="color: var(--primary);"></i> Gerenciar Categorias
                 </h3>
                 <button id="btn-close-manage-categories-modal" class="modal-close" style="background: transparent; border: none; color: var(--text-secondary); cursor: pointer; padding: 4px; display: flex; align-items: center; justify-content: center;"><i data-lucide="x"></i></button>
             </div>
             
-            <div class="modal-body-scroll" style="overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 20px; padding-right: 4px; scrollbar-width: thin; box-sizing: border-box;">
+            <div class="modal-body-scroll categories-manager-body" style="overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 20px; padding-right: 4px; scrollbar-width: thin; box-sizing: border-box;">
                 <!-- Seção 1: Criar Nova Categoria -->
-                <div style="background: rgba(255,255,255,0.01); border: 1px solid var(--border-color); padding: 14px; border-radius: var(--radius-md); display: flex; flex-direction: column; gap: 12px;">
+                <div class="category-create-panel" style="background: rgba(255,255,255,0.01); border: 1px solid var(--border-color); padding: 14px; border-radius: var(--radius-md); display: flex; flex-direction: column; gap: 12px;">
                     <h4 style="margin: 0; font-size: 0.85rem; font-weight: 800; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 6px;">
                         <i data-lucide="plus-circle" style="width: 14px; height: 14px; color: var(--primary);"></i> Nova Categoria
                     </h4>
@@ -821,7 +932,7 @@
                         <label style="font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);">Nome da Categoria</label>
                         <input type="text" id="input-new-category" placeholder="Nome (ex: Unisinos)" autocomplete="off" style="width: 100%; padding: 8px 10px; font-size: 0.82rem;">
                     </div>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                    <div id="category-type-row" class="category-type-row" style="display: grid; grid-template-columns: 1fr; gap: 8px;">
                         <div style="display: flex; flex-direction: column; gap: 4px;">
                             <label style="font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);">Tipo de Contexto</label>
                             <select id="select-new-category-type" style="width: 100%; padding: 8px 10px; font-size: 0.82rem; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
@@ -846,12 +957,12 @@
                 </div>
 
                 <!-- Seção 2: Categorias Existentes -->
-                <div>
+                <div class="categories-existing-panel">
                     <h4 style="margin: 0 0 10px 0; font-size: 0.85rem; font-weight: 800; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 6px;">
                         <i data-lucide="list" style="width: 14px; height: 14px; color: var(--primary);"></i> Categorias Cadastradas
                     </h4>
                     <!-- List of current categories -->
-                    <div class="manage-list" id="manage-categories-list" style="max-height: 280px; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; scrollbar-width: thin; box-sizing: border-box;">
+                    <div class="manage-list categories-manager-list" id="manage-categories-list" style="max-height: 280px; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; scrollbar-width: thin; box-sizing: border-box;">
                         <!-- Javascript will inject categories list here -->
                     </div>
                 </div>
@@ -886,6 +997,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=8.28"></script>
+    <script src="app.js?v=8.57"></script>
 </body>
 </html>

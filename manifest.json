@@ -1,7 +1,9 @@
 {
   "name": "Checklist Organizacional",
   "short_name": "Checklist",
+  "id": "./",
   "start_url": ".",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#090d16",
   "theme_color": "#8b5cf6",

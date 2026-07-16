@@ -1,9 +1,9 @@
-const CACHE_NAME = 'checklist-cache-v8.46';
+const CACHE_NAME = 'checklist-cache-v8.75';
 const ASSETS = [
   './',
   './index.html',
-  './style.css?v=7.57',
-  './app.js?v=8.28',
+  './style.css?v=7.81',
+  './app.js?v=8.57',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -57,4 +57,41 @@ self.addEventListener('fetch', (e) => {
         return caches.match(e.request);
       })
   );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const taskId = event.notification.data && event.notification.data.taskId;
+  const targetUrl = event.notification.data && event.notification.data.url
+    ? event.notification.data.url
+    : (taskId ? `./?notification_task=${encodeURIComponent(taskId)}` : './');
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      const existingClient = clientList.find((client) => 'focus' in client);
+      if (existingClient) {
+        existingClient.postMessage({ type: 'OPEN_SHARED_TASK', taskId });
+        return existingClient.focus();
+      }
+      return clients.openWindow(targetUrl);
+    })
+  );
+});
+
+self.addEventListener('push', (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch (_) {
+    payload = { body: event.data ? event.data.text() : '' };
+  }
+  const title = payload.title || 'Nova tarefa compartilhada';
+  const options = {
+    body: payload.body || 'Uma nova tarefa foi adicionada ao seu checklist.',
+    icon: './icons/icon-192.png',
+    badge: './icons/icon-192.png',
+    tag: payload.tag || `shared-task-${payload.task_id || Date.now()}`,
+    data: { taskId: payload.task_id || null, url: payload.url || './' },
+    vibrate: [180, 80, 180]
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
 });
