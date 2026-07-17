@@ -1,9 +1,9 @@
-const CACHE_NAME = 'checklist-cache-v9.19';
+const CACHE_NAME = 'checklist-cache-v9.21';
 const CRITICAL_ASSETS = [
   './',
   './index.html',
   './style.css?v=7.94',
-  './app.js?v=9.01',
+  './app.js?v=9.03',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -81,14 +81,14 @@ self.addEventListener('notificationclick', (event) => {
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       const existingClient = clientList.find((client) => 'focus' in client);
       if (existingClient) {
-        existingClient.postMessage(taskId
-          ? { type: notificationType === 'task-reminder' ? 'OPEN_TASK_REMINDER' : 'OPEN_SHARED_TASK', taskId }
-          : inviteId ? { type: 'OPEN_COLLABORATION_INVITE', inviteId } : { type: 'OPEN_NOTIFICATIONS' });
         // No Android, o postMessage pode chegar enquanto o PWA ainda está
-        // retomando. A URL interna mantém a ação até o carregamento terminar.
+        // retomando. Usa somente a URL para não disparar duas rolagens.
         if ('navigate' in existingClient && absoluteTargetUrl.includes('?')) {
           return existingClient.navigate(absoluteTargetUrl).then((navigatedClient) => (navigatedClient || existingClient).focus());
         }
+        existingClient.postMessage(taskId
+          ? { type: notificationType === 'task-reminder' ? 'OPEN_TASK_REMINDER' : 'OPEN_SHARED_TASK', taskId }
+          : inviteId ? { type: 'OPEN_COLLABORATION_INVITE', inviteId } : { type: 'OPEN_NOTIFICATIONS' });
         return existingClient.focus();
       }
       return clients.openWindow(absoluteTargetUrl);

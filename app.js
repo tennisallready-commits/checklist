@@ -522,7 +522,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.19', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.21', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -6348,9 +6348,11 @@ function setupSupabaseAuth() {
             // Um push de tarefa tem prioridade sobre a sincronização completa:
             // mostra o cartão imediatamente e continua o carregamento depois.
             const earlyNotificationTaskId = new URLSearchParams(window.location.search).get("notification_task");
+            let earlyNotificationTaskHandled = false;
             if (earlyNotificationTaskId) {
                 const primedTask = await primeTaskFromPush(earlyNotificationTaskId);
                 if (primedTask) {
+                    earlyNotificationTaskHandled = true;
                     if (appSessionLoader) appSessionLoader.classList.add("hidden");
                     document.querySelector(".app-container").style.display = "flex";
                 }
@@ -6397,7 +6399,9 @@ function setupSupabaseAuth() {
                 setTimeout(() => openTaskReminderAction(reminderTaskId), 250);
             } else if (notificationTaskId) {
                 history.replaceState({}, "", window.location.pathname);
-                setTimeout(() => focusSharedTaskFromNotification({ task_id: notificationTaskId }), 250);
+                if (!earlyNotificationTaskHandled) {
+                    setTimeout(() => focusSharedTaskFromNotification({ task_id: notificationTaskId }), 250);
+                }
             } else if (collaborationInviteId) {
                 history.replaceState({}, "", window.location.pathname);
                 setTimeout(() => promptCollaborationInviteNavigation(collaborationInviteId), 250);
