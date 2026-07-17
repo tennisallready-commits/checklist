@@ -525,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.25', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.26', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -4359,7 +4359,7 @@ function saveCompletionOffline(taskId, date, completed) {
     localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
 }
 
-async function addTask(title, category, recurrenceMode, customDate, repeatDays, assignedTo, shifts, important = false) {
+async function addTask(title, category, recurrenceMode, customDate, repeatDays, assignedTo, shifts, important = false, reminderTime = null, reminderOffsetDays = 0) {
     if (!title) return;
     const isRecurring = recurrenceMode !== "once";
     const tempId = Date.now();
@@ -4374,8 +4374,8 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
     }
     if (important) {
         context.important = true;
-        context.reminder_time = addTaskReminderTime;
-        context.reminder_offset_days = addTaskReminderOffsetDays;
+        context.reminder_time = reminderTime || addTaskReminderTime;
+        context.reminder_offset_days = reminderTime ? (Number(reminderOffsetDays) === 1 ? 1 : 0) : addTaskReminderOffsetDays;
         context.reminder_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
     }
     console.log(`%c[Motor de Contexto] Tarefa: "${title}" na guia "${category}"`, "color: #8b5cf6; font-weight: bold;", context);
@@ -6291,7 +6291,7 @@ function setupAiTaskCreator() {
     const renderSuggestions = tasksToRender => {
         suggestions = tasksToRender;
         reviewList.innerHTML = tasksToRender.map((task, index) => {
-            const meta = [task.category, task.date?.split("-").reverse().join("/"), task.recurrence === "daily" ? "Diária" : task.recurrence === "repeat" ? `Repete: ${(task.repeat_days || []).join(", ")}` : "Única", ...(task.shifts || []), task.assignee_label].filter(Boolean).join(" • ");
+            const meta = [task.category, task.date?.split("-").reverse().join("/"), task.recurrence === "daily" ? "Diária" : task.recurrence === "repeat" ? `Repete: ${(task.repeat_days || []).join(", ")}` : "Única", ...(task.shifts || []), task.assignee_label, task.reminder_enabled ? `Lembrete ${task.reminder_offset_days === 1 ? "1 dia antes " : ""}às ${task.reminder_time}` : ""].filter(Boolean).join(" • ");
             return `<label class="ai-review-item"><input type="checkbox" data-index="${index}" checked><span><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(meta)}</small></span></label>`;
         }).join("");
         review.hidden = false;
@@ -6341,7 +6341,7 @@ function setupAiTaskCreator() {
             for (const task of selected) {
                 const validCategory = categories.find(category => category.is_active !== false && String(category.name).toLowerCase() === String(task.category).toLowerCase());
                 if (!validCategory) continue;
-                await addTask(task.title, validCategory.name, ["once", "daily", "repeat"].includes(task.recurrence) ? task.recurrence : "once", task.date || getLocalDateString(new Date()), task.recurrence === "repeat" ? task.repeat_days || [] : null, task.assigned_to || null, task.shifts || [], Boolean(task.important));
+                await addTask(task.title, validCategory.name, ["once", "daily", "repeat"].includes(task.recurrence) ? task.recurrence : "once", task.date || getLocalDateString(new Date()), task.recurrence === "repeat" ? task.repeat_days || [] : null, task.assigned_to || null, task.shifts || [], Boolean(task.important), task.reminder_enabled ? task.reminder_time : null, task.reminder_offset_days || 0);
                 created += 1;
             }
             if (!created) throw new Error("Nenhuma categoria sugerida existe mais no checklist.");
