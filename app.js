@@ -4943,7 +4943,15 @@ async function inviteCollaborator(catId, email) {
         }
         if (remoteCategoryError) throw remoteCategoryError;
         if (!remoteCategory) {
-            throw new Error("Esta categoria ainda não está sincronizada. Feche esta janela, aguarde aparecer ‘Sincronizado’ e tente novamente.");
+            // Se a criação otimista ainda estiver apenas no aparelho, conclui a
+            // sincronização aqui e continua o convite com o ID real retornado.
+            try {
+                remoteCategory = await insertOwnedCategoryInCloud({ name: cat.name, type: cat.type });
+                updateLocalCatId(catId, remoteCategory);
+                refreshSyncStatusFromQueues();
+            } catch (categorySyncError) {
+                throw new Error(`Não foi possível sincronizar a categoria antes do convite: ${categorySyncError.message}`);
+            }
         }
 
         const realCategoryId = remoteCategory.id;
