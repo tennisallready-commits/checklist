@@ -2532,18 +2532,39 @@ async function repairAndTestPushNotifications() {
     const original = btnRepairTestPush.innerHTML;
     btnRepairTestPush.disabled = true;
     btnRepairTestPush.innerHTML = '<span class="loading-spinner"></span><span><strong>Configurando…</strong><small>Aguarde alguns segundos</small></span>';
+    const setRepairStatus = (title, detail) => {
+        btnRepairTestPush.innerHTML = `<span class="loading-spinner"></span><span><strong>${title}</strong><small>${detail}</small></span>`;
+    };
+    const withTimeout = (promise, milliseconds, message) => Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(message)), milliseconds)),
+    ]);
     try {
         if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) throw new Error("Este navegador não oferece Web Push.");
         let permission = Notification.permission;
-        if (permission === "default") permission = await Notification.requestPermission();
+        if (permission === "default") {
+            setRepairStatus("Aguardando permissão…", "Confirme o aviso do aparelho");
+            permission = await withTimeout(Notification.requestPermission(), 30000, "O aparelho não respondeu ao pedido de permissão.");
+        }
         if (permission !== "granted") throw new Error("As notificações estão bloqueadas nos Ajustes do aparelho.");
         localStorage.setItem(getNotificationsPreferenceKey(), "true");
         if (pushSubscriptionInFlight) {
-            await pushSubscriptionInFlight.catch(() => {});
+            setRepairStatus("Finalizando cadastro…", "Preparando uma assinatura nova");
+            await withTimeout(pushSubscriptionInFlight.catch(() => {}), 12000, "O cadastro anterior ficou preso. Feche e abra o app e tente novamente.");
         }
-        const subscription = await ensurePushSubscription({ forceRefresh: true });
+        setRepairStatus("Registrando aparelho…", "Criando uma assinatura push nova");
+        const subscription = await withTimeout(
+            ensurePushSubscription({ forceRefresh: true }),
+            20000,
+            "O iPhone não concluiu o cadastro push. Feche e abra o app e tente novamente.",
+        );
         if (!subscription?.endpoint) throw new Error("O aparelho não criou uma assinatura push.");
-        const { data, error } = await supabaseClient.functions.invoke("send-task-push", { body: { test_push: true, endpoint: subscription.endpoint } });
+        setRepairStatus("Enviando teste…", "Confirmando a comunicação com o servidor");
+        const { data, error } = await withTimeout(
+            supabaseClient.functions.invoke("send-task-push", { body: { test_push: true, endpoint: subscription.endpoint } }),
+            20000,
+            "O servidor demorou demais para responder ao teste.",
+        );
         if (error) throw error;
         if (Number(data?.sent || 0) < 1) {
             const failure = Array.isArray(data?.failures) ? data.failures[0] : null;
