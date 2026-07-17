@@ -525,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.26', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.27', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -6305,7 +6305,8 @@ function setupAiTaskCreator() {
         generateButton.innerHTML = '<span class="loading-spinner"></span> Entendendo seu pedido…';
         review.hidden = true;
         try {
-            const body = { prompt, today: getLocalDateString(new Date()), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo" };
+            const reminderFallback = new Date(Date.now() + 5 * 60000);
+            const body = { prompt, today: getLocalDateString(new Date()), default_reminder_time: `${String(reminderFallback.getHours()).padStart(2, "0")}:${String(reminderFallback.getMinutes()).padStart(2, "0")}`, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo" };
             if (recordedAudio) {
                 body.audio_base64 = await blobToBase64(recordedAudio);
                 body.audio_mime_type = recordedAudio.type.split(";")[0] || "audio/webm";
