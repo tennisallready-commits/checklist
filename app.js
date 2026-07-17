@@ -519,7 +519,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.15', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.16', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -8427,7 +8427,7 @@ function showWebNotification(title, body, taskId, customTag = null, notification
                 registration.showNotification(title, {
                     body: body,
                     icon: './icons/icon-192.png',
-                    badge: './icons/icon-192.png',
+                    badge: './icons/notification-badge.png',
                     vibrate: [200, 100, 200],
                     data: { taskId: taskId, notificationType },
                     tag: customTag || `task-important-${taskId}`

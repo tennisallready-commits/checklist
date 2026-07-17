@@ -1,12 +1,13 @@
-const CACHE_NAME = 'checklist-cache-v9.15';
+const CACHE_NAME = 'checklist-cache-v9.16';
 const CRITICAL_ASSETS = [
   './',
   './index.html',
   './style.css?v=7.92',
-  './app.js?v=8.97',
+  './app.js?v=8.98',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  './icons/notification-badge.png',
   './vendor/lucide.min.js?v=1.24.0'
 ];
 const OPTIONAL_ASSETS = [
@@ -106,7 +107,7 @@ self.addEventListener('push', (event) => {
   const options = {
     body: payload.body || 'Uma nova tarefa foi adicionada ao seu checklist.',
     icon: './icons/icon-192.png',
-    badge: './icons/icon-192.png',
+    badge: './icons/notification-badge.png',
     tag: payload.tag || `shared-task-${payload.task_id || Date.now()}`,
     data: { taskId: payload.task_id || null, inviteId: payload.invite_id || null, notificationType: payload.notification_type || null, url: payload.url || './' },
     vibrate: [180, 80, 180]
