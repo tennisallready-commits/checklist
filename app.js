@@ -252,6 +252,8 @@ let categoryOnboardingSlide = 0;
 let lastStartupInteractionAt = 0;
 let isSwipeRevealInteracting = false;
 let pendingSwipeSafeRender = null;
+let activePushFocusTaskId = null;
+let activePushFocusUntil = 0;
 
 function registerStartupInteraction() {
     lastStartupInteractionAt = Date.now();
@@ -519,7 +521,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.17', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.18', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -3533,6 +3535,7 @@ function renderChecklist() {
     // precise reconstruir a lista logo após o gesto.
     const openSwipeTask = tasksListEl.querySelector(".task-item.swiped");
     const openSwipeTaskId = openSwipeTask ? String(openSwipeTask.dataset.id) : null;
+    const protectedPushFocusId = activePushFocusUntil > Date.now() ? String(activePushFocusTaskId) : null;
 
     tasksListEl.innerHTML = "";
     
@@ -3745,6 +3748,12 @@ function renderChecklist() {
                     foreground.style.transform = "translateX(-136px)";
                 }
             }
+        }
+
+        if (protectedPushFocusId) {
+            const restoredFocus = Array.from(tasksListEl.querySelectorAll(".task-item"))
+                .find(item => String(item.dataset.id) === protectedPushFocusId);
+            if (restoredFocus) restoredFocus.classList.add("shared-task-focus");
         }
 
         lucide.createIcons();
@@ -5235,11 +5244,58 @@ function highlightRenderedTask(taskId) {
     const taskElement = findRenderedTaskElement(taskId);
     if (!taskElement) return false;
     taskElement.scrollIntoView({ behavior: "smooth", block: "center" });
+    activePushFocusTaskId = String(taskId);
+    activePushFocusUntil = Date.now() + 2500;
     taskElement.classList.remove("shared-task-focus");
     void taskElement.offsetWidth;
     taskElement.classList.add("shared-task-focus");
-    setTimeout(() => taskElement.classList.remove("shared-task-focus"), 2500);
+    setTimeout(() => {
+        const currentTaskElement = findRenderedTaskElement(taskId);
+        if (currentTaskElement) currentTaskElement.classList.remove("shared-task-focus");
+        if (String(activePushFocusTaskId) === String(taskId)) {
+            activePushFocusTaskId = null;
+            activePushFocusUntil = 0;
+        }
+    }, 2500);
     return true;
+}
+
+async function primeTaskFromPush(taskId) {
+    if (!taskId) return null;
+    let targetTask = (allActiveTasks || []).find(task => String(task.id) === String(taskId)) || null;
+    if (supabaseClient && currentUser) {
+        const { data } = await supabaseClient.from("tasks").select("*").eq("id", taskId).maybeSingle();
+        if (data) targetTask = data;
+    }
+    if (!targetTask) return null;
+
+    const cachedTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    const taskIndex = cachedTasks.findIndex(task => String(task.id) === String(targetTask.id));
+    if (taskIndex >= 0) cachedTasks[taskIndex] = targetTask;
+    else cachedTasks.push(targetTask);
+    localStorage.setItem("offline_tasks", JSON.stringify(cachedTasks));
+
+    if (targetTask.category_id && supabaseClient && currentUser) {
+        const cachedCategories = JSON.parse(localStorage.getItem("offline_categories")) || [];
+        if (!cachedCategories.some(category => String(category.id) === String(targetTask.category_id))) {
+            const { data: targetCategory } = await supabaseClient.from("categories").select("*").eq("id", targetTask.category_id).maybeSingle();
+            if (targetCategory) {
+                cachedCategories.push(targetCategory);
+                localStorage.setItem("offline_categories", JSON.stringify(cachedCategories));
+            }
+        }
+    }
+
+    selectedDate = extractDateFromTimestamp(targetTask.created_at);
+    currentFilter = "all";
+    loadDataOffline();
+    updateDateDisplay();
+    renderCategories();
+    renderChecklist();
+    updateProgress();
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    highlightRenderedTask(taskId);
+    return targetTask;
 }
 
 async function focusSharedTaskFromNotification(notification) {
@@ -5252,20 +5308,7 @@ async function focusSharedTaskFromNotification(notification) {
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     if (highlightRenderedTask(notification.task_id)) return;
 
-    let targetTask = (allActiveTasks || []).find(task => String(task.id) === String(notification.task_id));
-    if (supabaseClient && currentUser) {
-        // O deep link do push prioriza uma consulta mínima da própria tarefa.
-        // Não espera a sincronização completa do checklist para mostrá-la.
-        const { data } = await supabaseClient.from("tasks").select("*").eq("id", notification.task_id).maybeSingle();
-        if (data) {
-            targetTask = data;
-            const cachedTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
-            const existingIndex = cachedTasks.findIndex(task => String(task.id) === String(data.id));
-            if (existingIndex >= 0) cachedTasks[existingIndex] = data;
-            else cachedTasks.push(data);
-            localStorage.setItem("offline_tasks", JSON.stringify(cachedTasks));
-        }
-    }
+    let targetTask = await primeTaskFromPush(notification.task_id);
 
     if (targetTask && targetTask.created_at) {
         selectedDate = extractDateFromTimestamp(targetTask.created_at);
@@ -6292,6 +6335,17 @@ function setupSupabaseAuth() {
             reportsCloudState = "idle";
             document.getElementById("auth-container").style.display = "none";
             if (!restoredFromCache) document.querySelector(".app-container").style.display = "none";
+
+            // Um push de tarefa tem prioridade sobre a sincronização completa:
+            // mostra o cartão imediatamente e continua o carregamento depois.
+            const earlyNotificationTaskId = new URLSearchParams(window.location.search).get("notification_task");
+            if (earlyNotificationTaskId) {
+                const primedTask = await primeTaskFromPush(earlyNotificationTaskId);
+                if (primedTask) {
+                    if (appSessionLoader) appSessionLoader.classList.add("hidden");
+                    document.querySelector(".app-container").style.display = "flex";
+                }
+            }
 
             // Com cache visível, não substitui os cartões enquanto o usuário
             // inicia um swipe, toque ou edição logo após abrir o PWA.
