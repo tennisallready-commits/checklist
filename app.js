@@ -5445,32 +5445,41 @@ async function addCategory(name, type) {
 
     renderCategories();
 
-    // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
+    // 2. ENVIAR PARA O SUPABASE. O user_id explícito é necessário para a
+    // política RLS reconhecer a conta atual como proprietária da categoria.
     if (supabaseClient && currentUser) {
-        supabaseClient.from('categories').insert({ name: name, type: type || null, is_active: true }).select()
-            .then(({ data, error }) => {
-                if (error) {
-                    console.warn("Erro ao sincronizar nova categoria no Supabase com tipo, tentando sem tipo:", error.message);
-                    // Fallback to name-only if type column doesn't exist
-                    supabaseClient.from('categories').insert({ name: name, is_active: true }).select()
-                        .then(({ data: fallbackData, error: fallbackError }) => {
-                            if (!fallbackError && fallbackData && fallbackData.length > 0) {
-                                const realCat = fallbackData[0];
-                                const mergedCat = { ...realCat, type: type };
-                                updateLocalCatId(tempId, mergedCat);
-                            }
-                        });
-                    return;
-                }
-                if (data && data.length > 0) {
-                    const realCat = data[0];
-                    updateLocalCatId(tempId, realCat);
-                }
-            })
-            .catch(err => {
-                console.error("Erro assíncrono ao adicionar categoria:", err);
-            });
+        try {
+            const realCat = await insertOwnedCategoryInCloud({ name, type });
+            updateLocalCatId(tempId, realCat);
+            refreshSyncStatusFromQueues();
+        } catch (error) {
+            // Mantém o registro temporário para uma nova tentativa automática.
+            console.error("Erro ao sincronizar nova categoria:", error);
+            setSyncStatus("error", "Erro ao sincronizar", `A categoria ficou salva neste aparelho e será reenviada: ${error.message}`);
+        }
     }
+}
+
+async function insertOwnedCategoryInCloud({ name, type }) {
+    if (!supabaseClient || !currentUser) throw new Error("Sessão indisponível.");
+    const payload = {
+        name,
+        type: type || null,
+        is_active: true,
+        user_id: currentUser.id
+    };
+    let result = await supabaseClient.from("categories").insert(payload).select().single();
+
+    // Compatibilidade apenas para instalações antigas que ainda não tenham a
+    // coluna type. O proprietário continua explícito nas duas tentativas.
+    if (result.error && /type|column/i.test(result.error.message || "")) {
+        const { type: _ignoredType, ...legacyPayload } = payload;
+        result = await supabaseClient.from("categories").insert(legacyPayload).select().single();
+        if (!result.error && result.data) result.data.type = type || null;
+    }
+    if (result.error) throw result.error;
+    if (!result.data) throw new Error("O servidor não retornou a categoria criada.");
+    return result.data;
 }
 
 function updateLocalCatId(tempId, realCat) {
@@ -6228,15 +6237,11 @@ async function syncOfflineDataToCloud() {
         let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
         const pendingInsertCats = localCats.filter(c => isTemporaryId(c.id) && c.is_active !== false);
         for (const pending of pendingInsertCats) {
-            const { data, error } = await supabaseClient.from('categories').insert({ name: pending.name, is_active: true }).select();
-            if (error) throw error;
-            if (data && data.length > 0) {
-                const realCat = data[0];
-                const tempId = pending.id;
-                categories = categories.map(c => String(c.id) === String(tempId) ? realCat : c);
-                localCats = localCats.map(c => String(c.id) === String(tempId) ? realCat : c);
-                localStorage.setItem("offline_categories", JSON.stringify(localCats));
-            }
+            const realCat = await insertOwnedCategoryInCloud({ name: pending.name, type: pending.type });
+            const tempId = pending.id;
+            categories = categories.map(c => String(c.id) === String(tempId) ? realCat : c);
+            localCats = localCats.map(c => String(c.id) === String(tempId) ? realCat : c);
+            localStorage.setItem("offline_categories", JSON.stringify(localCats));
         }
 
         // 2. Sincronizar novas tarefas criadas offline
