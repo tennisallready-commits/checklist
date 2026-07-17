@@ -2158,9 +2158,35 @@ body.task-onboarding-visible .empty-state {
     transition: height 0.3s cubic-bezier(0.16, 1, 0.3, 1), width 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+.fab-menu-container::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 999;
+    border: 1px solid transparent;
+    border-radius: 24px;
+    background: transparent;
+    box-shadow: none;
+    pointer-events: none;
+    opacity: 0;
+    transform: scale(.9) translateY(12px);
+    transform-origin: bottom right;
+    transition: opacity .22s ease, transform .3s cubic-bezier(.16,1,.3,1), background .25s ease, border-color .25s ease;
+}
+
 .fab-menu-container.open {
-    height: 208px; /* Abre espaço vertical para as três ações */
-    width: 230px; /* Abre espaço horizontal para as escritas */
+    height: 226px;
+    width: 244px;
+}
+
+.fab-menu-container.open::before {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    border-color: rgba(148,163,184,.18);
+    background: linear-gradient(155deg, rgba(30,41,59,.96), rgba(15,23,42,.94));
+    box-shadow: 0 18px 50px rgba(0,0,0,.38), inset 0 1px 0 rgba(255,255,255,.06);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
 }
 
 @media (min-width: 481px) {
@@ -2225,9 +2251,13 @@ body.task-onboarding-visible .empty-state {
 
 /* Quando o menu está aberto, vira pílula e exibe a escrita */
 .fab-menu-container.open .fab-btn {
-    width: 210px; /* Estica para virar pílula */
-    padding-left: 18px; /* Ajusta suavemente a margem esquerda do ícone */
-    border-radius: 16px; /* Formato de pílula arredondada premium */
+    left: 10px;
+    width: 224px;
+    height: 58px;
+    padding-left: 16px;
+    border: 1px solid rgba(255,255,255,.09);
+    border-radius: 16px;
+    box-shadow: 0 6px 16px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.08);
 }
 
 .fab-menu-container.open .fab-label {
@@ -2236,6 +2266,21 @@ body.task-onboarding-visible .empty-state {
     margin-left: 10px;
     /* Transição suave ao abrir com um leve atraso (delay) para sincronizar com a expansão */
     transition: opacity 0.25s ease 0.05s, max-width 0.25s ease 0.05s, margin-left 0.25s ease 0.05s;
+}
+
+.fab-menu-container.open .fab-btn > svg,
+.fab-menu-container.open .fab-btn > i {
+    flex: 0 0 auto;
+    padding: 5px;
+    width: 32px !important;
+    height: 32px !important;
+    border-radius: 10px;
+    background: rgba(255,255,255,.12);
+}
+
+.fab-menu-container.open .fab-btn:hover {
+    transform: translateX(-3px);
+    box-shadow: 0 9px 22px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.1);
 }
 
 /* Botão Gatilho / Adicionar (+) fica na frente */
@@ -2281,6 +2326,7 @@ body.task-onboarding-visible .empty-state {
 
 /* Animação quando o menu está aberto */
 .fab-menu-container.open .fab-share {
+    bottom: 10px;
     opacity: 1;
     border-color: transparent; /* Remove a borda de separação ao expandir */
     /* O relatório permanece embaixo quando o menu está aberto. */
@@ -2290,7 +2336,7 @@ body.task-onboarding-visible .empty-state {
 
 /* Ao abrir, a IA ocupa a posição central entre Nova tarefa e Compartilhar. */
 .fab-menu-container.open .fab-ai {
-    bottom: 72px;
+    bottom: 84px;
     z-index: 1001;
     opacity: 1;
     border-color: transparent;
@@ -2300,7 +2346,7 @@ body.task-onboarding-visible .empty-state {
 
 /* A ação principal sobe e ocupa a primeira posição do menu. */
 .fab-menu-container.open .fab-menu-trigger {
-    bottom: 144px;
+    bottom: 158px;
     transform: none;
 }
 
@@ -2324,6 +2370,8 @@ body.theme-light .fab-share {
 }
 
 body.theme-light .fab-ai { border-color: #fff; box-shadow: 0 4px 16px rgba(37,99,235,.2); }
+body.theme-light .fab-menu-container.open::before { border-color: rgba(15,23,42,.12); background: rgba(255,255,255,.94); box-shadow: 0 18px 45px rgba(15,23,42,.18), inset 0 1px 0 #fff; }
+body.theme-light .fab-menu-container.open .fab-btn { border-color: rgba(15,23,42,.08); }
 
 body.theme-girly .fab-menu-trigger {
     background: #ffffff !important;
@@ -2333,6 +2381,7 @@ body.theme-girly .fab-menu-trigger {
 }
 
 body.theme-girly .fab-ai { background: linear-gradient(135deg, #db2777, #8b5cf6); }
+body.theme-girly .fab-menu-container.open::before { border-color: rgba(219,39,119,.16); background: linear-gradient(155deg, rgba(255,247,250,.97), rgba(253,242,248,.95)); box-shadow: 0 18px 45px rgba(157,23,77,.18); }
 
 
 
