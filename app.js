@@ -525,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.24', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.25', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -6311,7 +6311,15 @@ function setupAiTaskCreator() {
                 body.audio_mime_type = recordedAudio.type.split(";")[0] || "audio/webm";
             }
             const { data, error } = await supabaseClient.functions.invoke("create-tasks-with-ai", { body });
-            if (error) throw error;
+            if (error) {
+                let detail = "";
+                try {
+                    const errorBody = error.context && typeof error.context.json === "function" ? await error.context.json() : null;
+                    detail = errorBody?.error || "";
+                } catch (_) {}
+                throw new Error(detail || error.message);
+            }
+            if (data?.error) throw new Error(data.error);
             if (!data?.tasks?.length) throw new Error("Não encontrei nenhuma tarefa clara nesse pedido.");
             renderSuggestions(data.tasks);
         } catch (error) {

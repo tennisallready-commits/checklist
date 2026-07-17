@@ -1702,6 +1702,7 @@ body.theme-girly .task-reminder-indicator {
 .ai-tasks-divider::before,.ai-tasks-divider::after { content:""; height: 1px; flex: 1; background: var(--border-color); }
 #ai-task-prompt { width: 100%; resize: vertical; min-height: 76px; padding: 11px; border: 1px solid var(--border-color); border-radius: 11px; color: var(--text-primary); background: rgba(0,0,0,.12); font: inherit; font-size: .78rem; line-height: 1.45; }
 .ai-tasks-review { display: flex; flex-direction: column; gap: 10px; padding-top: 5px; border-top: 1px solid var(--border-color); }
+.ai-tasks-review[hidden] { display: none !important; }
 .ai-review-heading { display: flex; flex-direction: column; gap: 2px; }
 .ai-review-heading small { color: var(--text-muted); font-size: .64rem; }
 #ai-tasks-review-list { display: flex; flex-direction: column; gap: 8px; max-height: 33vh; overflow-y: auto; }
