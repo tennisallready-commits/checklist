@@ -2409,18 +2409,26 @@ async function savePushSubscription(subscription) {
 }
 
 let pushSubscriptionInFlight = null;
+let pushSubscriptionGeneration = 0;
 async function createOrRepairPushSubscription({ forceRefresh = false } = {}) {
+    const operationGeneration = pushSubscriptionGeneration;
+    const assertCurrentOperation = () => {
+        if (operationGeneration !== pushSubscriptionGeneration) throw new Error("Cadastro substituído por uma nova tentativa.");
+    };
     if (!areNotificationsEnabled() || !currentUser || Notification.permission !== "granted") return null;
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
         throw new Error("Este navegador não oferece suporte a Web Push.");
     }
     const registration = await navigator.serviceWorker.ready;
+    assertCurrentOperation();
     let subscription = await registration.pushManager.getSubscription();
+    assertCurrentOperation();
     if (subscription && forceRefresh) {
         if (supabaseClient && currentUser) {
             await supabaseClient.from("push_subscriptions").delete().eq("endpoint", subscription.endpoint);
         }
         await subscription.unsubscribe().catch(() => false);
+        assertCurrentOperation();
         subscription = null;
     }
     if (!subscription) {
@@ -2428,8 +2436,10 @@ async function createOrRepairPushSubscription({ forceRefresh = false } = {}) {
             userVisibleOnly: true,
             applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
         });
+        assertCurrentOperation();
     }
     await savePushSubscription(subscription);
+    assertCurrentOperation();
     return subscription;
 }
 
@@ -2548,10 +2558,10 @@ async function repairAndTestPushNotifications() {
         }
         if (permission !== "granted") throw new Error("As notificações estão bloqueadas nos Ajustes do aparelho.");
         localStorage.setItem(getNotificationsPreferenceKey(), "true");
-        if (pushSubscriptionInFlight) {
-            setRepairStatus("Finalizando cadastro…", "Preparando uma assinatura nova");
-            await withTimeout(pushSubscriptionInFlight.catch(() => {}), 12000, "O cadastro anterior ficou preso. Feche e abra o app e tente novamente.");
-        }
+        // O reparo explícito tem prioridade. Invalida qualquer tentativa
+        // automática anterior sem ficar esperando uma Promise presa no iOS.
+        pushSubscriptionGeneration += 1;
+        pushSubscriptionInFlight = null;
         setRepairStatus("Registrando aparelho…", "Criando uma assinatura push nova");
         const subscription = await withTimeout(
             ensurePushSubscription({ forceRefresh: true }),
