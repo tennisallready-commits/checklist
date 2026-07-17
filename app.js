@@ -4322,13 +4322,7 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
                     let currentLocalTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
                     currentLocalTasks = currentLocalTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
                     localStorage.setItem("offline_tasks", JSON.stringify(currentLocalTasks));
-                    if (realTask.category_id) {
-                        supabaseClient.functions.invoke("send-task-push", { body: { task_id: realTask.id } })
-                            .then(({ error: pushError }) => {
-                                if (pushError) console.warn("A tarefa foi salva, mas o push não pôde ser enviado:", pushError.message);
-                            })
-                            .catch(pushError => console.warn("Erro ao solicitar push da tarefa:", pushError));
-                    }
+                    if (realTask.category_id) requestSharedTaskPush(realTask.id);
                 }
             })
             .catch(err => {
@@ -4346,6 +4340,32 @@ async function insertTaskWithCategoryFallback(taskPayload) {
         result = await supabaseClient.from('tasks').insert(legacyPayload).select();
     }
     return result;
+}
+
+async function requestSharedTaskPush(taskId, silent = false) {
+    if (!supabaseClient || !taskId) return false;
+    try {
+        const { data, error } = await supabaseClient.functions.invoke("send-task-push", { body: { task_id: taskId } });
+        if (error) throw error;
+        const sent = Number(data && data.sent || 0);
+        const recipients = Number(data && data.recipients || 0);
+        const subscriptions = Number(data && data.subscriptions || 0);
+        if (sent > 0) return true;
+        if (!silent) {
+            if (recipients === 0) {
+                showAppNotice("A tarefa foi criada, mas nenhum colaborador aceito foi encontrado para receber o push.", "warning");
+            } else if (subscriptions === 0) {
+                showAppNotice("A tarefa foi compartilhada, mas o aparelho do destinatário ainda não está registrado para notificações push. Ele precisa ativar Notificações nas Configurações do app.", "warning");
+            } else {
+                showAppNotice("A tarefa foi compartilhada, mas o serviço push não confirmou a entrega ao aparelho.", "warning");
+            }
+        }
+        return false;
+    } catch (error) {
+        console.warn("A tarefa foi salva, mas o push não pôde ser enviado:", error.message);
+        if (!silent) showAppNotice(`Tarefa salva, mas o push falhou: ${error.message}`, "warning");
+        return false;
+    }
 }
 
 async function addTaskOffline(title, category, isRecurring, id, createdAt, repeatDays, context, assignedTo) {
@@ -6376,10 +6396,7 @@ async function syncOfflineDataToCloud() {
                 allActiveTasks = allActiveTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
                 localTasks = localTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
                 localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
-                if (realTask.category_id && realTask.assigned_to) {
-                    const { error: pushError } = await supabaseClient.functions.invoke("send-task-push", { body: { task_id: realTask.id } });
-                    if (pushError) console.warn("Tarefa sincronizada, mas o push ficou indisponível:", pushError.message);
-                }
+                if (realTask.category_id) await requestSharedTaskPush(realTask.id);
                 
                 let compQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
                 let updatedCompQueue = {};
