@@ -526,7 +526,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.51', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.52', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -2457,7 +2457,7 @@ function ensurePushSubscription(options = {}) {
     return wrappedOperation;
 }
 
-async function removePushSubscription() {
+async function removePushSubscription({ unsubscribeDevice = false } = {}) {
     if (!("serviceWorker" in navigator)) return;
     const registration = await navigator.serviceWorker.ready;
     const subscription = await registration.pushManager.getSubscription();
@@ -2466,7 +2466,10 @@ async function removePushSubscription() {
         const { error } = await supabaseClient.from("push_subscriptions").delete().eq("endpoint", subscription.endpoint);
         if (error) console.warn("Não foi possível remover a inscrição push do banco:", error.message);
     }
-    await subscription.unsubscribe();
+    // Desativar no app remove o destino do servidor, mas preserva a assinatura
+    // do navegador. Assim, reativar no iOS apenas cadastra o mesmo endpoint de
+    // novo, sem depender de uma nova chamada instável ao PushManager.subscribe.
+    if (unsubscribeDevice) await subscription.unsubscribe();
 }
 
 function areNotificationsEnabled() {
@@ -6980,11 +6983,10 @@ function setupSupabaseAuth() {
             subscribeToCollaborationUpdates();
             updateNotificationsSettingUI();
             if (areNotificationsEnabled() && "Notification" in window && Notification.permission === "granted") {
-                const pushRepairKey = `push_subscription_repaired_v9_28_${currentUser.id}`;
-                const forceRefresh = localStorage.getItem(pushRepairKey) !== "true";
-                ensurePushSubscription({ forceRefresh }).then(subscription => {
-                    if (subscription) localStorage.setItem(pushRepairKey, "true");
-                }).catch(error => console.warn("Não foi possível restaurar a inscrição Web Push:", error.message));
+                // Nunca cancela uma assinatura válida automaticamente ao abrir
+                // o app. Apenas recupera e sincroniza o endpoint existente.
+                ensurePushSubscription({ forceRefresh: false })
+                    .catch(error => console.warn("Não foi possível restaurar a inscrição Web Push:", error.message));
             }
             const notificationTaskId = new URLSearchParams(window.location.search).get("notification_task");
             const reminderTaskId = new URLSearchParams(window.location.search).get("reminder_task");
