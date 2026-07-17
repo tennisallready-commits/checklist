@@ -1377,7 +1377,8 @@ function setupEventListeners() {
         btnAddCategory.innerHTML = "Salvando...";
 
         try {
-            await addCategory(val, typeVal);
+            const categoryCreated = await addCategory(val, typeVal);
+            if (!categoryCreated) return;
             inputNewCategory.value = "";
             if (inputNewCategoryCustomType) inputNewCategoryCustomType.value = "";
             if (selectNewCategoryType) {
@@ -4946,13 +4947,22 @@ async function inviteCollaborator(catId, email) {
                 .from("categories")
                 .select("*")
                 .eq("user_id", currentUser.id)
-                .eq("name", cat.name)
-                .eq("is_active", true)
+                .ilike("name", cat.name.trim())
                 .order("id", { ascending: false })
                 .limit(1)
                 .maybeSingle();
             remoteCategory = fallbackResult.data;
             remoteCategoryError = fallbackResult.error;
+            if (remoteCategory && remoteCategory.is_active === false) {
+                const reactivatedResult = await supabaseClient
+                    .from("categories")
+                    .update({ is_active: true })
+                    .eq("id", remoteCategory.id)
+                    .select()
+                    .single();
+                remoteCategory = reactivatedResult.data;
+                remoteCategoryError = reactivatedResult.error;
+            }
         }
         if (remoteCategoryError) throw remoteCategoryError;
         if (!remoteCategory) {
@@ -5440,13 +5450,48 @@ function updateTaskAssigneeDropdown(categoryName, selectEl, groupEl) {
 }
 
 async function addCategory(name, type) {
-    if (!name) return;
+    if (!name) return false;
+
+    const normalizedName = name.trim();
+
+    // Valida primeiro a memória/cache para não criar um segundo registro
+    // temporário com um nome que já está visível no aparelho.
+    const localExisting = categories.find(category =>
+        category.is_active !== false
+        && String(category.name || "").trim().toLocaleLowerCase("pt-BR") === normalizedName.toLocaleLowerCase("pt-BR")
+    );
+    if (localExisting) {
+        showAppNotice(`A categoria “${localExisting.name}” já existe.`, "warning");
+        return false;
+    }
+
+    // Quando estiver online, consulta também a nuvem antes da atualização
+    // otimista. Isso evita o erro de chave duplicada por cache desatualizado.
+    if (supabaseClient && currentUser && navigator.onLine) {
+        const existingResult = await supabaseClient
+            .from("categories")
+            .select("*")
+            .eq("user_id", currentUser.id)
+            .ilike("name", normalizedName)
+            .order("id", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+        if (existingResult.error) {
+            showAppNotice(`Não foi possível verificar a categoria: ${existingResult.error.message}`, "error");
+            return false;
+        }
+        if (existingResult.data && existingResult.data.is_active !== false) {
+            showAppNotice(`A categoria “${existingResult.data.name}” já existe.`, "warning");
+            await loadChecklistAndProgress();
+            return false;
+        }
+    }
 
     // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
     const tempId = Date.now();
     const newCat = {
         id: tempId,
-        name: name,
+        name: normalizedName,
         type: type || null,
         is_active: true
     };
@@ -5456,10 +5501,6 @@ async function addCategory(name, type) {
 
     // Adiciona na memória e local storage
     let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
-    if (localCats.some(c => c.name.toLowerCase() === name.toLowerCase() && c.is_active)) {
-        alert("Este local/categoria já existe.");
-        return;
-    }
     categories.push(newCat);
     localCats.push(newCat);
     localStorage.setItem("offline_categories", JSON.stringify(localCats));
@@ -5470,16 +5511,27 @@ async function addCategory(name, type) {
     // política RLS reconhecer a conta atual como proprietária da categoria.
     if (supabaseClient && currentUser) {
         try {
-            const realCat = await insertOwnedCategoryInCloud({ name, type });
+            const realCat = await insertOwnedCategoryInCloud({ name: normalizedName, type });
             updateLocalCatId(tempId, realCat);
             refreshSyncStatusFromQueues();
         } catch (error) {
+            if (error.code === "CATEGORY_ALREADY_EXISTS") {
+                categories = categories.filter(category => String(category.id) !== String(tempId));
+                const cachedCategories = (JSON.parse(localStorage.getItem("offline_categories")) || [])
+                    .filter(category => String(category.id) !== String(tempId));
+                localStorage.setItem("offline_categories", JSON.stringify(cachedCategories));
+                renderCategories();
+                showAppNotice(error.message, "warning");
+                return false;
+            }
             // Mantém o registro temporário para uma nova tentativa automática.
             console.error("Erro ao sincronizar nova categoria:", error);
             setSyncStatus("error", "Erro ao sincronizar", `A categoria ficou salva neste aparelho e será reenviada: ${error.message}`);
             showAppNotice(`Erro ao sincronizar categoria: ${error.message}`, "error");
+            return false;
         }
     }
+    return true;
 }
 
 async function insertOwnedCategoryInCloud({ name, type }) {
@@ -5498,6 +5550,31 @@ async function insertOwnedCategoryInCloud({ name, type }) {
         const { type: _ignoredType, ...legacyPayload } = payload;
         result = await supabaseClient.from("categories").insert(legacyPayload).select().single();
         if (!result.error && result.data) result.data.type = type || null;
+    }
+    if (result.error && (result.error.code === "23505" || /duplicate key|categories_name_user_id_key/i.test(result.error.message || ""))) {
+        const existingResult = await supabaseClient
+            .from("categories")
+            .select("*")
+            .eq("user_id", currentUser.id)
+            .ilike("name", name.trim())
+            .order("id", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+        if (existingResult.error) throw existingResult.error;
+        if (!existingResult.data) throw result.error;
+        if (existingResult.data.is_active !== false) {
+            const duplicateError = new Error(`A categoria “${existingResult.data.name}” já existe.`);
+            duplicateError.code = "CATEGORY_ALREADY_EXISTS";
+            throw duplicateError;
+        }
+        const reactivated = await supabaseClient
+            .from("categories")
+            .update({ is_active: true })
+            .eq("id", existingResult.data.id)
+            .select()
+            .single();
+        if (reactivated.error) throw reactivated.error;
+        result = reactivated;
     }
     if (result.error) throw result.error;
     if (!result.data) throw new Error("O servidor não retornou a categoria criada.");
