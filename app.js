@@ -526,7 +526,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.53', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.54', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -2410,7 +2410,17 @@ async function savePushSubscription(subscription) {
 
 let pushSubscriptionInFlight = null;
 let pushSubscriptionGeneration = 0;
-async function createOrRepairPushSubscription({ forceRefresh = false } = {}) {
+function awaitPushStep(promise, milliseconds, timeoutMessage) {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(timeoutMessage)), milliseconds)),
+    ]);
+}
+
+async function createOrRepairPushSubscription({ forceRefresh = false, onProgress = null } = {}) {
+    const reportProgress = (title, detail) => {
+        if (typeof onProgress === "function") onProgress(title, detail);
+    };
     const operationGeneration = pushSubscriptionGeneration;
     const assertCurrentOperation = () => {
         if (operationGeneration !== pushSubscriptionGeneration) throw new Error("Cadastro substituído por uma nova tentativa.");
@@ -2422,31 +2432,63 @@ async function createOrRepairPushSubscription({ forceRefresh = false } = {}) {
     // `serviceWorker.ready` pode nunca resolver no Safari durante uma troca de
     // versão, mesmo quando já existe um worker ativo controlando o PWA. Usa o
     // registro atual diretamente e deixa `ready` apenas como último recurso.
-    let registration = await navigator.serviceWorker.getRegistration("./");
-    if (!registration) registration = await navigator.serviceWorker.ready;
+    reportProgress("Verificando aplicativo…", "Localizando o service worker ativo");
+    let registration = await awaitPushStep(
+        navigator.serviceWorker.getRegistration("./"),
+        8000,
+        "ETAPA 1: o Safari não respondeu ao procurar o service worker.",
+    );
+    if (!registration) {
+        reportProgress("Ativando aplicativo…", "Aguardando o service worker iniciar");
+        registration = await awaitPushStep(
+            navigator.serviceWorker.ready,
+            12000,
+            "ETAPA 1: não existe um service worker ativo para este aplicativo.",
+        );
+    }
     if (!registration.active) {
-        await registration.update().catch(() => {});
-        registration = await navigator.serviceWorker.ready;
+        reportProgress("Atualizando aplicativo…", "Ativando o serviço de notificações");
+        await awaitPushStep(registration.update().catch(() => {}), 8000, "ETAPA 1: o service worker não conseguiu atualizar.");
+        registration = await awaitPushStep(navigator.serviceWorker.ready, 12000, "ETAPA 1: o service worker não ficou ativo.");
     }
     assertCurrentOperation();
-    let subscription = await registration.pushManager.getSubscription();
+    reportProgress("Consultando iPhone…", "Procurando uma assinatura push existente");
+    let subscription = await awaitPushStep(
+        registration.pushManager.getSubscription(),
+        12000,
+        "ETAPA 2: o iPhone não respondeu ao consultar a assinatura push.",
+    );
     assertCurrentOperation();
     if (subscription && forceRefresh) {
         if (supabaseClient && currentUser) {
             await supabaseClient.from("push_subscriptions").delete().eq("endpoint", subscription.endpoint);
         }
-        await subscription.unsubscribe().catch(() => false);
+        await awaitPushStep(
+            subscription.unsubscribe().catch(() => false),
+            10000,
+            "ETAPA 3: o iPhone não conseguiu remover a assinatura expirada.",
+        );
         assertCurrentOperation();
         subscription = null;
     }
     if (!subscription) {
-        subscription = await registration.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
-        });
+        reportProgress("Cadastrando iPhone…", "Criando a assinatura Web Push");
+        subscription = await awaitPushStep(
+            registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+            }),
+            25000,
+            "ETAPA 3: o iPhone não respondeu ao criar a assinatura Web Push.",
+        );
         assertCurrentOperation();
     }
-    await savePushSubscription(subscription);
+    reportProgress("Salvando aparelho…", "Registrando a assinatura no Supabase");
+    await awaitPushStep(
+        savePushSubscription(subscription),
+        15000,
+        "ETAPA 4: o Supabase não respondeu ao salvar este aparelho.",
+    );
     assertCurrentOperation();
     return subscription;
 }
@@ -2575,8 +2617,8 @@ async function repairAndTestPushNotifications() {
         pushSubscriptionInFlight = null;
         setRepairStatus("Recuperando aparelho…", "Validando a assinatura atual do iPhone");
         let subscription = await withTimeout(
-            ensurePushSubscription({ forceRefresh: false }),
-            20000,
+            ensurePushSubscription({ forceRefresh: false, onProgress: setRepairStatus }),
+            65000,
             "O iPhone não concluiu o cadastro push. Feche e abra o app e tente novamente.",
         );
         if (!subscription?.endpoint) throw new Error("O aparelho não criou uma assinatura push.");
@@ -2593,8 +2635,8 @@ async function repairAndTestPushNotifications() {
             pushSubscriptionGeneration += 1;
             pushSubscriptionInFlight = null;
             subscription = await withTimeout(
-                ensurePushSubscription({ forceRefresh: true }),
-                20000,
+                ensurePushSubscription({ forceRefresh: true, onProgress: setRepairStatus }),
+                65000,
                 "O iPhone não conseguiu renovar a assinatura push.",
             );
             if (!subscription?.endpoint) throw new Error("O aparelho não criou uma assinatura push nova.");
