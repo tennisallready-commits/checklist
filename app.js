@@ -525,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.29', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.30', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -6237,6 +6237,94 @@ function setupAiTaskCreator() {
     let recordedAudio = null;
     let stopTimer = null;
     let suggestions = [];
+    let liveSocket = null;
+    let liveAudioContext = null;
+    let liveSource = null;
+    let liveProcessor = null;
+    let liveTranscript = "";
+    let liveAutoSubmitted = false;
+
+    const bytesToBase64 = bytes => {
+        let binary = "";
+        const step = 0x8000;
+        for (let index = 0; index < bytes.length; index += step) binary += String.fromCharCode(...bytes.subarray(index, index + step));
+        return btoa(binary);
+    };
+    const downsampleToPcm16 = (samples, inputRate) => {
+        const ratio = inputRate / 16000;
+        const length = Math.max(1, Math.floor(samples.length / ratio));
+        const output = new Int16Array(length);
+        for (let index = 0; index < length; index++) {
+            const start = Math.floor(index * ratio);
+            const end = Math.min(samples.length, Math.floor((index + 1) * ratio));
+            let sum = 0;
+            for (let cursor = start; cursor < end; cursor++) sum += samples[cursor];
+            const value = Math.max(-1, Math.min(1, sum / Math.max(1, end - start)));
+            output[index] = value < 0 ? value * 32768 : value * 32767;
+        }
+        return new Uint8Array(output.buffer);
+    };
+    const stopLiveAudio = () => {
+        try { liveProcessor?.disconnect(); } catch (_) {}
+        try { liveSource?.disconnect(); } catch (_) {}
+        if (liveAudioContext && liveAudioContext.state !== "closed") liveAudioContext.close().catch(() => {});
+        liveProcessor = null;
+        liveSource = null;
+        liveAudioContext = null;
+    };
+    const submitLiveTranscript = () => {
+        const transcript = liveTranscript.trim();
+        if (!transcript || liveAutoSubmitted) return;
+        liveAutoSubmitted = true;
+        promptInput.value = transcript;
+        recordedAudio = null;
+        recordTitle.textContent = "Fala interpretada";
+        recordStatus.textContent = transcript.slice(0, 72);
+        setTimeout(() => generateButton.click(), 80);
+    };
+    const startGeminiLive = async stream => {
+        try {
+            const { data, error } = await supabaseClient.functions.invoke("create-gemini-live-token", { body: {} });
+            if (error || !data?.token) throw new Error(data?.error || error?.message || "Token ao vivo indisponível");
+            liveTranscript = "";
+            liveAutoSubmitted = false;
+            const endpoint = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(data.token)}`;
+            liveSocket = new WebSocket(endpoint);
+            liveSocket.onopen = () => {
+                liveSocket.send(JSON.stringify({ setup: {
+                    model: `models/${data.model || "gemini-3.1-flash-live-preview"}`,
+                    generationConfig: { responseModalities: ["TEXT"], temperature: 0 },
+                    inputAudioTranscription: {},
+                    systemInstruction: { parts: [{ text: "Transcreva fielmente a fala do usuário em português do Brasil. Responda somente com a transcrição, sem comentários." }] },
+                } }));
+            };
+            liveSocket.onmessage = async event => {
+                const message = JSON.parse(event.data);
+                if (message.setupComplete && !liveProcessor && stream.active) {
+                    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                    liveAudioContext = new AudioContextClass();
+                    await liveAudioContext.resume();
+                    liveSource = liveAudioContext.createMediaStreamSource(stream);
+                    liveProcessor = liveAudioContext.createScriptProcessor(2048, 1, 1);
+                    liveProcessor.onaudioprocess = audioEvent => {
+                        if (liveSocket?.readyState !== WebSocket.OPEN) return;
+                        const pcm = downsampleToPcm16(audioEvent.inputBuffer.getChannelData(0), liveAudioContext.sampleRate);
+                        liveSocket.send(JSON.stringify({ realtimeInput: { audio: { data: bytesToBase64(pcm), mimeType: "audio/pcm;rate=16000" } } }));
+                    };
+                    liveSource.connect(liveProcessor);
+                    liveProcessor.connect(liveAudioContext.destination);
+                    recordStatus.textContent = "Transcrevendo ao vivo…";
+                }
+                const transcription = message.serverContent?.inputTranscription?.text;
+                if (transcription) liveTranscript += `${transcription} `;
+                if (message.serverContent?.turnComplete && recorder?.state !== "recording") submitLiveTranscript();
+            };
+            liveSocket.onerror = () => { stopLiveAudio(); };
+            liveSocket.onclose = () => { stopLiveAudio(); };
+        } catch (error) {
+            console.warn("Gemini Live indisponível; mantendo gravação normal.", error);
+        }
+    };
 
     const resetRecorderLabel = () => {
         recordButton.classList.remove("recording");
@@ -6245,6 +6333,8 @@ function setupAiTaskCreator() {
     };
     const close = () => {
         if (recorder && recorder.state === "recording") recorder.stop();
+        try { liveSocket?.close(); } catch (_) {}
+        stopLiveAudio();
         closeModal(modal);
     };
     openButton.addEventListener("click", () => {
@@ -6257,7 +6347,10 @@ function setupAiTaskCreator() {
 
     recordButton.addEventListener("click", async () => {
         if (recorder && recorder.state === "recording") {
+            stopLiveAudio();
+            if (liveSocket?.readyState === WebSocket.OPEN) liveSocket.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
             recorder.stop();
+            setTimeout(submitLiveTranscript, 1200);
             return;
         }
         if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
@@ -6278,6 +6371,7 @@ function setupAiTaskCreator() {
                 resetRecorderLabel();
             };
             recorder.start();
+            startGeminiLive(stream);
             recordedAudio = null;
             recordButton.classList.add("recording");
             recordTitle.textContent = "Ouvindo… toque para parar";
