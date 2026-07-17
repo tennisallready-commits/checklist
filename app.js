@@ -525,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.28', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.29', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -6220,7 +6220,7 @@ function createConfettiBurst(x, y) {
 
 function setupAiTaskCreator() {
     const modal = document.getElementById("modal-ai-tasks");
-    const openButton = document.getElementById("btn-open-ai-tasks");
+    const openButton = document.getElementById("btn-open-ai-tasks-fab");
     const closeButton = document.getElementById("btn-close-ai-tasks");
     const recordButton = document.getElementById("btn-ai-record");
     const recordTitle = document.getElementById("ai-record-title");
@@ -6248,6 +6248,7 @@ function setupAiTaskCreator() {
         closeModal(modal);
     };
     openButton.addEventListener("click", () => {
+        document.getElementById("fab-menu")?.classList.remove("open");
         closeModal(modalAddTask);
         openModal(modal);
     });

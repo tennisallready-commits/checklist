@@ -41,7 +41,7 @@
             }
         });
     </script>
-    <link rel="stylesheet" href="style.css?v=7.97">
+    <link rel="stylesheet" href="style.css?v=7.98">
     
     <!-- iOS / PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -293,6 +293,10 @@
                 <i data-lucide="share-2" style="width: 24px; height: 24px;"></i>
                 <span class="fab-label">Compartilhar checklist</span>
             </button>
+            <button id="btn-open-ai-tasks-fab" class="fab-btn fab-ai" title="Criar tarefas com IA">
+                <i data-lucide="sparkles" style="width: 24px; height: 24px;"></i>
+                <span class="fab-label">Criar tarefas com IA</span>
+            </button>
             <button id="btn-add-task-modal" class="fab-btn fab-menu-trigger" title="Nova Tarefa">
                 <i data-lucide="plus" style="width: 24px; height: 24px;"></i>
                 <span class="fab-label">Nova Tarefa</span>
@@ -306,10 +310,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h2>Nova Tarefa</h2>
-                <div class="modal-header-actions">
-                    <button type="button" id="btn-open-ai-tasks" class="ai-task-trigger" title="Criar tarefas falando"><i data-lucide="sparkles"></i><span>Criar com IA</span></button>
-                    <button class="modal-close" id="btn-close-add-modal"><i data-lucide="x"></i></button>
-                </div>
+                <button class="modal-close" id="btn-close-add-modal"><i data-lucide="x"></i></button>
             </div>
             <form id="form-add-task">
                 <div class="form-group">
@@ -512,7 +513,7 @@
 
                 <div class="settings-version">
                     <span>Checklist</span>
-                        <strong>Versão 9.09</strong>
+                        <strong>Versão 9.10</strong>
                 </div>
             </div>
         </div>
@@ -1054,6 +1055,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=9.09"></script>
+    <script src="app.js?v=9.10"></script>
 </body>
 </html>
