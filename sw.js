@@ -1,23 +1,31 @@
-const CACHE_NAME = 'checklist-cache-v9.12';
-const ASSETS = [
+const CACHE_NAME = 'checklist-cache-v9.14';
+const CRITICAL_ASSETS = [
   './',
   './index.html',
   './style.css?v=7.92',
-  './app.js?v=8.94',
+  './app.js?v=8.96',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  './vendor/lucide.min.js?v=1.24.0'
+];
+const OPTIONAL_ASSETS = [
   'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap',
-  './vendor/lucide.min.js?v=1.24.0',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2'
 ];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS);
+    caches.open(CACHE_NAME).then(async (cache) => {
+      // Um CDN indisponível não pode impedir a atualização do PWA inteiro.
+      await cache.addAll(CRITICAL_ASSETS);
+      await Promise.allSettled(OPTIONAL_ASSETS.map(asset => cache.add(asset)));
     }).then(() => self.skipWaiting())
   );
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('activate', (e) => {

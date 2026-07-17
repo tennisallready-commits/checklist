@@ -506,12 +506,38 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
 
+        let serviceWorkerRegistration = null;
+        const activateWaitingWorker = registration => {
+            if (registration && registration.waiting) registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+        };
+        const checkPwaUpdate = () => {
+            if (!serviceWorkerRegistration || !navigator.onLine) return;
+            serviceWorkerRegistration.update()
+                .then(() => activateWaitingWorker(serviceWorkerRegistration))
+                .catch(error => console.warn('Verificação de atualização do PWA indisponível:', error.message));
+        };
+
         navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
             .then(reg => {
+                serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
+                activateWaitingWorker(reg);
+                reg.addEventListener('updatefound', () => {
+                    const installing = reg.installing;
+                    if (!installing) return;
+                    installing.addEventListener('statechange', () => {
+                        if (installing.state === 'installed') activateWaitingWorker(reg);
+                    });
+                });
                 return reg.update();
             })
             .catch(err => console.error('Erro ao registrar Service Worker:', err));
+
+        window.addEventListener('pageshow', checkPwaUpdate);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') checkPwaUpdate();
+        });
+        window.addEventListener('online', checkPwaUpdate);
     }
 });
 
@@ -5225,24 +5251,40 @@ async function focusSharedTaskFromNotification(notification) {
     if (highlightRenderedTask(notification.task_id)) return;
 
     let targetTask = (allActiveTasks || []).find(task => String(task.id) === String(notification.task_id));
-    if (!targetTask && supabaseClient && currentUser) {
+    if (supabaseClient && currentUser) {
+        // O deep link do push prioriza uma consulta mínima da própria tarefa.
+        // Não espera a sincronização completa do checklist para mostrá-la.
         const { data } = await supabaseClient.from("tasks").select("*").eq("id", notification.task_id).maybeSingle();
-        targetTask = data || null;
+        if (data) {
+            targetTask = data;
+            const cachedTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+            const existingIndex = cachedTasks.findIndex(task => String(task.id) === String(data.id));
+            if (existingIndex >= 0) cachedTasks[existingIndex] = data;
+            else cachedTasks.push(data);
+            localStorage.setItem("offline_tasks", JSON.stringify(cachedTasks));
+        }
     }
 
     if (targetTask && targetTask.created_at) {
         selectedDate = extractDateFromTimestamp(targetTask.created_at);
         updateDateDisplay();
-        await loadChecklistAndProgress();
-        await new Promise(resolve => setTimeout(resolve, 180));
-        if (highlightRenderedTask(notification.task_id)) return;
+        loadDataOffline();
+        renderCategories();
+        renderChecklist();
+        updateProgress();
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        if (highlightRenderedTask(notification.task_id)) {
+            // Revalida o restante somente depois do destaque, sem atrasar nem
+            // substituir o cartão que acabou de aparecer.
+            setTimeout(() => loadChecklistAndProgress().catch(error => console.warn("Revalidação após push indisponível:", error)), 2200);
+            return;
+        }
     }
 
     // Tarefas pendentes não recorrentes podem ter rolado para o dia atual.
     selectedDate = getLocalDateString(new Date());
     updateDateDisplay();
-    await loadChecklistAndProgress();
-    setTimeout(() => highlightRenderedTask(notification.task_id), 220);
+    loadChecklistAndProgress().then(() => highlightRenderedTask(notification.task_id));
 }
 
 function getTaskById(taskId) {
