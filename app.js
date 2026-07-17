@@ -525,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.39', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.43', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -1530,7 +1530,12 @@ function setupEventListeners() {
                 const permission = await Notification.requestPermission();
                 if (permission === "granted") {
                     console.log("Permissão de notificação concedida.");
+                    localStorage.setItem(getNotificationsPreferenceKey(), "true");
+                    ensurePushSubscription().catch(error => console.warn("Não foi possível registrar o push do lembrete:", error.message));
                 }
+            } else if (Notification.permission === "granted") {
+                localStorage.setItem(getNotificationsPreferenceKey(), "true");
+                ensurePushSubscription().catch(error => console.warn("Não foi possível registrar o push do lembrete:", error.message));
             }
         }
     };
@@ -2393,13 +2398,17 @@ async function savePushSubscription(subscription) {
     if (error) throw error;
 }
 
-async function ensurePushSubscription() {
+async function ensurePushSubscription({ forceRefresh = false } = {}) {
     if (!areNotificationsEnabled() || !currentUser || Notification.permission !== "granted") return null;
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
         throw new Error("Este navegador não oferece suporte a Web Push.");
     }
     const registration = await navigator.serviceWorker.ready;
     let subscription = await registration.pushManager.getSubscription();
+    if (subscription && forceRefresh) {
+        await subscription.unsubscribe().catch(() => false);
+        subscription = null;
+    }
     if (!subscription) {
         subscription = await registration.pushManager.subscribe({
             userVisibleOnly: true,
@@ -4831,11 +4840,38 @@ function showConfirmDelete(task, onChoice) {
 
 function setupModalSwipeToClose(modal) {
     const content = modal.querySelector(".modal-content");
+    const overlay = modal.querySelector(".modal-overlay");
     if (!content) return;
 
     let startY = 0;
+    let startX = 0;
     let currentY = 0;
+    let lastY = 0;
+    let lastMoveAt = 0;
+    let velocityY = 0;
     let isDragging = false;
+    let directionLocked = false;
+    let animationFrame = 0;
+
+    const clearGestureStyles = () => {
+        cancelAnimationFrame(animationFrame);
+        content.classList.remove("is-swipe-dragging");
+        content.style.removeProperty("transform");
+        content.style.removeProperty("transition");
+        overlay?.style.removeProperty("opacity");
+        overlay?.style.removeProperty("transition");
+    };
+
+    const renderDrag = distance => {
+        cancelAnimationFrame(animationFrame);
+        animationFrame = requestAnimationFrame(() => {
+            content.style.transform = `translate3d(0, ${distance}px, 0)`;
+            if (overlay) {
+                const progress = Math.min(distance / Math.max(content.offsetHeight, 1), 0.75);
+                overlay.style.opacity = String(1 - progress * 0.72);
+            }
+        });
+    };
     
     content.addEventListener("touchstart", (e) => {
         // Ignora gestos de deslize iniciados em campos interativos (inputs, selects, botões, etc.)
@@ -4868,55 +4904,85 @@ function setupModalSwipeToClose(modal) {
         
         if (touchedHeader || isScrollAtTop) {
             startY = e.touches[0].clientY;
+            startX = e.touches[0].clientX;
             currentY = startY;
+            lastY = startY;
+            lastMoveAt = performance.now();
+            velocityY = 0;
             isDragging = true;
+            directionLocked = false;
+            content.classList.add("is-swipe-dragging");
             content.style.transition = "none";
+            if (overlay) overlay.style.transition = "none";
         }
     }, { passive: true });
 
     content.addEventListener("touchmove", (e) => {
         if (!isDragging) return;
         currentY = e.touches[0].clientY;
-        let diffY = currentY - startY;
+        const currentX = e.touches[0].clientX;
+        const diffY = currentY - startY;
+        const diffX = currentX - startX;
+
+        if (!directionLocked && Math.max(Math.abs(diffY), Math.abs(diffX)) > 8) {
+            if (Math.abs(diffX) > Math.abs(diffY) || diffY < 0) {
+                isDragging = false;
+                clearGestureStyles();
+                return;
+            }
+            directionLocked = true;
+        }
+        if (!directionLocked) return;
+
+        const now = performance.now();
+        const elapsed = Math.max(now - lastMoveAt, 1);
+        velocityY = velocityY * 0.65 + ((currentY - lastY) / elapsed) * 0.35;
+        lastY = currentY;
+        lastMoveAt = now;
         
-        // Se o movimento for para cima (dedo subindo / scroll para baixo), cancelamos o arrastar do modal
         if (diffY < 0) {
             isDragging = false;
-            content.style.transform = "";
+            clearGestureStyles();
             return;
-        } else if (diffY > 5) {
-            // Se de fato está arrastando para baixo, cancela a ação padrão do navegador (Pull-to-Refresh do iOS/Safari)
-            if (e.cancelable) {
-                e.preventDefault();
-            }
         }
-        
-        content.style.transform = `translateY(${diffY}px)`;
+        if (e.cancelable) e.preventDefault();
+        renderDrag(diffY);
     }, { passive: false });
 
-    content.addEventListener("touchend", () => {
+    const finishGesture = cancelled => {
         if (!isDragging) return;
         isDragging = false;
-        
-        const diffY = currentY - startY;
-        
-        // Se arrastou para baixo mais de 120 pixels, fecha o modal
-        if (diffY > 120) {
-            closeModal(modal);
-            // Reseta a animação/estilo após a transição de fechar terminar
+        cancelAnimationFrame(animationFrame);
+        const distance = Math.max(0, currentY - startY);
+        const shouldClose = !cancelled && (distance > Math.min(120, content.offsetHeight * 0.22) || (distance > 34 && velocityY > 0.55));
+        content.classList.remove("is-swipe-dragging");
+
+        if (shouldClose) {
+            const remaining = Math.max(content.offsetHeight - distance, 0);
+            const duration = Math.max(150, Math.min(260, remaining / Math.max(velocityY, 1.2)));
+            content.style.transition = `transform ${duration}ms cubic-bezier(.22,.8,.3,1)`;
+            if (overlay) overlay.style.transition = `opacity ${duration}ms ease-out`;
+            requestAnimationFrame(() => {
+                content.style.transform = "translate3d(0, calc(100dvh + 40px), 0)";
+                if (overlay) overlay.style.opacity = "0";
+            });
             setTimeout(() => {
-                content.style.transform = "";
-                content.style.transition = "";
-            }, 350);
+                closeModal(modal);
+                clearGestureStyles();
+            }, duration);
         } else {
-            // Caso contrário, volta de forma elástica para a posição original (0)
-            content.style.transition = "transform 0.3s cubic-bezier(0.16, 1, 0.3, 1)";
-            content.style.transform = "translateY(0px)";
+            content.style.transition = "transform 220ms cubic-bezier(.2,.85,.25,1)";
+            if (overlay) overlay.style.transition = "opacity 180ms ease-out";
+            content.style.transform = "translate3d(0, 0, 0)";
+            if (overlay) overlay.style.opacity = "1";
             setTimeout(() => {
-                content.style.transition = "";
-            }, 300);
+                clearGestureStyles();
+            }, 230);
         }
-    });
+    };
+
+    content.addEventListener("touchend", () => finishGesture(false), { passive: true });
+    content.addEventListener("touchcancel", () => finishGesture(true), { passive: true });
 }
 
 function openCollaboratorsModal(cat) {
@@ -6717,10 +6783,17 @@ async function loadUserProfile() {
 }
 
 // Supabase Auth and Sync helpers
+function setAppContainerVisible(visible) {
+    const appContainerElement = document.querySelector(".app-container");
+    if (!appContainerElement) return;
+    if (visible) appContainerElement.style.removeProperty("display");
+    else appContainerElement.style.display = "none";
+}
+
 function setupSupabaseAuth() {
     if (!supabaseClient) {
         document.getElementById("auth-container").style.display = "none";
-        document.querySelector(".app-container").style.display = "flex";
+        setAppContainerVisible(true);
         loadChecklistAndProgress();
         if (appSessionLoader) appSessionLoader.classList.add("hidden");
         return;
@@ -6745,7 +6818,7 @@ function setupSupabaseAuth() {
             learningCloudState = "idle";
             reportsCloudState = "idle";
             document.getElementById("auth-container").style.display = "none";
-            if (!restoredFromCache) document.querySelector(".app-container").style.display = "none";
+            if (!restoredFromCache) setAppContainerVisible(false);
 
             // Um push de tarefa tem prioridade sobre a sincronização completa:
             // mostra o cartão imediatamente e continua o carregamento depois.
@@ -6756,7 +6829,7 @@ function setupSupabaseAuth() {
                 if (primedTask) {
                     earlyNotificationTaskHandled = true;
                     if (appSessionLoader) appSessionLoader.classList.add("hidden");
-                    document.querySelector(".app-container").style.display = "flex";
+                    setAppContainerVisible(true);
                 }
             }
 
@@ -6782,7 +6855,7 @@ function setupSupabaseAuth() {
             if (!restoredFromCache) {
                 if (appSessionLoader) appSessionLoader.classList.add("hidden");
                 await new Promise(resolve => setTimeout(resolve, 280));
-                document.querySelector(".app-container").style.display = "flex";
+                setAppContainerVisible(true);
             }
 
             // Toda conta precisa definir um ID público antes de continuar.
@@ -6790,7 +6863,11 @@ function setupSupabaseAuth() {
             subscribeToCollaborationUpdates();
             updateNotificationsSettingUI();
             if (areNotificationsEnabled() && "Notification" in window && Notification.permission === "granted") {
-                ensurePushSubscription().catch(error => console.warn("Não foi possível restaurar a inscrição Web Push:", error.message));
+                const pushRepairKey = `push_subscription_repaired_v9_23_${currentUser.id}`;
+                const forceRefresh = localStorage.getItem(pushRepairKey) !== "true";
+                ensurePushSubscription({ forceRefresh }).then(subscription => {
+                    if (subscription) localStorage.setItem(pushRepairKey, "true");
+                }).catch(error => console.warn("Não foi possível restaurar a inscrição Web Push:", error.message));
             }
             const notificationTaskId = new URLSearchParams(window.location.search).get("notification_task");
             const reminderTaskId = new URLSearchParams(window.location.search).get("reminder_task");
@@ -6829,7 +6906,7 @@ function setupSupabaseAuth() {
             learningCloudState = "idle";
             reportsCloudState = "idle";
             document.getElementById("auth-container").style.display = "flex";
-            document.querySelector(".app-container").style.display = "none";
+            setAppContainerVisible(false);
             if (appSessionLoader) appSessionLoader.classList.add("hidden");
             
             // Limpa o cache local ao deslogar para evitar contaminação
