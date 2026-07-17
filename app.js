@@ -4921,12 +4921,22 @@ async function inviteCollaborator(catId, email) {
     try {
         // O ID guardado pelo PWA pode ficar obsoleto após uma categoria ser
         // excluída/recriada. Confirma sempre a categoria real antes do convite.
-        let { data: remoteCategory, error: remoteCategoryError } = await supabaseClient
-            .from("categories")
-            .select("*")
-            .eq("id", catId)
-            .eq("user_id", currentUser.id)
-            .maybeSingle();
+        let remoteCategory = null;
+        let remoteCategoryError = null;
+
+        // IDs temporários são timestamps locais. Nunca os envia como filtro de
+        // uma coluna UUID/bigint no banco, pois a consulta falharia antes da
+        // recuperação pelo nome ou da criação da categoria real.
+        if (!isTemporaryId(catId)) {
+            const remoteById = await supabaseClient
+                .from("categories")
+                .select("*")
+                .eq("id", catId)
+                .eq("user_id", currentUser.id)
+                .maybeSingle();
+            remoteCategory = remoteById.data;
+            remoteCategoryError = remoteById.error;
+        }
 
         if (!remoteCategory && !remoteCategoryError) {
             const fallbackResult = await supabaseClient
