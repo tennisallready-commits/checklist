@@ -525,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.45', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.46', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -2387,6 +2387,14 @@ function urlBase64ToUint8Array(value) {
 async function savePushSubscription(subscription) {
     if (!supabaseClient || !currentUser || !subscription) return;
     const json = subscription.toJSON();
+    // Mantém somente a assinatura atual deste navegador. Reinstalações e
+    // renovações do Web Push podem deixar endpoints antigos associados à conta.
+    const { error: cleanupError } = await supabaseClient.from("push_subscriptions")
+        .delete()
+        .eq("user_id", currentUser.id)
+        .eq("user_agent", navigator.userAgent)
+        .neq("endpoint", json.endpoint);
+    if (cleanupError) console.warn("Não foi possível remover assinaturas antigas deste navegador:", cleanupError.message);
     const { error } = await supabaseClient.from("push_subscriptions").upsert({
         user_id: currentUser.id,
         endpoint: json.endpoint,
@@ -2406,6 +2414,9 @@ async function ensurePushSubscription({ forceRefresh = false } = {}) {
     const registration = await navigator.serviceWorker.ready;
     let subscription = await registration.pushManager.getSubscription();
     if (subscription && forceRefresh) {
+        if (supabaseClient && currentUser) {
+            await supabaseClient.from("push_subscriptions").delete().eq("endpoint", subscription.endpoint);
+        }
         await subscription.unsubscribe().catch(() => false);
         subscription = null;
     }
@@ -6869,7 +6880,7 @@ function setupSupabaseAuth() {
             subscribeToCollaborationUpdates();
             updateNotificationsSettingUI();
             if (areNotificationsEnabled() && "Notification" in window && Notification.permission === "granted") {
-                const pushRepairKey = `push_subscription_repaired_v9_23_${currentUser.id}`;
+                const pushRepairKey = `push_subscription_repaired_v9_27_${currentUser.id}`;
                 const forceRefresh = localStorage.getItem(pushRepairKey) !== "true";
                 ensurePushSubscription({ forceRefresh }).then(subscription => {
                     if (subscription) localStorage.setItem(pushRepairKey, "true");
