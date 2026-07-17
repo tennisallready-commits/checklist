@@ -517,7 +517,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 .catch(error => console.warn('Verificação de atualização do PWA indisponível:', error.message));
         };
 
-        navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
+        // A versão na própria URL evita que Chrome/WebAPK reutilize uma
+        // validação antiga do sw.js ao retomar o PWA no Android.
+        navigator.serviceWorker.register('./sw.js?v=9.15', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
