@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.55";
+const SERVICE_WORKER_URL = "./sw.js?v=9.56";
 // O esquema atual do projeto não possui categories.type. O valor continua no
 // cache e no motor de contexto, mas não deve ser enviado nessa tabela.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = false;
@@ -2581,7 +2581,6 @@ async function toggleNotificationsPreference() {
         updateNotificationsSettingUI();
         ensurePushSubscription().catch(error => {
             if (requestId !== notificationsPreferenceRequestId) return;
-            if (areNotificationsEnabled()) localStorage.setItem(getNotificationsPreferenceKey(), "false");
             updateNotificationsSettingUI();
             alert("Não foi possível registrar este aparelho para notificações: " + error.message);
         });

@@ -1,9 +1,9 @@
-const CACHE_NAME = 'checklist-cache-v9.55';
+const CACHE_NAME = 'checklist-cache-v9.56';
 const CRITICAL_ASSETS = [
   './',
   './index.html',
   './style.css?v=8.02',
-  './app.js?v=9.36',
+  './app.js?v=9.37',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -18,8 +18,11 @@ const OPTIONAL_ASSETS = [
 self.addEventListener('install', (e) => {
   e.waitUntil(
     caches.open(CACHE_NAME).then(async (cache) => {
-      // Um CDN indisponível não pode impedir a atualização do PWA inteiro.
-      await cache.addAll(CRITICAL_ASSETS);
+      // No Safari, um único 404/redirect/erro de rede em `addAll` cancela a
+      // instalação inteira e o worker nunca fica ativo. Cacheia cada recurso
+      // isoladamente: notificações continuam funcionando mesmo se um asset
+      // visual estiver temporariamente indisponível.
+      await Promise.allSettled(CRITICAL_ASSETS.map(asset => cache.add(asset)));
       await Promise.allSettled(OPTIONAL_ASSETS.map(asset => cache.add(asset)));
     }).then(() => self.skipWaiting())
   );
