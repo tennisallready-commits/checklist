@@ -5,6 +5,9 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
+// O esquema atual do projeto não possui categories.type. O valor continua no
+// cache e no motor de contexto, mas não deve ser enviado nessa tabela.
+const CATEGORIES_CLOUD_SUPPORTS_TYPE = false;
 
 // ----------------------------------------------------
 // IndexedDB & Shadow Storage Configuration
@@ -5474,6 +5477,7 @@ async function addCategory(name, type) {
             // Mantém o registro temporário para uma nova tentativa automática.
             console.error("Erro ao sincronizar nova categoria:", error);
             setSyncStatus("error", "Erro ao sincronizar", `A categoria ficou salva neste aparelho e será reenviada: ${error.message}`);
+            showAppNotice(`Erro ao sincronizar categoria: ${error.message}`, "error");
         }
     }
 }
@@ -5482,21 +5486,22 @@ async function insertOwnedCategoryInCloud({ name, type }) {
     if (!supabaseClient || !currentUser) throw new Error("Sessão indisponível.");
     const payload = {
         name,
-        type: type || null,
         is_active: true,
         user_id: currentUser.id
     };
+    if (CATEGORIES_CLOUD_SUPPORTS_TYPE) payload.type = type || null;
     let result = await supabaseClient.from("categories").insert(payload).select().single();
 
     // Compatibilidade apenas para instalações antigas que ainda não tenham a
     // coluna type. O proprietário continua explícito nas duas tentativas.
-    if (result.error && /type|column/i.test(result.error.message || "")) {
+    if (CATEGORIES_CLOUD_SUPPORTS_TYPE && result.error && /type|column/i.test(result.error.message || "")) {
         const { type: _ignoredType, ...legacyPayload } = payload;
         result = await supabaseClient.from("categories").insert(legacyPayload).select().single();
         if (!result.error && result.data) result.data.type = type || null;
     }
     if (result.error) throw result.error;
     if (!result.data) throw new Error("O servidor não retornou a categoria criada.");
+    if (!CATEGORIES_CLOUD_SUPPORTS_TYPE) result.data.type = type || null;
     return result.data;
 }
 
