@@ -526,7 +526,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.52', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.53', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -2419,7 +2419,15 @@ async function createOrRepairPushSubscription({ forceRefresh = false } = {}) {
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
         throw new Error("Este navegador não oferece suporte a Web Push.");
     }
-    const registration = await navigator.serviceWorker.ready;
+    // `serviceWorker.ready` pode nunca resolver no Safari durante uma troca de
+    // versão, mesmo quando já existe um worker ativo controlando o PWA. Usa o
+    // registro atual diretamente e deixa `ready` apenas como último recurso.
+    let registration = await navigator.serviceWorker.getRegistration("./");
+    if (!registration) registration = await navigator.serviceWorker.ready;
+    if (!registration.active) {
+        await registration.update().catch(() => {});
+        registration = await navigator.serviceWorker.ready;
+    }
     assertCurrentOperation();
     let subscription = await registration.pushManager.getSubscription();
     assertCurrentOperation();
