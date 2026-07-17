@@ -3395,47 +3395,38 @@ body.theme-light .task-reminder-snooze-time, body.theme-girly .task-reminder-sno
 
 .task-item.shared-task-focus .task-item-foreground {
     z-index: 8;
-    animation: shared-task-focus-glow 2.4s cubic-bezier(.2,.8,.2,1);
+    --task-focus-color: 139, 92, 246;
+    isolation: isolate;
 }
 
-@keyframes shared-task-focus-glow {
-    0%, 100% {
-        border-color: var(--border-color);
-        box-shadow: var(--shadow-sm);
-        transform: scale(1);
-    }
-    12%, 66% {
-        border-color: rgba(167, 139, 250, 1);
-        background: rgba(124, 58, 237, .2);
-        box-shadow: 0 0 0 4px rgba(139, 92, 246, .25), 0 0 30px rgba(139, 92, 246, .5), 0 12px 32px rgba(0, 0, 0, .3);
-        transform: scale(1.025);
-    }
-    38% {
-        border-color: #c4b5fd;
-        background: rgba(139, 92, 246, .27);
-        box-shadow: 0 0 0 6px rgba(139, 92, 246, .18), 0 0 42px rgba(139, 92, 246, .62), 0 14px 34px rgba(0, 0, 0, .34);
-        transform: scale(1.035);
-    }
+.task-item.shared-task-focus .task-item-foreground::after {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    z-index: 5;
+    border: 2px solid rgb(var(--task-focus-color));
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    box-shadow: 0 0 0 4px rgba(var(--task-focus-color), .2), 0 0 26px rgba(var(--task-focus-color), .48);
+    will-change: opacity, transform;
+    animation: shared-task-focus-ring 2.4s ease-out both;
 }
 
 body.theme-light .task-item.shared-task-focus .task-item-foreground {
-    animation-name: shared-task-focus-glow-light;
-}
-
-@keyframes shared-task-focus-glow-light {
-    0%, 100% { border-color: var(--border-color); box-shadow: var(--shadow-sm); transform: scale(1); }
-    12%, 66% { border-color: #7c3aed; background: #ede9fe; box-shadow: 0 0 0 4px rgba(124,58,237,.22), 0 10px 30px rgba(91,33,182,.3); transform: scale(1.025); }
-    38% { border-color: #6d28d9; background: #ddd6fe; box-shadow: 0 0 0 6px rgba(124,58,237,.17), 0 12px 38px rgba(91,33,182,.38); transform: scale(1.035); }
+    --task-focus-color: 109, 40, 217;
 }
 
 body.theme-girly .task-item.shared-task-focus .task-item-foreground {
-    animation-name: shared-task-focus-glow-girly;
+    --task-focus-color: 219, 39, 119;
 }
 
-@keyframes shared-task-focus-glow-girly {
-    0%, 100% { border-color: var(--border-color); box-shadow: var(--shadow-sm); transform: scale(1); }
-    12%, 66% { border-color: #ec4899; background: rgba(251,207,232,.78); box-shadow: 0 0 0 4px rgba(236,72,153,.2), 0 10px 30px rgba(190,24,93,.28); transform: scale(1.025); }
-    38% { border-color: #db2777; background: rgba(249,168,212,.82); box-shadow: 0 0 0 6px rgba(236,72,153,.16), 0 12px 38px rgba(190,24,93,.35); transform: scale(1.035); }
+@keyframes shared-task-focus-ring {
+    0% { opacity: 0; transform: scale(.985); }
+    16% { opacity: 1; transform: scale(1); }
+    42% { opacity: .42; transform: scale(1.008); }
+    66% { opacity: 1; transform: scale(1); }
+    100% { opacity: 0; transform: scale(1.012); }
 }
 
 .settings-version {
