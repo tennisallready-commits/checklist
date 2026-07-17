@@ -5,6 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
+const SERVICE_WORKER_URL = "./sw.js?v=9.55";
 // O esquema atual do projeto não possui categories.type. O valor continua no
 // cache e no motor de contexto, mas não deve ser enviado nessa tabela.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = false;
@@ -526,7 +527,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.54', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register(SERVICE_WORKER_URL, { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -2432,24 +2433,21 @@ async function createOrRepairPushSubscription({ forceRefresh = false, onProgress
     // `serviceWorker.ready` pode nunca resolver no Safari durante uma troca de
     // versão, mesmo quando já existe um worker ativo controlando o PWA. Usa o
     // registro atual diretamente e deixa `ready` apenas como último recurso.
-    reportProgress("Verificando aplicativo…", "Localizando o service worker ativo");
-    let registration = await awaitPushStep(
-        navigator.serviceWorker.getRegistration("./"),
-        8000,
-        "ETAPA 1: o Safari não respondeu ao procurar o service worker.",
-    );
-    if (!registration) {
-        reportProgress("Ativando aplicativo…", "Aguardando o service worker iniciar");
+    reportProgress("Registrando aplicativo…", "Preparando o serviço de notificações");
+    let registration;
+    try {
         registration = await awaitPushStep(
-            navigator.serviceWorker.ready,
-            12000,
-            "ETAPA 1: não existe um service worker ativo para este aplicativo.",
+            navigator.serviceWorker.register(SERVICE_WORKER_URL, { scope: "./", updateViaCache: "none" }),
+            15000,
+            "ETAPA 1: o Safari não respondeu ao registrar o service worker.",
         );
+    } catch (error) {
+        throw new Error(`ETAPA 1: falha ao registrar o service worker (${error.message}).`);
     }
     if (!registration.active) {
         reportProgress("Atualizando aplicativo…", "Ativando o serviço de notificações");
-        await awaitPushStep(registration.update().catch(() => {}), 8000, "ETAPA 1: o service worker não conseguiu atualizar.");
-        registration = await awaitPushStep(navigator.serviceWorker.ready, 12000, "ETAPA 1: o service worker não ficou ativo.");
+        if (registration.waiting) registration.waiting.postMessage({ type: "SKIP_WAITING" });
+        registration = await awaitPushStep(navigator.serviceWorker.ready, 20000, "ETAPA 1: o service worker foi registrado, mas não ficou ativo.");
     }
     assertCurrentOperation();
     reportProgress("Consultando iPhone…", "Procurando uma assinatura push existente");
