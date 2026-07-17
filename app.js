@@ -525,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.46', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.47', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -2406,7 +2406,8 @@ async function savePushSubscription(subscription) {
     if (error) throw error;
 }
 
-async function ensurePushSubscription({ forceRefresh = false } = {}) {
+let pushSubscriptionInFlight = null;
+async function createOrRepairPushSubscription({ forceRefresh = false } = {}) {
     if (!areNotificationsEnabled() || !currentUser || Notification.permission !== "granted") return null;
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
         throw new Error("Este navegador não oferece suporte a Web Push.");
@@ -2428,6 +2429,20 @@ async function ensurePushSubscription({ forceRefresh = false } = {}) {
     }
     await savePushSubscription(subscription);
     return subscription;
+}
+
+function ensurePushSubscription(options = {}) {
+    // Login, retomada do PWA e botão de configurações podem pedir o registro
+    // quase juntos no iOS. Uma única operação evita que uma chamada cancele
+    // o endpoint recém-criado pela outra.
+    if (pushSubscriptionInFlight) return pushSubscriptionInFlight;
+    const operation = createOrRepairPushSubscription(options);
+    let wrappedOperation = null;
+    wrappedOperation = operation.finally(() => {
+        if (pushSubscriptionInFlight === wrappedOperation) pushSubscriptionInFlight = null;
+    });
+    pushSubscriptionInFlight = wrappedOperation;
+    return wrappedOperation;
 }
 
 async function removePushSubscription() {
@@ -6880,7 +6895,7 @@ function setupSupabaseAuth() {
             subscribeToCollaborationUpdates();
             updateNotificationsSettingUI();
             if (areNotificationsEnabled() && "Notification" in window && Notification.permission === "granted") {
-                const pushRepairKey = `push_subscription_repaired_v9_27_${currentUser.id}`;
+                const pushRepairKey = `push_subscription_repaired_v9_28_${currentUser.id}`;
                 const forceRefresh = localStorage.getItem(pushRepairKey) !== "true";
                 ensurePushSubscription({ forceRefresh }).then(subscription => {
                     if (subscription) localStorage.setItem(pushRepairKey, "true");
