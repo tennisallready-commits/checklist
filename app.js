@@ -525,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.31', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.32', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -6243,6 +6243,9 @@ function setupAiTaskCreator() {
     let liveProcessor = null;
     let liveTranscript = "";
     let liveAutoSubmitted = false;
+    let deviceRecognition = null;
+    let deviceTranscript = "";
+    let deviceInterimTranscript = "";
 
     const bytesToBase64 = bytes => {
         let binary = "";
@@ -6273,7 +6276,7 @@ function setupAiTaskCreator() {
         liveAudioContext = null;
     };
     const submitLiveTranscript = () => {
-        const transcript = liveTranscript.trim();
+        const transcript = (liveTranscript || deviceTranscript || deviceInterimTranscript).trim();
         if (!transcript || liveAutoSubmitted) return;
         liveAutoSubmitted = true;
         promptInput.value = transcript;
@@ -6281,6 +6284,35 @@ function setupAiTaskCreator() {
         recordTitle.textContent = "Fala interpretada";
         recordStatus.textContent = transcript.slice(0, 72);
         setTimeout(() => generateButton.click(), 80);
+    };
+    const startDeviceTranscription = () => {
+        const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!Recognition) return;
+        try {
+            deviceTranscript = "";
+            deviceInterimTranscript = "";
+            deviceRecognition = new Recognition();
+            deviceRecognition.lang = "pt-BR";
+            deviceRecognition.continuous = true;
+            deviceRecognition.interimResults = true;
+            deviceRecognition.onresult = event => {
+                let finalText = "";
+                let interimText = "";
+                for (let index = event.resultIndex; index < event.results.length; index++) {
+                    const text = event.results[index][0]?.transcript || "";
+                    if (event.results[index].isFinal) finalText += `${text} `;
+                    else interimText += text;
+                }
+                if (finalText) deviceTranscript += finalText;
+                deviceInterimTranscript = interimText;
+                const preview = (interimText || deviceTranscript).trim();
+                if (preview) recordStatus.textContent = preview.slice(0, 72);
+            };
+            deviceRecognition.onerror = error => console.warn("Transcrição rápida do aparelho indisponível", error.error);
+            deviceRecognition.start();
+        } catch (error) {
+            console.warn("Não foi possível iniciar a transcrição do aparelho", error);
+        }
     };
     const startGeminiLive = async stream => {
         try {
@@ -6343,6 +6375,7 @@ function setupAiTaskCreator() {
     };
     const close = () => {
         if (recorder && recorder.state === "recording") recorder.stop();
+        try { deviceRecognition?.stop(); } catch (_) {}
         try { liveSocket?.close(); } catch (_) {}
         stopLiveAudio();
         closeModal(modal);
@@ -6359,8 +6392,9 @@ function setupAiTaskCreator() {
         if (recorder && recorder.state === "recording") {
             stopLiveAudio();
             if (liveSocket?.readyState === WebSocket.OPEN) liveSocket.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
+            try { deviceRecognition?.stop(); } catch (_) {}
             recorder.stop();
-            setTimeout(submitLiveTranscript, 1200);
+            setTimeout(submitLiveTranscript, (deviceTranscript || deviceInterimTranscript).trim() ? 250 : 1200);
             return;
         }
         if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
@@ -6381,11 +6415,12 @@ function setupAiTaskCreator() {
                 resetRecorderLabel();
             };
             recorder.start();
-            startGeminiLive(stream);
             recordedAudio = null;
             recordButton.classList.add("recording");
             recordTitle.textContent = "Ouvindo… toque para parar";
-            recordStatus.textContent = "Fale o que deseja criar";
+            recordStatus.textContent = "Conectando ao reconhecimento rápido…";
+            startDeviceTranscription();
+            startGeminiLive(stream);
             stopTimer = setTimeout(() => { if (recorder?.state === "recording") recorder.stop(); }, 60000);
         } catch (error) {
             showAppNotice(error.name === "NotAllowedError" ? "Autorize o acesso ao microfone para usar a criação por voz." : `Não foi possível gravar: ${error.message}`, "warning");
