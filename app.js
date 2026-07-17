@@ -525,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.43', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.45', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -2457,12 +2457,14 @@ function updateNotificationsSettingUI() {
     }
 }
 
+let notificationsPreferenceRequestId = 0;
 async function toggleNotificationsPreference() {
+    const requestId = ++notificationsPreferenceRequestId;
     const shouldEnable = !areNotificationsEnabled();
     if (!shouldEnable) {
         localStorage.setItem(getNotificationsPreferenceKey(), "false");
-        await removePushSubscription().catch(error => console.warn("Erro ao desativar Web Push:", error));
         updateNotificationsSettingUI();
+        removePushSubscription().catch(error => console.warn("Erro ao desativar Web Push:", error));
         return;
     }
 
@@ -2475,22 +2477,26 @@ async function toggleNotificationsPreference() {
     // Salva primeiro a intenção do usuário. Se a permissão ainda não existe,
     // o pedido ocorre dentro deste clique (exigência de iOS/Chrome).
     localStorage.setItem(getNotificationsPreferenceKey(), "true");
+    updateNotificationsSettingUI();
     let permission = Notification.permission;
     if (permission === "default") permission = await Notification.requestPermission();
     if (permission !== "granted") {
         localStorage.setItem(getNotificationsPreferenceKey(), "false");
+        updateNotificationsSettingUI();
         if (permission === "denied") {
             alert("As notificações estão bloqueadas pelo navegador. Abra as configurações deste site ou web app, permita Notificações e tente novamente.");
         }
     } else {
-        try {
-            await ensurePushSubscription();
-        } catch (error) {
-            localStorage.setItem(getNotificationsPreferenceKey(), "false");
+        // Atualiza o botão assim que o iOS concede a permissão. O registro de
+        // rede continua em segundo plano e não bloqueia a resposta visual.
+        updateNotificationsSettingUI();
+        ensurePushSubscription().catch(error => {
+            if (requestId !== notificationsPreferenceRequestId) return;
+            if (areNotificationsEnabled()) localStorage.setItem(getNotificationsPreferenceKey(), "false");
+            updateNotificationsSettingUI();
             alert("Não foi possível registrar este aparelho para notificações: " + error.message);
-        }
+        });
     }
-    updateNotificationsSettingUI();
 }
 
 function canCurrentUserCheckTask(task) {
@@ -8834,8 +8840,11 @@ function checkAutomaticReports() {
 // ----------------------------------------------------
 // Sistema de Notificações de Tarefas Importantes ("Estilo iFood")
 // ----------------------------------------------------
-function checkImportantTaskNotifications() {
-    if (!("Notification" in window) || Notification.permission !== "granted") return;
+let importantNotificationCheckRunning = false;
+async function checkImportantTaskNotifications() {
+    if (!("Notification" in window) || Notification.permission !== "granted" || importantNotificationCheckRunning) return;
+    importantNotificationCheckRunning = true;
+    try {
 
     const now = new Date();
     const todayStr = getLocalDateString(now);
@@ -8844,7 +8853,12 @@ function checkImportantTaskNotifications() {
     tomorrow.setDate(tomorrow.getDate() + 1);
     const tomorrowStr = getLocalDateString(tomorrow);
 
-    const shownAlerts = JSON.parse(localStorage.getItem("shown_notifications")) || {};
+    let shownAlerts = JSON.parse(localStorage.getItem("shown_notifications")) || {};
+    if (localStorage.getItem("local_reminder_receipt_repaired_v9_26") !== "true") {
+        shownAlerts = Object.fromEntries(Object.entries(shownAlerts).filter(([key]) => !key.startsWith("reminder-")));
+        localStorage.setItem("shown_notifications", JSON.stringify(shownAlerts));
+        localStorage.setItem("local_reminder_receipt_repaired_v9_26", "true");
+    }
     let updated = false;
 
     // Helper para buscar tarefas ativas de uma data específica
@@ -8883,7 +8897,16 @@ function checkImportantTaskNotifications() {
     const todayTasks = getActiveTasksForDate(todayStr);
     const tomorrowTasks = getActiveTasksForDate(tomorrowStr);
 
-    const checkTask = (task, targetDateStr) => {
+    const notifyOnce = async (key, title, body, taskId, notificationType = null) => {
+        if (shownAlerts[key]) return false;
+        const displayed = await showWebNotification(title, body, taskId, key, notificationType);
+        if (!displayed) return false;
+        shownAlerts[key] = true;
+        updated = true;
+        return true;
+    };
+
+    const checkTask = async (task, targetDateStr) => {
         const isImportant = task.context && (task.context.important === true || task.context.important === "true");
         if (!isImportant) return;
 
@@ -8894,9 +8917,7 @@ function checkImportantTaskNotifications() {
             reminderDateTime.setDate(reminderDateTime.getDate() - offsetDays);
             const reminderKey = `reminder-${task.id}-${targetDateStr}-${reminderTime}`;
             if (now >= reminderDateTime && now.getTime() - reminderDateTime.getTime() < 60 * 60 * 1000 && !shownAlerts[reminderKey]) {
-                showWebNotification("⏰ Lembrete de tarefa", offsetDays === 1 ? `Amanhã: “${task.title}”.` : `Está na hora de “${task.title}”.`, task.id, reminderKey, "task-reminder");
-                shownAlerts[reminderKey] = true;
-                updated = true;
+                await notifyOnce(reminderKey, "⏰ Lembrete de tarefa", offsetDays === 1 ? `Amanhã: “${task.title}”.` : `Está na hora de “${task.title}”.`, task.id, "task-reminder");
             }
             return;
         }
@@ -8916,13 +8937,11 @@ function checkImportantTaskNotifications() {
         const dayBeforeKey = `task_${task.id}_${targetDateStr}_dayBefore`;
         
         if (now >= oneDayBeforeTime && now < targetDateTime && !shownAlerts[dayBeforeKey]) {
-            showWebNotification(
+            await notifyOnce(dayBeforeKey,
                 "⚠️ Tarefa Importante Amanhã!",
                 `A tarefa "${task.title}" está agendada para amanhã no turno da ${turnos.join(', ') || 'Geral'}.`,
                 task.id
             );
-            shownAlerts[dayBeforeKey] = true;
-            updated = true;
         }
 
         // 2. Notificação de 1 turno antes
@@ -8948,43 +8967,49 @@ function checkImportantTaskNotifications() {
             else if (turnos.includes("Manhã")) shiftMsg = "amanhã de Manhã (próximo turno)";
             else shiftMsg = "em breve (daqui a 4 horas)";
 
-            showWebNotification(
+            await notifyOnce(shiftBeforeKey,
                 "⏰ Próxima tarefa importante!",
                 `A tarefa "${task.title}" está agendada para ${shiftMsg}.`,
                 task.id
             );
-            shownAlerts[shiftBeforeKey] = true;
-            updated = true;
         }
     };
 
-    todayTasks.forEach(task => checkTask(task, todayStr));
-    tomorrowTasks.forEach(task => checkTask(task, tomorrowStr));
+    for (const task of todayTasks) await checkTask(task, todayStr);
+    for (const task of tomorrowTasks) await checkTask(task, tomorrowStr);
 
     if (updated) {
         localStorage.setItem("shown_notifications", JSON.stringify(shownAlerts));
     }
+    } finally {
+        importantNotificationCheckRunning = false;
+    }
 }
 
-function showWebNotification(title, body, taskId, customTag = null, notificationType = null) {
-    if (areNotificationsEnabled() && "Notification" in window && Notification.permission === "granted") {
-        if (navigator.serviceWorker && navigator.serviceWorker.ready) {
-            navigator.serviceWorker.ready.then(registration => {
-                registration.showNotification(title, {
+async function showWebNotification(title, body, taskId, customTag = null, notificationType = null) {
+    if (!areNotificationsEnabled() || !("Notification" in window) || Notification.permission !== "granted") return false;
+    try {
+        if ("serviceWorker" in navigator) {
+            const registration = await navigator.serviceWorker.ready;
+            await registration.showNotification(title, {
                     body: body,
                     icon: './icons/icon-192.png',
                     badge: './icons/notification-badge.png',
                     vibrate: [200, 100, 200],
                     data: { taskId: taskId, notificationType },
                     tag: customTag || `task-important-${taskId}`
-                });
             });
+            return true;
         } else {
             new Notification(title, {
                 body: body,
                 icon: './icons/icon-192.png'
             });
+            return true;
         }
+    } catch (error) {
+        console.warn("O navegador não confirmou a exibição da notificação:", error.message);
+        return false;
     }
 }
 
