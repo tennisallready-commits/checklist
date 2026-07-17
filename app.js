@@ -526,7 +526,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.48', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.51', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -2562,22 +2562,41 @@ async function repairAndTestPushNotifications() {
         // automática anterior sem ficar esperando uma Promise presa no iOS.
         pushSubscriptionGeneration += 1;
         pushSubscriptionInFlight = null;
-        setRepairStatus("Registrando aparelho…", "Criando uma assinatura push nova");
-        const subscription = await withTimeout(
-            ensurePushSubscription({ forceRefresh: true }),
+        setRepairStatus("Recuperando aparelho…", "Validando a assinatura atual do iPhone");
+        let subscription = await withTimeout(
+            ensurePushSubscription({ forceRefresh: false }),
             20000,
             "O iPhone não concluiu o cadastro push. Feche e abra o app e tente novamente.",
         );
         if (!subscription?.endpoint) throw new Error("O aparelho não criou uma assinatura push.");
         setRepairStatus("Enviando teste…", "Confirmando a comunicação com o servidor");
-        const { data, error } = await withTimeout(
+        let result = await withTimeout(
             supabaseClient.functions.invoke("send-task-push", { body: { test_push: true, endpoint: subscription.endpoint } }),
             20000,
             "O servidor demorou demais para responder ao teste.",
         );
-        if (error) throw error;
-        if (Number(data?.sent || 0) < 1) {
-            const failure = Array.isArray(data?.failures) ? data.failures[0] : null;
+        if (result.error) throw result.error;
+        let failure = Array.isArray(result.data?.failures) ? result.data.failures[0] : null;
+        if (Number(result.data?.sent || 0) < 1 && [404, 410].includes(Number(failure?.status))) {
+            setRepairStatus("Renovando aparelho…", "A assinatura antiga expirou; criando outra");
+            pushSubscriptionGeneration += 1;
+            pushSubscriptionInFlight = null;
+            subscription = await withTimeout(
+                ensurePushSubscription({ forceRefresh: true }),
+                20000,
+                "O iPhone não conseguiu renovar a assinatura push.",
+            );
+            if (!subscription?.endpoint) throw new Error("O aparelho não criou uma assinatura push nova.");
+            setRepairStatus("Enviando novo teste…", "Confirmando a assinatura renovada");
+            result = await withTimeout(
+                supabaseClient.functions.invoke("send-task-push", { body: { test_push: true, endpoint: subscription.endpoint } }),
+                20000,
+                "O servidor demorou demais para responder ao novo teste.",
+            );
+            if (result.error) throw result.error;
+            failure = Array.isArray(result.data?.failures) ? result.data.failures[0] : null;
+        }
+        if (Number(result.data?.sent || 0) < 1) {
             throw new Error(failure ? `O serviço recusou a assinatura (${failure.status || "sem código"}).` : "O servidor não encontrou este aparelho.");
         }
         updateNotificationsSettingUI();
