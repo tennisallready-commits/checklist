@@ -190,6 +190,7 @@ let pendingToggles = new Set();
 let currentUser = null;
 let currentUsername = "";
 const collaborationIdentityByEmail = new Map();
+const collaborationAvatarByEmail = new Map();
 let identifierSetupResolver = null;
 function getCurrentReminderTime() {
     const now = new Date();
@@ -427,6 +428,8 @@ const selectEditTaskAssignedTo = document.getElementById("edit-task-assigned-to"
 const editTaskAssigneeGroup = document.getElementById("edit-task-assignee-group");
 
 const inputOrgName = document.getElementById("input-org-name");
+const inputProfileAvatar = document.getElementById("input-profile-avatar");
+const settingsProfileAvatar = document.getElementById("settings-profile-avatar");
 const inputNewCategory = document.getElementById("input-new-category");
 
 // Action Buttons
@@ -522,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.21', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.23', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -1725,6 +1728,22 @@ function setupEventListeners() {
         notificationsEnabledToggle.addEventListener("click", toggleNotificationsPreference);
         updateNotificationsSettingUI();
     }
+    if (inputProfileAvatar) {
+        inputProfileAvatar.addEventListener("change", async () => {
+            const file = inputProfileAvatar.files && inputProfileAvatar.files[0];
+            if (!file) return;
+            inputProfileAvatar.disabled = true;
+            try {
+                await uploadProfileAvatar(file);
+                showAppNotice("Foto do perfil atualizada.", "success");
+            } catch (error) {
+                showAppNotice(`Não foi possível salvar a foto: ${error.message}`, "warning");
+            } finally {
+                inputProfileAvatar.value = "";
+                inputProfileAvatar.disabled = false;
+            }
+        });
+    }
 
     if (btnCloseNotificationsModal) {
         btnCloseNotificationsModal.addEventListener("click", () => {
@@ -2287,6 +2306,33 @@ function getPlainIdentityLabel(email) {
     return getIdentityLabel(email).replace(/^@/, "");
 }
 
+function getIdentityAvatar(email) {
+    return collaborationAvatarByEmail.get(normalizeAccountEmail(email)) || "";
+}
+
+function renderSettingsProfileAvatar() {
+    if (!settingsProfileAvatar) return;
+    const avatarUrl = currentUser ? getIdentityAvatar(currentUser.email) : "";
+    settingsProfileAvatar.innerHTML = avatarUrl ? `<img src="${escapeHTML(avatarUrl)}" alt="Foto do perfil">` : '<i data-lucide="user-round"></i>';
+    if (!avatarUrl && window.lucide) window.lucide.createIcons();
+}
+
+async function uploadProfileAvatar(file) {
+    if (!supabaseClient || !currentUser || !file) return;
+    if (file.size > 5 * 1024 * 1024) throw new Error("Escolha uma imagem de até 5 MB.");
+    const extension = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+    const path = `${currentUser.id}/avatar.${extension}`;
+    const { error: uploadError } = await supabaseClient.storage.from("avatars").upload(path, file, { upsert: true, contentType: file.type });
+    if (uploadError) throw uploadError;
+    const { data } = supabaseClient.storage.from("avatars").getPublicUrl(path);
+    const avatarUrl = `${data.publicUrl}?v=${Date.now()}`;
+    const { error: profileError } = await supabaseClient.from("profiles").upsert({ id: currentUser.id, email: normalizeAccountEmail(currentUser.email), avatar_url: avatarUrl, updated_at: new Date().toISOString() });
+    if (profileError) throw profileError;
+    collaborationAvatarByEmail.set(normalizeAccountEmail(currentUser.email), avatarUrl);
+    renderSettingsProfileAvatar();
+    renderChecklist();
+}
+
 async function loadCollaborationIdentityLabels() {
     if (!supabaseClient || !currentUser) return;
     const emails = new Set([currentUser.email]);
@@ -2298,7 +2344,12 @@ async function loadCollaborationIdentityLabels() {
     const { data, error } = await supabaseClient.rpc("resolve_collaboration_identifiers", { lookup_emails: [...emails] });
     if (error) return console.warn("Não foi possível carregar IDs públicos:", error.message);
     collaborationIdentityByEmail.clear();
-    (data || []).forEach(item => collaborationIdentityByEmail.set(normalizeAccountEmail(item.email), item.username));
+    collaborationAvatarByEmail.clear();
+    (data || []).forEach(item => {
+        collaborationIdentityByEmail.set(normalizeAccountEmail(item.email), item.username);
+        if (item.avatar_url) collaborationAvatarByEmail.set(normalizeAccountEmail(item.email), item.avatar_url);
+    });
+    renderSettingsProfileAvatar();
 }
 
 async function ensureUserIdentifier() {
@@ -3859,8 +3910,9 @@ function createTaskDOMElement(task) {
                     ${task.assigned_to ? (() => {
                         const identityLabel = getIdentityLabel(task.assigned_to);
                         const initials = identityLabel.replace('@', '').substring(0, 2).toUpperCase();
+                        const avatarUrl = getIdentityAvatar(task.assigned_to);
                         const isMe = currentUser && task.assigned_to.toLowerCase() === currentUser.email.toLowerCase();
-                        return `<span class="task-assignee-avatar ${isMe ? '' : 'partner'}" title="Atribuído a: ${escapeHTML(identityLabel)}">${escapeHTML(initials)}</span>`;
+                        return `<span class="task-assignee-avatar ${isMe ? '' : 'partner'} ${avatarUrl ? 'has-photo' : ''}" title="Atribuído a: ${escapeHTML(identityLabel)}">${avatarUrl ? `<img src="${escapeHTML(avatarUrl)}" alt="">` : escapeHTML(initials)}</span>`;
                     })() : ''}
                 </div>
             </div>

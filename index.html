@@ -41,7 +41,7 @@
             }
         });
     </script>
-    <link rel="stylesheet" href="style.css?v=7.94">
+    <link rel="stylesheet" href="style.css?v=7.95">
     
     <!-- iOS / PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -469,6 +469,12 @@
                         <div class="settings-section-icon"><i data-lucide="user-round"></i></div>
                         <div><strong>Conta e dados</strong><span>Controle sua sessão e as tarefas armazenadas.</span></div>
                     </div>
+                    <div class="settings-avatar-row">
+                        <div id="settings-profile-avatar" class="settings-profile-avatar" aria-hidden="true"><i data-lucide="user-round"></i></div>
+                        <div class="settings-avatar-copy"><strong>Foto do perfil</strong><small>Ela aparece em atribuições de categorias colaborativas.</small></div>
+                        <label class="btn settings-avatar-button" for="input-profile-avatar">Escolher foto</label>
+                        <input id="input-profile-avatar" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+                    </div>
                     <button id="btn-logout" class="settings-action-row">
                         <span class="settings-action-icon"><i data-lucide="log-out"></i></span>
                         <span><strong>Sair da conta</strong><small>Encerrar a sessão neste aparelho</small></span>
@@ -478,7 +484,7 @@
 
                 <div class="settings-version">
                     <span>Checklist</span>
-                        <strong>Versão 9.03</strong>
+                        <strong>Versão 9.04</strong>
                 </div>
             </div>
         </div>
@@ -1020,6 +1026,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=9.03"></script>
+    <script src="app.js?v=9.04"></script>
 </body>
 </html>

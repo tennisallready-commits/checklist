@@ -1,9 +1,9 @@
-const CACHE_NAME = 'checklist-cache-v9.21';
+const CACHE_NAME = 'checklist-cache-v9.23';
 const CRITICAL_ASSETS = [
   './',
   './index.html',
-  './style.css?v=7.94',
-  './app.js?v=9.03',
+  './style.css?v=7.95',
+  './app.js?v=9.04',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -106,7 +106,7 @@ self.addEventListener('push', (event) => {
   const title = payload.title || 'Nova tarefa compartilhada';
   const options = {
     body: payload.body || 'Uma nova tarefa foi adicionada ao seu checklist.',
-    icon: './icons/icon-192.png',
+    icon: payload.icon || './icons/icon-192.png',
     badge: './icons/notification-badge.png',
     tag: payload.tag || `shared-task-${payload.task_id || Date.now()}`,
     data: { taskId: payload.task_id || null, inviteId: payload.invite_id || null, notificationType: payload.notification_type || null, url: payload.url || './' },
