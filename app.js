@@ -525,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.30', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.31', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -6284,6 +6284,7 @@ function setupAiTaskCreator() {
     };
     const startGeminiLive = async stream => {
         try {
+            recordStatus.textContent = "Conectando ao modo ao vivo…";
             const { data, error } = await supabaseClient.functions.invoke("create-gemini-live-token", { body: {} });
             if (error || !data?.token) throw new Error(data?.error || error?.message || "Token ao vivo indisponível");
             liveTranscript = "";
@@ -6293,7 +6294,7 @@ function setupAiTaskCreator() {
             liveSocket.onopen = () => {
                 liveSocket.send(JSON.stringify({ setup: {
                     model: `models/${data.model || "gemini-3.1-flash-live-preview"}`,
-                    generationConfig: { responseModalities: ["TEXT"], temperature: 0 },
+                    generationConfig: { responseModalities: ["AUDIO"], temperature: 0 },
                     inputAudioTranscription: {},
                     systemInstruction: { parts: [{ text: "Transcreva fielmente a fala do usuário em português do Brasil. Responda somente com a transcrição, sem comentários." }] },
                 } }));
@@ -6319,10 +6320,19 @@ function setupAiTaskCreator() {
                 if (transcription) liveTranscript += `${transcription} `;
                 if (message.serverContent?.turnComplete && recorder?.state !== "recording") submitLiveTranscript();
             };
-            liveSocket.onerror = () => { stopLiveAudio(); };
-            liveSocket.onclose = () => { stopLiveAudio(); };
+            liveSocket.onerror = event => {
+                console.warn("WebSocket Gemini Live falhou", event);
+                stopLiveAudio();
+                if (recorder?.state === "recording") recordStatus.textContent = "Gravando no modo compatível…";
+            };
+            liveSocket.onclose = event => {
+                console.warn("WebSocket Gemini Live encerrado", event.code, event.reason);
+                stopLiveAudio();
+                if (recorder?.state === "recording" && !liveTranscript.trim()) recordStatus.textContent = "Gravando no modo compatível…";
+            };
         } catch (error) {
             console.warn("Gemini Live indisponível; mantendo gravação normal.", error);
+            if (recorder?.state === "recording") recordStatus.textContent = "Gravando no modo compatível…";
         }
     };
 
