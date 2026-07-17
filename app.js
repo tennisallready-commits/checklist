@@ -525,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.32', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.33', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -6246,6 +6246,7 @@ function setupAiTaskCreator() {
     let deviceRecognition = null;
     let deviceTranscript = "";
     let deviceInterimTranscript = "";
+    let pendingVoicePrompt = "";
 
     const bytesToBase64 = bytes => {
         let binary = "";
@@ -6277,12 +6278,21 @@ function setupAiTaskCreator() {
     };
     const submitLiveTranscript = () => {
         const transcript = (liveTranscript || deviceTranscript || deviceInterimTranscript).trim();
-        if (!transcript || liveAutoSubmitted) return;
+        if (liveAutoSubmitted) return;
+        if (!transcript) {
+            if (recorder?.state !== "recording" && recordedAudio) {
+                liveAutoSubmitted = true;
+                recordTitle.textContent = "Áudio pronto";
+                recordStatus.textContent = "Criando a prévia das tarefas…";
+                setTimeout(() => generateButton.click(), 80);
+            }
+            return;
+        }
         liveAutoSubmitted = true;
-        promptInput.value = transcript;
+        pendingVoicePrompt = transcript;
         recordedAudio = null;
         recordTitle.textContent = "Fala interpretada";
-        recordStatus.textContent = transcript.slice(0, 72);
+        recordStatus.textContent = "Criando a prévia das tarefas…";
         setTimeout(() => generateButton.click(), 80);
     };
     const startDeviceTranscription = () => {
@@ -6443,7 +6453,8 @@ function setupAiTaskCreator() {
     };
     generateButton.addEventListener("click", async () => {
         if (!supabaseClient || !currentUser) return showAppNotice("Entre na sua conta para usar a criação com IA.", "warning");
-        const prompt = promptInput.value.trim();
+        const prompt = pendingVoicePrompt || promptInput.value.trim();
+        pendingVoicePrompt = "";
         if (!recordedAudio && !prompt) return showAppNotice("Grave um áudio ou escreva o que deseja criar.", "warning");
         const original = generateButton.innerHTML;
         generateButton.disabled = true;
