@@ -441,6 +441,7 @@ const notificationsBadge = document.getElementById("notifications-badge");
 const collabInviteReadyLabel = document.getElementById("collab-invite-ready-label");
 const notificationsEnabledToggle = document.getElementById("notifications-enabled-toggle");
 const notificationsPermissionStatus = document.getElementById("notifications-permission-status");
+const btnRepairTestPush = document.getElementById("btn-repair-test-push");
 const modalCreateIdentifier = document.getElementById("modal-create-identifier");
 const formCreateIdentifier = document.getElementById("form-create-identifier");
 const inputUserIdentifier = document.getElementById("input-user-identifier");
@@ -525,7 +526,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.47', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.48', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -1734,6 +1735,7 @@ function setupEventListeners() {
         notificationsEnabledToggle.addEventListener("click", toggleNotificationsPreference);
         updateNotificationsSettingUI();
     }
+    btnRepairTestPush?.addEventListener("click", repairAndTestPushNotifications);
     if (inputProfileAvatar) {
         inputProfileAvatar.addEventListener("change", async () => {
             const file = inputProfileAvatar.files && inputProfileAvatar.files[0];
@@ -2522,6 +2524,39 @@ async function toggleNotificationsPreference() {
             updateNotificationsSettingUI();
             alert("Não foi possível registrar este aparelho para notificações: " + error.message);
         });
+    }
+}
+
+async function repairAndTestPushNotifications() {
+    if (!btnRepairTestPush || !supabaseClient || !currentUser) return;
+    const original = btnRepairTestPush.innerHTML;
+    btnRepairTestPush.disabled = true;
+    btnRepairTestPush.innerHTML = '<span class="loading-spinner"></span><span><strong>Configurando…</strong><small>Aguarde alguns segundos</small></span>';
+    try {
+        if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) throw new Error("Este navegador não oferece Web Push.");
+        let permission = Notification.permission;
+        if (permission === "default") permission = await Notification.requestPermission();
+        if (permission !== "granted") throw new Error("As notificações estão bloqueadas nos Ajustes do aparelho.");
+        localStorage.setItem(getNotificationsPreferenceKey(), "true");
+        if (pushSubscriptionInFlight) {
+            await pushSubscriptionInFlight.catch(() => {});
+        }
+        const subscription = await ensurePushSubscription({ forceRefresh: true });
+        if (!subscription?.endpoint) throw new Error("O aparelho não criou uma assinatura push.");
+        const { data, error } = await supabaseClient.functions.invoke("send-task-push", { body: { test_push: true, endpoint: subscription.endpoint } });
+        if (error) throw error;
+        if (Number(data?.sent || 0) < 1) {
+            const failure = Array.isArray(data?.failures) ? data.failures[0] : null;
+            throw new Error(failure ? `O serviço recusou a assinatura (${failure.status || "sem código"}).` : "O servidor não encontrou este aparelho.");
+        }
+        updateNotificationsSettingUI();
+        showAppNotice("Push enviado. Este aparelho está configurado corretamente.", "success");
+    } catch (error) {
+        showAppNotice(`Não foi possível configurar o push: ${error.message}`, "error");
+    } finally {
+        btnRepairTestPush.disabled = false;
+        btnRepairTestPush.innerHTML = original;
+        if (window.lucide) window.lucide.createIcons();
     }
 }
 

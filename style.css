@@ -3388,6 +3388,11 @@ body.theme-girly .modal-content::before {
 
 .settings-toggle.is-on span { transform: translateX(20px); }
 .settings-notification-status { min-height: 1em; margin: -5px 2px 0; color: var(--text-muted); font-size: .63rem; }
+.settings-notification-test-btn { display: flex; align-items: center; justify-content: flex-start; gap: 10px; width: 100%; padding: 11px 13px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--primary-light); color: var(--primary); text-align: left; }
+.settings-notification-test-btn svg { width: 18px; height: 18px; flex: 0 0 18px; }
+.settings-notification-test-btn span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.settings-notification-test-btn strong { color: var(--text-primary); font-size: .74rem; }
+.settings-notification-test-btn small { color: var(--text-muted); font-size: .62rem; }
 
 .task-notification-setting { display: grid; grid-template-columns: minmax(0,1fr) 24px 46px; align-items: center; gap: 8px; margin: 16px 0 24px; padding: 12px; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(255,255,255,.02); }
 .task-notification-copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
