@@ -525,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.37', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.38', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -6249,15 +6249,8 @@ function setupAiTaskCreator() {
     let deviceInterimTranscript = "";
     let pendingVoicePrompt = "";
     let isRefiningSuggestions = false;
-
-    const getAiDraftKey = () => `ai_task_draft_${currentUser?.id || "local"}`;
-    const saveAiDraft = () => {
-        const selectedIndexes = [...reviewList.querySelectorAll('input[type="checkbox"]:checked')].map(input => Number(input.dataset.index));
-        const hasContent = Boolean(promptInput.value.trim() || suggestions.length);
-        if (!hasContent) return localStorage.removeItem(getAiDraftKey());
-        localStorage.setItem(getAiDraftKey(), JSON.stringify({ prompt: promptInput.value, tasks: suggestions, selectedIndexes, savedAt: new Date().toISOString() }));
-    };
-    const clearAiDraft = () => localStorage.removeItem(getAiDraftKey());
+    let discardRecordingOnStop = false;
+    let aiSessionId = 0;
 
     const bytesToBase64 = bytes => {
         let binary = "";
@@ -6397,30 +6390,39 @@ function setupAiTaskCreator() {
         const refineStrong = refineVoiceButton?.querySelector("strong");
         if (refineStrong) refineStrong.textContent = "Complementar com áudio";
     };
+    const resetAiTaskCreator = () => {
+        promptInput.value = "";
+        recordedAudio = null;
+        audioChunks = [];
+        suggestions = [];
+        pendingVoicePrompt = "";
+        isRefiningSuggestions = false;
+        liveTranscript = "";
+        liveAutoSubmitted = false;
+        deviceTranscript = "";
+        deviceInterimTranscript = "";
+        reviewList.innerHTML = "";
+        review.hidden = true;
+        localStorage.removeItem(`ai_task_draft_${currentUser?.id || "local"}`);
+        localStorage.removeItem("ai_task_draft_local");
+        resetRecorderLabel();
+    };
     const close = () => {
-        saveAiDraft();
-        if (recorder && recorder.state === "recording") recorder.stop();
+        aiSessionId += 1;
+        if (recorder && recorder.state === "recording") {
+            discardRecordingOnStop = true;
+            recorder.stop();
+        }
         try { deviceRecognition?.stop(); } catch (_) {}
         try { liveSocket?.close(); } catch (_) {}
         stopLiveAudio();
+        resetAiTaskCreator();
         closeModal(modal);
     };
     openButton.addEventListener("click", () => {
         document.getElementById("fab-menu")?.classList.remove("open");
         closeModal(modalAddTask);
         openModal(modal);
-        try {
-            const draft = JSON.parse(localStorage.getItem(getAiDraftKey()) || "null");
-            if (draft) {
-                promptInput.value = draft.prompt || "";
-                if (Array.isArray(draft.tasks) && draft.tasks.length) {
-                    renderSuggestions(draft.tasks);
-                    if (Array.isArray(draft.selectedIndexes)) {
-                        reviewList.querySelectorAll('input[type="checkbox"]').forEach(input => { input.checked = draft.selectedIndexes.includes(Number(input.dataset.index)); });
-                    }
-                }
-            }
-        } catch (_) {}
     });
     closeButton?.addEventListener("click", close);
     modal.querySelector(".modal-overlay")?.addEventListener("click", close);
@@ -6444,10 +6446,13 @@ function setupAiTaskCreator() {
             const mimeType = preferredTypes.find(type => MediaRecorder.isTypeSupported(type)) || "";
             recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
             audioChunks = [];
+            discardRecordingOnStop = false;
             recorder.ondataavailable = event => { if (event.data?.size) audioChunks.push(event.data); };
             recorder.onstop = () => {
                 clearTimeout(stopTimer);
-                recordedAudio = new Blob(audioChunks, { type: recorder.mimeType || audioChunks[0]?.type || "audio/webm" });
+                recordedAudio = discardRecordingOnStop ? null : new Blob(audioChunks, { type: recorder.mimeType || audioChunks[0]?.type || "audio/webm" });
+                discardRecordingOnStop = false;
+                audioChunks = [];
                 stream.getTracks().forEach(track => track.stop());
                 resetRecorderLabel();
             };
@@ -6483,16 +6488,14 @@ function setupAiTaskCreator() {
             return `<label class="ai-review-item"><input type="checkbox" data-index="${index}" checked><span><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(meta)}</small></span></label>`;
         }).join("");
         review.hidden = false;
-        saveAiDraft();
     };
-    promptInput.addEventListener("input", saveAiDraft);
-    reviewList.addEventListener("change", saveAiDraft);
     generateButton.addEventListener("click", async () => {
         if (!supabaseClient || !currentUser) return showAppNotice("Entre na sua conta para usar a criação com IA.", "warning");
         const prompt = pendingVoicePrompt || promptInput.value.trim();
         pendingVoicePrompt = "";
         if (!recordedAudio && !prompt) return showAppNotice("Grave um áudio ou escreva o que deseja criar.", "warning");
         const original = generateButton.innerHTML;
+        const requestSessionId = aiSessionId;
         generateButton.disabled = true;
         generateButton.innerHTML = '<span class="loading-spinner"></span> Entendendo seu pedido…';
         review.hidden = true;
@@ -6515,10 +6518,12 @@ function setupAiTaskCreator() {
             }
             if (data?.error) throw new Error(data.error);
             if (!data?.tasks?.length) throw new Error("Não encontrei nenhuma tarefa clara nesse pedido.");
+            if (requestSessionId !== aiSessionId) return;
             renderSuggestions(data.tasks);
             isRefiningSuggestions = false;
             resetRecorderLabel();
         } catch (error) {
+            if (requestSessionId !== aiSessionId) return;
             showAppNotice(`A IA não conseguiu interpretar o pedido: ${error.message}`, "error");
         } finally {
             generateButton.disabled = false;
@@ -6546,12 +6551,7 @@ function setupAiTaskCreator() {
             }
             if (!created) throw new Error("Nenhuma categoria sugerida existe mais no checklist.");
             showAppNotice(`${created} ${created === 1 ? "tarefa criada" : "tarefas criadas"} com sucesso.`, "success");
-            promptInput.value = "";
-            recordedAudio = null;
-            suggestions = [];
-            review.hidden = true;
-            clearAiDraft();
-            resetRecorderLabel();
+            resetAiTaskCreator();
             closeModal(modal);
         } catch (error) {
             showAppNotice(`Não foi possível concluir: ${error.message}`, "error");
