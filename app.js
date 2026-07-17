@@ -525,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.27', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.28', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -4421,7 +4421,7 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
                     let currentLocalTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
                     currentLocalTasks = currentLocalTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
                     localStorage.setItem("offline_tasks", JSON.stringify(currentLocalTasks));
-                    if (realTask.category_id) requestSharedTaskPush(realTask.id);
+                    if (isCollaborativeCategory(realTask.category_id)) requestSharedTaskPush(realTask.id);
                 }
             })
             .catch(err => {
@@ -4439,6 +4439,11 @@ async function insertTaskWithCategoryFallback(taskPayload) {
         result = await supabaseClient.from('tasks').insert(legacyPayload).select();
     }
     return result;
+}
+
+function isCollaborativeCategory(categoryId) {
+    if (!categoryId) return false;
+    return (categoryShares || []).some(share => String(share.category_id) === String(categoryId) && share.accepted === true);
 }
 
 async function requestSharedTaskPush(taskId, silent = false) {
@@ -6709,7 +6714,7 @@ async function syncOfflineDataToCloud() {
                 allActiveTasks = allActiveTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
                 localTasks = localTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
                 localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
-                if (realTask.category_id) await requestSharedTaskPush(realTask.id);
+                if (isCollaborativeCategory(realTask.category_id)) await requestSharedTaskPush(realTask.id);
                 
                 let compQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
                 let updatedCompQueue = {};
