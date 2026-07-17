@@ -41,7 +41,7 @@
             }
         });
     </script>
-    <link rel="stylesheet" href="style.css?v=7.95">
+    <link rel="stylesheet" href="style.css?v=7.96">
     
     <!-- iOS / PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -306,7 +306,10 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h2>Nova Tarefa</h2>
-                <button class="modal-close" id="btn-close-add-modal"><i data-lucide="x"></i></button>
+                <div class="modal-header-actions">
+                    <button type="button" id="btn-open-ai-tasks" class="ai-task-trigger" title="Criar tarefas falando"><i data-lucide="sparkles"></i><span>Criar com IA</span></button>
+                    <button class="modal-close" id="btn-close-add-modal"><i data-lucide="x"></i></button>
+                </div>
             </div>
             <form id="form-add-task">
                 <div class="form-group">
@@ -389,6 +392,31 @@
                 </div>
                 <button type="submit" class="btn btn-primary btn-block">Adicionar Tarefa</button>
             </form>
+        </div>
+    </div>
+
+    <!-- Modal: criar tarefas por voz com IA -->
+    <div id="modal-ai-tasks" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content ai-tasks-modal-content">
+            <div class="modal-header">
+                <div><h2>Criar tarefas com IA</h2><p class="ai-tasks-subtitle">Fale naturalmente. Você revisa tudo antes de salvar.</p></div>
+                <button class="modal-close" id="btn-close-ai-tasks"><i data-lucide="x"></i></button>
+            </div>
+            <div class="ai-tasks-body">
+                <button type="button" id="btn-ai-record" class="ai-record-button">
+                    <span class="ai-record-icon"><i data-lucide="mic"></i></span>
+                    <span><strong id="ai-record-title">Toque para falar</strong><small id="ai-record-status">Até 60 segundos</small></span>
+                </button>
+                <div class="ai-tasks-divider"><span>ou digite</span></div>
+                <textarea id="ai-task-prompt" rows="3" maxlength="1000" placeholder="Ex.: Crie uma tarefa para conferir o estoque amanhã de manhã e atribua ao João."></textarea>
+                <button type="button" id="btn-ai-generate" class="btn btn-primary btn-block"><i data-lucide="sparkles"></i> Interpretar pedido</button>
+                <div id="ai-tasks-review" class="ai-tasks-review" hidden>
+                    <div class="ai-review-heading"><strong>Tarefas encontradas</strong><small>Desmarque o que não quiser criar.</small></div>
+                    <div id="ai-tasks-review-list"></div>
+                    <button type="button" id="btn-ai-confirm" class="btn btn-primary btn-block">Criar tarefas selecionadas</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -484,7 +512,7 @@
 
                 <div class="settings-version">
                     <span>Checklist</span>
-                        <strong>Versão 9.04</strong>
+                        <strong>Versão 9.05</strong>
                 </div>
             </div>
         </div>
@@ -1026,6 +1054,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=9.04"></script>
+    <script src="app.js?v=9.05"></script>
 </body>
 </html>

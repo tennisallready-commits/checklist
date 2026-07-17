@@ -525,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // A versão na própria URL evita que Chrome/WebAPK reutilize uma
         // validação antiga do sw.js ao retomar o PWA no Android.
-        navigator.serviceWorker.register('./sw.js?v=9.23', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=9.24', { scope: './', updateViaCache: 'none' })
             .then(reg => {
                 serviceWorkerRegistration = reg;
                 console.log('Service Worker registrado com sucesso:', reg);
@@ -656,6 +656,7 @@ function setupEventListeners() {
     let lastShareInteractionTime = 0;
 
     setupTaskTitleAutocomplete();
+    setupAiTaskCreator();
 
     // Smart Report Modal Events
     // Smart Report Tab Switcher and Listeners
@@ -6210,6 +6211,146 @@ function createConfettiBurst(x, y) {
             particle.remove();
         }, 700);
     }
+}
+
+function setupAiTaskCreator() {
+    const modal = document.getElementById("modal-ai-tasks");
+    const openButton = document.getElementById("btn-open-ai-tasks");
+    const closeButton = document.getElementById("btn-close-ai-tasks");
+    const recordButton = document.getElementById("btn-ai-record");
+    const recordTitle = document.getElementById("ai-record-title");
+    const recordStatus = document.getElementById("ai-record-status");
+    const promptInput = document.getElementById("ai-task-prompt");
+    const generateButton = document.getElementById("btn-ai-generate");
+    const review = document.getElementById("ai-tasks-review");
+    const reviewList = document.getElementById("ai-tasks-review-list");
+    const confirmButton = document.getElementById("btn-ai-confirm");
+    if (!modal || !openButton || !recordButton || !generateButton || !reviewList || !confirmButton) return;
+
+    let recorder = null;
+    let audioChunks = [];
+    let recordedAudio = null;
+    let stopTimer = null;
+    let suggestions = [];
+
+    const resetRecorderLabel = () => {
+        recordButton.classList.remove("recording");
+        recordTitle.textContent = recordedAudio ? "Áudio pronto" : "Toque para falar";
+        recordStatus.textContent = recordedAudio ? "Toque novamente para regravar" : "Até 60 segundos";
+    };
+    const close = () => {
+        if (recorder && recorder.state === "recording") recorder.stop();
+        closeModal(modal);
+    };
+    openButton.addEventListener("click", () => {
+        closeModal(modalAddTask);
+        openModal(modal);
+    });
+    closeButton?.addEventListener("click", close);
+    modal.querySelector(".modal-overlay")?.addEventListener("click", close);
+
+    recordButton.addEventListener("click", async () => {
+        if (recorder && recorder.state === "recording") {
+            recorder.stop();
+            return;
+        }
+        if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+            showAppNotice("A gravação de voz não está disponível neste navegador. Você ainda pode digitar o pedido.", "warning");
+            return;
+        }
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const preferredTypes = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"];
+            const mimeType = preferredTypes.find(type => MediaRecorder.isTypeSupported(type)) || "";
+            recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+            audioChunks = [];
+            recorder.ondataavailable = event => { if (event.data?.size) audioChunks.push(event.data); };
+            recorder.onstop = () => {
+                clearTimeout(stopTimer);
+                recordedAudio = new Blob(audioChunks, { type: recorder.mimeType || audioChunks[0]?.type || "audio/webm" });
+                stream.getTracks().forEach(track => track.stop());
+                resetRecorderLabel();
+            };
+            recorder.start();
+            recordedAudio = null;
+            recordButton.classList.add("recording");
+            recordTitle.textContent = "Ouvindo… toque para parar";
+            recordStatus.textContent = "Fale o que deseja criar";
+            stopTimer = setTimeout(() => { if (recorder?.state === "recording") recorder.stop(); }, 60000);
+        } catch (error) {
+            showAppNotice(error.name === "NotAllowedError" ? "Autorize o acesso ao microfone para usar a criação por voz." : `Não foi possível gravar: ${error.message}`, "warning");
+        }
+    });
+
+    const blobToBase64 = blob => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+    });
+    const renderSuggestions = tasksToRender => {
+        suggestions = tasksToRender;
+        reviewList.innerHTML = tasksToRender.map((task, index) => {
+            const meta = [task.category, task.date?.split("-").reverse().join("/"), task.recurrence === "daily" ? "Diária" : task.recurrence === "repeat" ? `Repete: ${(task.repeat_days || []).join(", ")}` : "Única", ...(task.shifts || []), task.assignee_label].filter(Boolean).join(" • ");
+            return `<label class="ai-review-item"><input type="checkbox" data-index="${index}" checked><span><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(meta)}</small></span></label>`;
+        }).join("");
+        review.hidden = false;
+    };
+    generateButton.addEventListener("click", async () => {
+        if (!supabaseClient || !currentUser) return showAppNotice("Entre na sua conta para usar a criação com IA.", "warning");
+        const prompt = promptInput.value.trim();
+        if (!recordedAudio && !prompt) return showAppNotice("Grave um áudio ou escreva o que deseja criar.", "warning");
+        const original = generateButton.innerHTML;
+        generateButton.disabled = true;
+        generateButton.innerHTML = '<span class="loading-spinner"></span> Entendendo seu pedido…';
+        review.hidden = true;
+        try {
+            const body = { prompt, today: getLocalDateString(new Date()), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo" };
+            if (recordedAudio) {
+                body.audio_base64 = await blobToBase64(recordedAudio);
+                body.audio_mime_type = recordedAudio.type.split(";")[0] || "audio/webm";
+            }
+            const { data, error } = await supabaseClient.functions.invoke("create-tasks-with-ai", { body });
+            if (error) throw error;
+            if (!data?.tasks?.length) throw new Error("Não encontrei nenhuma tarefa clara nesse pedido.");
+            renderSuggestions(data.tasks);
+        } catch (error) {
+            showAppNotice(`A IA não conseguiu interpretar o pedido: ${error.message}`, "error");
+        } finally {
+            generateButton.disabled = false;
+            generateButton.innerHTML = original;
+            if (window.lucide) window.lucide.createIcons();
+        }
+    });
+    confirmButton.addEventListener("click", async () => {
+        const selected = [...reviewList.querySelectorAll('input[type="checkbox"]:checked')].map(input => suggestions[Number(input.dataset.index)]).filter(Boolean);
+        if (!selected.length) return showAppNotice("Selecione pelo menos uma tarefa.", "warning");
+        const original = confirmButton.textContent;
+        confirmButton.disabled = true;
+        confirmButton.textContent = "Criando…";
+        let created = 0;
+        try {
+            for (const task of selected) {
+                const validCategory = categories.find(category => category.is_active !== false && String(category.name).toLowerCase() === String(task.category).toLowerCase());
+                if (!validCategory) continue;
+                await addTask(task.title, validCategory.name, ["once", "daily", "repeat"].includes(task.recurrence) ? task.recurrence : "once", task.date || getLocalDateString(new Date()), task.recurrence === "repeat" ? task.repeat_days || [] : null, task.assigned_to || null, task.shifts || [], Boolean(task.important));
+                created += 1;
+            }
+            if (!created) throw new Error("Nenhuma categoria sugerida existe mais no checklist.");
+            showAppNotice(`${created} ${created === 1 ? "tarefa criada" : "tarefas criadas"} com sucesso.`, "success");
+            promptInput.value = "";
+            recordedAudio = null;
+            suggestions = [];
+            review.hidden = true;
+            resetRecorderLabel();
+            closeModal(modal);
+        } catch (error) {
+            showAppNotice(`Não foi possível concluir: ${error.message}`, "error");
+        } finally {
+            confirmButton.disabled = false;
+            confirmButton.textContent = original;
+        }
+    });
 }
 
 function getCategoryColorStyle(categoryName) {

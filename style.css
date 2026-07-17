@@ -1684,6 +1684,34 @@ body.theme-girly .task-reminder-indicator {
     background: linear-gradient(135deg, #10b981 0%, #06b6d4 100%);
 }
 
+.modal-header-actions { display: flex; align-items: center; gap: 7px; }
+.ai-task-trigger { display: inline-flex; align-items: center; gap: 5px; padding: 7px 9px; border: 1px solid rgba(139,92,246,.4); border-radius: 9px; color: var(--primary); background: rgba(139,92,246,.1); font-size: .68rem; font-weight: 800; cursor: pointer; }
+.ai-task-trigger svg { width: 14px; height: 14px; }
+.ai-tasks-modal-content { max-width: 520px; }
+.ai-tasks-subtitle { margin: 3px 0 0; color: var(--text-muted); font-size: .66rem; }
+.ai-tasks-body { display: flex; flex-direction: column; gap: 13px; }
+.ai-record-button { display: flex; align-items: center; justify-content: center; gap: 12px; width: 100%; padding: 19px; border: 1.5px dashed rgba(139,92,246,.5); border-radius: 15px; color: var(--text-primary); background: rgba(139,92,246,.07); cursor: pointer; }
+.ai-record-button > span:last-child { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.ai-record-button small { color: var(--text-muted); font-size: .65rem; }
+.ai-record-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--primary); box-shadow: 0 7px 20px rgba(139,92,246,.3); }
+.ai-record-icon svg { width: 20px; height: 20px; }
+.ai-record-button.recording { border-style: solid; border-color: #ef4444; background: rgba(239,68,68,.08); }
+.ai-record-button.recording .ai-record-icon { background: #ef4444; animation: pulse-ai-record 1.1s ease-in-out infinite; }
+@keyframes pulse-ai-record { 50% { transform: scale(1.1); box-shadow: 0 0 0 9px rgba(239,68,68,.12); } }
+.ai-tasks-divider { display: flex; align-items: center; gap: 9px; color: var(--text-muted); font-size: .63rem; text-transform: uppercase; }
+.ai-tasks-divider::before,.ai-tasks-divider::after { content:""; height: 1px; flex: 1; background: var(--border-color); }
+#ai-task-prompt { width: 100%; resize: vertical; min-height: 76px; padding: 11px; border: 1px solid var(--border-color); border-radius: 11px; color: var(--text-primary); background: rgba(0,0,0,.12); font: inherit; font-size: .78rem; line-height: 1.45; }
+.ai-tasks-review { display: flex; flex-direction: column; gap: 10px; padding-top: 5px; border-top: 1px solid var(--border-color); }
+.ai-review-heading { display: flex; flex-direction: column; gap: 2px; }
+.ai-review-heading small { color: var(--text-muted); font-size: .64rem; }
+#ai-tasks-review-list { display: flex; flex-direction: column; gap: 8px; max-height: 33vh; overflow-y: auto; }
+.ai-review-item { display: grid; grid-template-columns: 20px minmax(0,1fr); gap: 9px; align-items: start; padding: 11px; border: 1px solid var(--border-color); border-radius: 11px; background: rgba(255,255,255,.025); }
+.ai-review-item input { margin-top: 3px; accent-color: var(--primary); }
+.ai-review-item span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ai-review-item strong { color: var(--text-primary); font-size: .76rem; }
+.ai-review-item small { color: var(--text-muted); font-size: .62rem; line-height: 1.4; }
+@media (max-width: 420px) { .ai-task-trigger span { display:none; } }
+
 .task-assignee-avatar.has-photo { overflow: hidden; background: var(--bg-surface-solid); }
 .task-assignee-avatar img, .settings-profile-avatar img { width: 100%; height: 100%; display: block; object-fit: cover; }
 .settings-avatar-row { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(255,255,255,.02); }
