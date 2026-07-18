@@ -1720,12 +1720,6 @@ body.theme-girly .task-reminder-indicator {
 .ai-review-item span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .ai-review-item strong { color: var(--text-primary); font-size: .76rem; }
 .ai-review-item small { color: var(--text-muted); font-size: .62rem; line-height: 1.4; }
-.ai-refine-voice { display: flex; align-items: center; justify-content: flex-start; gap: 10px; width: 100%; padding: 10px 12px; border: 1px solid rgba(139,92,246,.35); border-radius: 11px; color: var(--primary); background: rgba(139,92,246,.07); cursor: pointer; }
-.ai-refine-voice > svg { width: 18px; height: 18px; flex: 0 0 auto; }
-.ai-refine-voice > span { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
-.ai-refine-voice strong { font-size: .72rem; }
-.ai-refine-voice small { color: var(--text-muted); font-size: .61rem; }
-.ai-refine-voice.recording { border-color: #ef4444; color: #ef4444; background: rgba(239,68,68,.08); }
 @media (max-width: 420px) { .ai-task-trigger span { display:none; } }
 
 .task-assignee-avatar.has-photo { overflow: hidden; background: var(--bg-surface-solid); }
@@ -3396,6 +3390,7 @@ body.theme-girly .modal-content::before {
 .training-calendar-days-summary { margin: 14px 0; padding: 11px 13px; display: grid; grid-template-columns: auto 1fr; column-gap: 9px; align-items: center; border: 1px solid rgba(251,146,60,.24); border-radius: 13px; background: linear-gradient(135deg,rgba(251,146,60,.1),rgba(239,68,68,.05)); }
 .training-calendar-days-summary > span { font-size: 1.4rem; }
 .training-calendar-days-summary strong { color: var(--text-primary); font-size: .76rem; }
+.training-calendar-days-summary.no-own-training { grid-template-columns: 1fr; }
 .training-calendar-days-summary small { color: var(--text-muted); font-size: .58rem; }
 .training-day-gallery { padding-top: 12px; border-top: 1px solid var(--border-color); }
 .training-day-gallery-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 10px; }

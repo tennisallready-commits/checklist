@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.95";
+const SERVICE_WORKER_URL = "./sw.js?v=9.99";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -300,6 +300,13 @@ function chooseTaskReminderTime(currentValue = "08:00", currentOffsetDays = 0) {
 let isAuthModeLogin = true;
 let localDataVersion = 0; // Previne race conditions de sync
 let dataLoadRequestVersion = 0; // Impede respostas antigas de outra data de sobrescreverem a tela
+
+function beginOptimisticMutation() {
+    localDataVersion += 1;
+    // Invalida imediatamente qualquer leitura iniciada antes da ação do usuário.
+    // Assim uma resposta antiga nunca repinta a tarefa que acabou de mudar.
+    dataLoadRequestVersion += 1;
+}
 let scrollPosition = 0;
 let learningCloudState = "idle";
 let reportsCloudState = "idle";
@@ -470,6 +477,8 @@ let switchReportTab = null;
 let categoryShares = [];
 let pendingInvites = [];
 let sharedTaskNotifications = [];
+let notificationPreviewTimer = null;
+let lastNotificationPreviewKey = "";
 
 // Forms & Inputs
 const formAddTask = document.getElementById("form-add-task");
@@ -2339,6 +2348,21 @@ function updateDateState() {
     }
 }
 
+function getTaskRenderFingerprint(taskList = tasks) {
+    return JSON.stringify(taskList.map(task => [
+        String(task.id), task.title, task.category, String(task.category_id || ""),
+        Boolean(task.completed), Boolean(task.is_recurring), JSON.stringify(task.repeat_days || []),
+        String(task.assigned_to || ""), task.created_at, JSON.stringify(task.context || {})
+    ].join("|")).sort());
+}
+
+function getCategoryRenderFingerprint(categoryList = categories) {
+    return JSON.stringify(categoryList.map(category => [
+        String(category.id), category.name, category.type || "", category.is_active !== false,
+        JSON.stringify(category.merged_category_ids || [])
+    ].join("|")));
+}
+
 async function loadChecklistAndProgress(skipOfflineReload = false) {
     // 1. Recarrega dados do localStorage, exceto quando chamado após uma mutação otimista local
     // (toggle, drag, delete) — nesses casos, tasks já está correto e recarregar causaria flash de 0%
@@ -2378,15 +2402,15 @@ async function loadChecklistAndProgress(skipOfflineReload = false) {
         }
 
         // Guarda fingerprint dos dados atuais para comparar depois
-        const fingerprintBefore = JSON.stringify(tasks.map(t => t.id + '|' + t.title + '|' + t.completed + '|' + JSON.stringify(t.context)));
-        const catFingerprintBefore = JSON.stringify(categories.map(c => c.id + '|' + c.name));
+        const fingerprintBefore = getTaskRenderFingerprint();
+        const catFingerprintBefore = getCategoryRenderFingerprint();
 
         loadData().then((didUpdate) => {
             if (!didUpdate) return; // Se o fetch foi abortado (ex: o usuário arrastou uma tarefa), não re-renderiza nada
 
             // Só re-renderiza se os dados realmente mudaram — evita flash desnecessário
-            const fingerprintAfter = JSON.stringify(tasks.map(t => t.id + '|' + t.title + '|' + t.completed + '|' + JSON.stringify(t.context)));
-            const catFingerprintAfter = JSON.stringify(categories.map(c => c.id + '|' + c.name));
+            const fingerprintAfter = getTaskRenderFingerprint();
+            const catFingerprintAfter = getCategoryRenderFingerprint();
 
             if (fingerprintAfter !== fingerprintBefore) {
                 renderChecklist();
@@ -2856,14 +2880,32 @@ function updateCollaborationInviteAttention() {
     const unreadTasks = (sharedTaskNotifications || []).filter(notification => !notification.read_at);
     const needsAttention = unseenInvites.length > 0 || unreadTasks.length > 0;
     if (notificationsBadge) notificationsBadge.style.display = needsAttention ? "block" : "none";
-    btnNotifications.classList.toggle("invite-attention", needsAttention);
     if (collabInviteReadyLabel) {
         const unreadTrainingOnly = unreadTasks.length > 0 && unreadTasks.every(notification => isTrainingCategory(notification.category_name));
         const latestTrainingActor = unreadTrainingOnly ? (getIdentityLabelByUserId(unreadTasks[0]?.actor_id) || "Participante").replace(/^@/, "") : "";
         collabInviteReadyLabel.textContent = unseenInvites.length > 0
             ? "Você recebeu um convite"
             : unreadTrainingOnly ? `${latestTrainingActor} adicionou um novo treino` : "Você recebeu uma nova tarefa";
-        collabInviteReadyLabel.setAttribute("aria-hidden", needsAttention ? "false" : "true");
+    }
+    const previewKey = needsAttention
+        ? [...unseenInvites.map(item => `invite:${item.id}`), ...unreadTasks.map(item => `task:${item.id}`)].sort().join("|")
+        : "";
+    if (!needsAttention) {
+        clearTimeout(notificationPreviewTimer);
+        notificationPreviewTimer = null;
+        lastNotificationPreviewKey = "";
+        btnNotifications.classList.remove("invite-attention");
+        collabInviteReadyLabel?.setAttribute("aria-hidden", "true");
+    } else if (previewKey !== lastNotificationPreviewKey) {
+        lastNotificationPreviewKey = previewKey;
+        clearTimeout(notificationPreviewTimer);
+        btnNotifications.classList.add("invite-attention");
+        collabInviteReadyLabel?.setAttribute("aria-hidden", "false");
+        notificationPreviewTimer = setTimeout(() => {
+            btnNotifications?.classList.remove("invite-attention");
+            collabInviteReadyLabel?.setAttribute("aria-hidden", "true");
+            notificationPreviewTimer = null;
+        }, 3000);
     }
 }
 
@@ -2871,6 +2913,8 @@ function markCurrentInvitesAsSeen() {
     (pendingInvites || []).forEach(invite => localStorage.setItem(getInviteSeenKey(invite.id), "true"));
     if (btnNotifications) btnNotifications.classList.remove("invite-attention");
     if (collabInviteReadyLabel) collabInviteReadyLabel.setAttribute("aria-hidden", "true");
+    clearTimeout(notificationPreviewTimer);
+    notificationPreviewTimer = null;
 }
 
 async function markSharedTaskNotificationsAsRead() {
@@ -3155,6 +3199,17 @@ async function loadData() {
                         dbTasks[taskIndex] = { ...dbTasks[taskIndex], ...dbUpdates };
                     }
                 });
+
+                const recentDeletionCutoff = Date.now() - 24 * 60 * 60 * 1000;
+                const localDeletionIds = new Set(existingLocal
+                    .filter(task => task.is_active === false && (!task.local_deleted_at || new Date(task.local_deleted_at).getTime() >= recentDeletionCutoff))
+                    .map(task => String(task.id)));
+                const pendingDeleteIds = new Set([...pendingDeletes].map(String));
+                dbTasks = dbTasks.filter(task =>
+                    task.is_active !== false
+                    && !localDeletionIds.has(String(task.id))
+                    && !pendingDeleteIds.has(String(task.id))
+                );
             }
 
             categories = dbCats;
@@ -3168,12 +3223,15 @@ async function loadData() {
                 if (dateStr === selectedDate) {
                     const completed = queue[key];
                     const existingIndex = dbCompletionsToday.findIndex(c => String(c.task_id) === taskIdStr);
-                    if (completed) {
+                    if (completed === true) {
                         if (existingIndex !== -1) {
                             dbCompletionsToday[existingIndex].completed = true;
                         } else {
                             dbCompletionsToday.push({ task_id: taskIdStr, date: selectedDate, completed: true });
                         }
+                    } else if (completed === "excluded") {
+                        if (existingIndex !== -1) dbCompletionsToday.splice(existingIndex, 1);
+                        dbCompletionsToday.push({ task_id: taskIdStr, date: selectedDate, completed: false });
                     } else {
                         // Uncheck action: remove from completions if it exists
                         if (existingIndex !== -1 && dbCompletionsToday[existingIndex].completed === true) {
@@ -3251,6 +3309,11 @@ async function loadData() {
 
             const existingLocal = JSON.parse(localStorage.getItem("offline_tasks")) || [];
             const pendingLocalTasks = existingLocal.filter(t => isTemporaryId(t.id) && t.is_active !== false);
+            const recentLocalDeletions = existingLocal.filter(task =>
+                task.is_active === false
+                && task.local_deleted_at
+                && Date.now() - new Date(task.local_deleted_at).getTime() < 24 * 60 * 60 * 1000
+            );
             
             // mergedTasks já é dbTasks com as posições locais mescladas
             const mergedTasks = [...dbTasks];
@@ -3259,6 +3322,9 @@ async function loadData() {
                 const alreadyExists = mergedTasks.some(d => d.title === pending.title && d.category === pending.category);
                 if (!alreadyExists) mergedTasks.push(pending);
             }
+            recentLocalDeletions.forEach(deleted => {
+                if (!mergedTasks.some(task => String(task.id) === String(deleted.id))) mergedTasks.push(deleted);
+            });
             localStorage.setItem("offline_tasks", JSON.stringify(mergedTasks));
 
             let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
@@ -3318,7 +3384,7 @@ function loadDataOffline() {
 
     // 2. Fetch tasks offline
     let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
-    allActiveTasks = localTasks || [];
+    allActiveTasks = localTasks.filter(task => task.is_active !== false);
 
     // 3. Fetch completions
     let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
@@ -4558,7 +4624,7 @@ function setupTaskDragAndDrop(container, shiftName) {
 // Salva a nova ordenação no cache local e dispara update para o banco
 function saveNewTasksOrder(container) {
     try {
-        localDataVersion++;
+        beginOptimisticMutation();
         const items = [...container.querySelectorAll(".task-item")];
 
         // Cria um mapa rápido de realId -> index para este container
@@ -4727,6 +4793,7 @@ function getCurrentShiftName(date = new Date()) {
 }
 
 async function moveFutureTaskToCurrentMoment(id) {
+    beginOptimisticMutation();
     const now = new Date();
     const todayStr = getLocalDateString(now);
     const task = tasks.find(item => String(item.id) === String(id)) || allActiveTasks.find(item => String(item.id) === String(id));
@@ -4814,7 +4881,7 @@ async function toggleTask(id, options = {}) {
 }
 
 async function commitTaskToggle(id, isPastNightShiftException = false) {
-    localDataVersion++;
+    beginOptimisticMutation();
     if (isHistoryMode && !isPastNightShiftException) return;
     if (pendingToggles.has(id)) return;
     pendingToggles.add(id);
@@ -5140,11 +5207,22 @@ function compressTrainingPhoto(file) {
 
 function getTrainingCompletionDates(categoryName = null) {
     const trainingTaskIds = new Set(allActiveTasks
-        .filter(task => isTrainingCategory(task.category) && (!categoryName || task.category === categoryName))
+        .filter(task =>
+            isTrainingCategory(task.category)
+            && (!categoryName || normalizeCategoryName(task.category) === normalizeCategoryName(categoryName))
+            && isTrainingTaskOwnedByCurrentUser(task)
+        )
         .map(task => String(task.id)));
     return new Set((JSON.parse(localStorage.getItem("offline_completions")) || [])
         .filter(item => item.completed === true && trainingTaskIds.has(String(item.task_id)))
         .map(item => item.date));
+}
+
+function isTrainingRecordOwnedByCurrentUser(record) {
+    if (!record || !currentUser) return false;
+    if (record.createdBy) return String(record.createdBy) === String(currentUser.id);
+    const linkedTask = allActiveTasks.find(task => String(task.id) === String(record.taskId));
+    return Boolean(linkedTask && isTrainingTaskOwnedByCurrentUser(linkedTask));
 }
 
 function getCurrentTrainingStreak(dates) {
@@ -5375,7 +5453,9 @@ async function warmTrainingPhotoCache() {
 
 function paintTrainingReport(categoryName) {
     const dates = getTrainingCompletionDates(categoryName);
-    currentTrainingCalendarRecords.forEach(record => dates.add(record.date));
+    currentTrainingCalendarRecords
+        .filter(isTrainingRecordOwnedByCurrentUser)
+        .forEach(record => dates.add(record.date));
     const summary = document.getElementById("training-report-summary");
     const grid = document.getElementById("training-calendar-grid");
     const monthYear = document.getElementById("training-calendar-month-year");
@@ -5426,7 +5506,8 @@ function paintTrainingReport(categoryName) {
     }
     const participantCount = new Set(currentTrainingCalendarRecords.map(record => record.createdBy || getTrainingRecordOwner(record).label)).size;
     const recordCount = currentTrainingCalendarRecords.length;
-    summary.innerHTML = `<span>🔥</span><strong>${dates.size} ${dates.size === 1 ? "dia" : "dias"} de treino • ${participantCount} ${participantCount === 1 ? "participante" : "participantes"} • ${recordCount} ${recordCount === 1 ? "registro" : "registros"}</strong>`;
+    summary.classList.toggle("no-own-training", dates.size === 0);
+    summary.innerHTML = `${dates.size ? '<span aria-label="Seus dias de treino">🔥</span>' : ''}<strong>${dates.size} ${dates.size === 1 ? "dia" : "dias"} de treino • ${participantCount} ${participantCount === 1 ? "participante" : "participantes"} • ${recordCount} ${recordCount === 1 ? "registro" : "registros"}</strong>`;
     renderTrainingDayGallery(initialGalleryDate || firstTrainedDate || todayStr);
     lucide.createIcons();
 }
@@ -5451,6 +5532,7 @@ function saveCompletionOffline(taskId, date, completed) {
 
 async function addTask(title, category, recurrenceMode, customDate, repeatDays, assignedTo, shifts, important = false, reminderTime = null, reminderOffsetDays = 0) {
     if (!title) return;
+    beginOptimisticMutation();
     if (isTrainingCollaborativeCategory(category)) {
         assignedTo = null;
     }
@@ -5602,7 +5684,7 @@ async function requestSharedTaskPush(taskId, silent = false, eventType = "traini
 }
 
 async function addTaskOffline(title, category, isRecurring, id, createdAt, repeatDays, context, assignedTo) {
-    localDataVersion++;
+    beginOptimisticMutation();
     const now = new Date();
     let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
     const task = {
@@ -5631,7 +5713,7 @@ async function addTaskOffline(title, category, isRecurring, id, createdAt, repea
 }
 
 async function renameTask(id, newTitle, context) {
-    localDataVersion++;
+    beginOptimisticMutation();
     if (!newTitle) return;
 
     const existingTask = tasks.find(t => String(t.id) === String(id));
@@ -5685,7 +5767,7 @@ function renameTaskOffline(id, newTitle, context) {
 
 // Full task update (title, date, recurrence, repeat_days)
 async function updateTask(id, updates) {
-    localDataVersion++;
+    beginOptimisticMutation();
     const existingTask = tasks.find(t => String(t.id) === String(id));
     if (existingTask && isTrainingCategory(existingTask.category)) {
         if (!isTrainingTaskOwnedByCurrentUser(existingTask)) {
@@ -5850,19 +5932,15 @@ function openEditTaskModal(task) {
 }
 
 async function deleteTask(id) {
-    localDataVersion++;
+    beginOptimisticMutation();
     const existingTask = tasks.find(task => String(task.id) === String(id));
     if (existingTask && isTrainingCategory(existingTask.category) && !isTrainingTaskOwnedByCurrentUser(existingTask)) {
         showAppNotice("Somente o dono pode excluir esta tarefa de treino.", "warning");
         return;
     }
-    if (pendingDeletes.has(id)) return;
-    pendingDeletes.add(id);
-
-    const photoDeletion = await deleteTrainingPhotosForTask(existingTask);
-    const completionDeletion = await deleteTrainingCompletionsForTask(existingTask);
-    if (!photoDeletion.ok) showAppNotice(`Tarefa removida deste aparelho, mas a foto ainda aguarda exclusão na nuvem: ${photoDeletion.error}`, "warning");
-    if (!completionDeletion.ok) showAppNotice(`Tarefa removida deste aparelho, mas o histórico de conclusão ainda aguarda exclusão na nuvem: ${completionDeletion.error}`, "warning");
+    const taskId = String(id);
+    if ([...pendingDeletes].some(pendingId => String(pendingId) === taskId)) return;
+    pendingDeletes.add(taskId);
 
     // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
     tasks = tasks.filter(t => String(t.id) !== String(id));
@@ -5871,39 +5949,51 @@ async function deleteTask(id) {
     // Salva no LocalStorage
     deleteTaskOffline(id);
 
+    let updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+    updatesQueue[taskId] = { ...(updatesQueue[taskId] || {}), is_active: false };
+    localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
+
     renderChecklist();
     updateProgress();
 
+    // Fotos e conclusões são limpas em paralelo; nenhuma dessas operações pode
+    // atrasar ou desfazer a remoção visual do cartão.
+    const cleanupPromise = Promise.all([
+        deleteTrainingPhotosForTask(existingTask),
+        deleteTrainingCompletionsForTask(existingTask)
+    ]).then(([photoDeletion, completionDeletion]) => {
+        if (!photoDeletion.ok) showAppNotice(`Tarefa removida deste aparelho, mas a foto ainda aguarda exclusão na nuvem: ${photoDeletion.error}`, "warning");
+        if (!completionDeletion.ok) showAppNotice(`Tarefa removida deste aparelho, mas o histórico de conclusão ainda aguarda exclusão na nuvem: ${completionDeletion.error}`, "warning");
+    }).catch(error => console.warn("Limpeza complementar da tarefa pendente:", error.message));
+
     // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
     if (supabaseClient && currentUser) {
-        let updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
-        updatesQueue[id] = { ...(updatesQueue[id] || {}), is_active: false };
-        localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
-
-        supabaseClient.from('tasks').update({ is_active: false }).eq('id', id)
+        // Mantém a ordem segura na nuvem (fotos antes da tarefa), mas toda a
+        // sequência ocorre fora do caminho de renderização da interface.
+        cleanupPromise.then(() => supabaseClient.from('tasks').update({ is_active: false }).eq('id', id))
             .then(({ error }) => {
                 if (error) {
                     console.warn("Erro ao deletar no Supabase. Mantido localmente.", error.message);
                 } else {
                     let queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
-                    delete queue[id];
+                    delete queue[taskId];
                     localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
                 }
-                pendingDeletes.delete(id);
+                pendingDeletes.delete(taskId);
             })
             .catch(err => {
                 console.error("Erro assíncrono ao deletar:", err);
-                pendingDeletes.delete(id);
+                pendingDeletes.delete(taskId);
             });
     } else {
-        pendingDeletes.delete(id);
+        pendingDeletes.delete(taskId);
     }
 }
 
 function deleteTaskOffline(id) {
     let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
     localTasks = localTasks.map(t => {
-        if (String(t.id) === String(id)) return { ...t, is_active: false };
+        if (String(t.id) === String(id)) return { ...t, is_active: false, local_deleted_at: new Date().toISOString() };
         return t;
     });
     localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
@@ -5916,9 +6006,11 @@ async function excludeTaskForToday(id) {
         showAppNotice("Somente o dono pode alterar esta tarefa de treino.", "warning");
         return;
     }
-    localDataVersion++;
-    if (pendingDeletes.has(id)) return;
-    pendingDeletes.add(id);
+    beginOptimisticMutation();
+    const taskId = String(id);
+    const actionDate = selectedDate;
+    if ([...pendingDeletes].some(pendingId => String(pendingId) === taskId)) return;
+    pendingDeletes.add(taskId);
 
     // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
     tasks = tasks.filter(t => String(t.id) !== String(id));
@@ -5933,21 +6025,25 @@ async function excludeTaskForToday(id) {
     if (supabaseClient && currentUser) {
         supabaseClient.from('completions').upsert({
             task_id: id,
-            date: selectedDate,
+            date: actionDate,
             completed: false
         }, { onConflict: 'task_id,date' })
             .then(({ error }) => {
                 if (error) {
                     console.warn("Erro ao excluir do dia no Supabase. Mantido localmente.", error.message);
+                } else {
+                    let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+                    delete queue[`${taskId}_${actionDate}`];
+                    localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
                 }
-                pendingDeletes.delete(id);
+                pendingDeletes.delete(taskId);
             })
             .catch(err => {
                 console.error("Erro assíncrono ao excluir do dia:", err);
-                pendingDeletes.delete(id);
+                pendingDeletes.delete(taskId);
             });
     } else {
-        pendingDeletes.delete(id);
+        pendingDeletes.delete(taskId);
     }
 }
 
@@ -5961,6 +6057,9 @@ function excludeTaskForTodayOffline(id) {
         completed: false
     });
     localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
+    let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+    queue[`${id}_${selectedDate}`] = "excluded";
+    localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
     // Não chama loadDataOffline nem render aqui — excludeTaskForToday já faz isso
 }
 
@@ -6987,7 +7086,7 @@ function updateLocalCatId(tempId, realCat) {
 }
 
 function addCategoryOffline(name, type) {
-    localDataVersion++;
+    beginOptimisticMutation();
     let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
     if (localCats.some(c => c.name.toLowerCase() === name.toLowerCase() && c.is_active)) {
         alert("Este local/categoria já existe.");
@@ -7006,7 +7105,7 @@ function addCategoryOffline(name, type) {
 }
 
 async function updateCategoryFields(id, newName, newType) {
-    localDataVersion++;
+    beginOptimisticMutation();
     const oldCat = categories.find(c => String(c.id) === String(id));
     if (!oldCat) return;
     const oldName = oldCat.name;
@@ -7057,7 +7156,7 @@ async function updateCategoryFields(id, newName, newType) {
 }
 
 async function deleteCategory(id) {
-    localDataVersion++;
+    beginOptimisticMutation();
     const cat = categories.find(c => String(c.id) === String(id));
     if (!cat) return;
     if (!await showAppConfirm(`Deseja excluir a categoria “${cat.name}”? Todas as tarefas e conclusões relacionadas também serão excluídas permanentemente.`, { title: "Excluir categoria", confirmText: "Excluir tudo", danger: true })) return;
@@ -7179,7 +7278,7 @@ async function leaveSharedCategory(cat) {
 }
 
 function deleteCategoryOffline(id) {
-    localDataVersion++;
+    beginOptimisticMutation();
     const cat = categories.find(c => String(c.id) === String(id));
     if (!cat) return;
     removeCategoryAndTasksFromLocalState(cat);
@@ -7189,7 +7288,7 @@ function deleteCategoryOffline(id) {
 }
 
 async function resetChecklistProgress() {
-    localDataVersion++;
+    beginOptimisticMutation();
     // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
     tasks = tasks.map(t => ({ ...t, completed: false }));
     resetChecklistProgressOffline();
@@ -7451,7 +7550,6 @@ function setupAiTaskCreator() {
     const generateButton = document.getElementById("btn-ai-generate");
     const review = document.getElementById("ai-tasks-review");
     const reviewList = document.getElementById("ai-tasks-review-list");
-    const refineVoiceButton = document.getElementById("btn-ai-refine-voice");
     const confirmButton = document.getElementById("btn-ai-confirm");
     if (!modal || !openButton || !recordButton || !generateButton || !reviewList || !confirmButton) return;
 
@@ -7606,11 +7704,13 @@ function setupAiTaskCreator() {
 
     const resetRecorderLabel = () => {
         recordButton.classList.remove("recording");
-        recordTitle.textContent = recordedAudio ? "Áudio pronto" : "Toque para falar";
-        recordStatus.textContent = recordedAudio ? "Toque novamente para regravar" : "Até 60 segundos";
-        refineVoiceButton?.classList.remove("recording");
-        const refineStrong = refineVoiceButton?.querySelector("strong");
-        if (refineStrong) refineStrong.textContent = "Complementar com áudio";
+        if (suggestions.length) {
+            recordTitle.textContent = "Complementar com áudio";
+            recordStatus.textContent = "Ajuste as tarefas encontradas";
+        } else {
+            recordTitle.textContent = recordedAudio ? "Áudio pronto" : "Toque para falar";
+            recordStatus.textContent = recordedAudio ? "Toque novamente para regravar" : "Até 60 segundos";
+        }
     };
     const resetAiTaskCreator = () => {
         promptInput.value = "";
@@ -7663,6 +7763,9 @@ function setupAiTaskCreator() {
             return;
         }
         try {
+            // Se já há uma prévia, o mesmo botão superior passa automaticamente
+            // a complementar essas tarefas em vez de iniciar uma lista nova.
+            isRefiningSuggestions = suggestions.length > 0;
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             const preferredTypes = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"];
             const mimeType = preferredTypes.find(type => MediaRecorder.isTypeSupported(type)) || "";
@@ -7681,11 +7784,8 @@ function setupAiTaskCreator() {
             recorder.start();
             recordedAudio = null;
             recordButton.classList.add("recording");
-            refineVoiceButton?.classList.toggle("recording", isRefiningSuggestions);
-            const refineStrong = refineVoiceButton?.querySelector("strong");
-            if (refineStrong && isRefiningSuggestions) refineStrong.textContent = "Toque para parar e aplicar";
             recordTitle.textContent = "Ouvindo… toque para parar";
-            recordStatus.textContent = "Conectando ao reconhecimento rápido…";
+            recordStatus.textContent = isRefiningSuggestions ? "Descreva o que deseja alterar" : "Conectando ao reconhecimento rápido…";
             startDeviceTranscription();
             startGeminiLive(stream);
             stopTimer = setTimeout(() => { if (recorder?.state === "recording") recorder.stop(); }, 60000);
@@ -7720,7 +7820,7 @@ function setupAiTaskCreator() {
         const requestSessionId = aiSessionId;
         generateButton.disabled = true;
         generateButton.innerHTML = '<span class="loading-spinner"></span> Entendendo seu pedido…';
-        review.hidden = true;
+        if (!isRefiningSuggestions) review.hidden = true;
         try {
             const reminderFallback = new Date(Date.now() + 5 * 60000);
             const body = { prompt, today: getLocalDateString(new Date()), default_reminder_time: `${String(reminderFallback.getHours()).padStart(2, "0")}:${String(reminderFallback.getMinutes()).padStart(2, "0")}`, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo" };
@@ -7742,6 +7842,10 @@ function setupAiTaskCreator() {
             if (!data?.tasks?.length) throw new Error("Não encontrei nenhuma tarefa clara nesse pedido.");
             if (requestSessionId !== aiSessionId) return;
             renderSuggestions(data.tasks);
+            recordedAudio = null;
+            liveTranscript = "";
+            deviceTranscript = "";
+            deviceInterimTranscript = "";
             isRefiningSuggestions = false;
             resetRecorderLabel();
         } catch (error) {
@@ -7752,10 +7856,6 @@ function setupAiTaskCreator() {
             generateButton.innerHTML = original;
             if (window.lucide) window.lucide.createIcons();
         }
-    });
-    refineVoiceButton?.addEventListener("click", () => {
-        isRefiningSuggestions = true;
-        recordButton.click();
     });
     confirmButton.addEventListener("click", async () => {
         const selected = [...reviewList.querySelectorAll('input[type="checkbox"]:checked')].map(input => suggestions[Number(input.dataset.index)]).filter(Boolean);
@@ -8223,7 +8323,9 @@ async function syncOfflineDataToCloud() {
             }
 
             const completed = queue[key];
-            const query = completed
+            const query = completed === "excluded"
+                ? supabaseClient.from('completions').upsert({ task_id: taskId, date: date, completed: false }, { onConflict: 'task_id,date' })
+                : completed
                 ? supabaseClient.from('completions').upsert({ task_id: taskId, date: date, completed: true }, { onConflict: 'task_id,date' })
                 : supabaseClient.from('completions').delete().eq('task_id', taskId).eq('date', date);
             
@@ -8603,7 +8705,7 @@ function setupDragAndDrop(chip, cat) {
 }
 
 async function saveCategoryOrder() {
-    localDataVersion++;
+    beginOptimisticMutation();
     const bar = document.getElementById("categories-bar");
     const chips = Array.from(bar.querySelectorAll(".category-chip"));
     
