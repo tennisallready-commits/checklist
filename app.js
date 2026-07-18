@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.14";
+const SERVICE_WORKER_URL = "./sw.js?v=10.15";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -4160,7 +4160,11 @@ function renderChecklist() {
     
     // Filter tasks
     const filteredTasks = tasks.filter(task => {
-        if (currentFilter === "all") return true;
+        if (currentFilter === "all") {
+            // Treinos de outros participantes ficam disponíveis somente dentro
+            // da categoria Treino; não ocupam a rotina pessoal da aba Todos.
+            return !isTrainingCategory(task.category) || isTrainingTaskOwnedByCurrentUser(task);
+        }
         return task.category === currentFilter;
     });
 
