@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.87";
+const SERVICE_WORKER_URL = "./sw.js?v=9.90";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -2907,7 +2907,10 @@ function subscribeToCollaborationUpdates() {
         })
         .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, refreshSharedTrainingData)
         .on("postgres_changes", { event: "*", schema: "public", table: "completions" }, refreshSharedTrainingData)
-        .on("postgres_changes", { event: "*", schema: "public", table: "training_photos" }, refreshSharedTrainingData)
+        .on("postgres_changes", { event: "*", schema: "public", table: "training_photos" }, () => {
+            refreshSharedTrainingData();
+            setTimeout(warmTrainingPhotoCache, 300);
+        })
         .subscribe();
 }
 
@@ -5037,7 +5040,10 @@ async function getTrainingPhotoRecords(categoryName = null) {
             })).filter(record => record.photo);
             const merged = new Map(cloudRecords.map(record => [String(record.id), record]));
             filteredLocal.forEach(record => { if (!merged.has(String(record.id))) merged.set(String(record.id), record); });
-            return [...merged.values()].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+            const result = [...merged.values()].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+            saveTrainingPhotoFeedCache(result);
+            prefetchRecentTrainingPhotos(result);
+            return result;
         }
         if (feedError) console.warn("Leitura protegida de fotos indisponível; tentando acesso direto:", feedError.message);
         const { data, error } = await supabaseClient.from("training_photos")
@@ -5073,7 +5079,10 @@ async function getTrainingPhotoRecords(categoryName = null) {
         })).filter(record => record.photo);
         const merged = new Map(cloudRecords.map(record => [String(record.id), record]));
         filteredLocal.forEach(record => { if (!merged.has(String(record.id))) merged.set(String(record.id), record); });
-        return [...merged.values()].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+        const result = [...merged.values()].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+        saveTrainingPhotoFeedCache(result);
+        prefetchRecentTrainingPhotos(result);
+        return result;
     } catch (error) {
         console.warn("Não foi possível carregar fotos compartilhadas de treino:", error.message);
         return filteredLocal;
@@ -5140,19 +5149,99 @@ function renderTrainingDayGallery(dateStr) {
     list.innerHTML = records.length ? records.map(record => {
         const owner = getTrainingRecordOwner(record);
         const initials = owner.label.replace("@", "").substring(0, 2).toUpperCase() || "P";
-        return `<article class="training-day-photo-card"><img class="training-day-photo" src="${record.photo}" alt="Foto do treino de ${escapeHTML(owner.label)}"><div class="training-day-photo-caption"><span class="task-assignee-avatar ${owner.avatar ? 'has-photo' : ''}">${owner.avatar ? `<img src="${escapeHTML(owner.avatar)}" alt="">` : escapeHTML(initials)}</span><div><strong>${escapeHTML(owner.label)}</strong><small>${escapeHTML(record.taskTitle)}</small></div></div></article>`;
+        return `<article class="training-day-photo-card"><img class="training-day-photo" data-training-photo-id="${escapeHTML(String(record.id))}" src="${record.photo}" alt="Foto do treino de ${escapeHTML(owner.label)}" title="Ampliar foto"><div class="training-day-photo-caption"><span class="task-assignee-avatar ${owner.avatar ? 'has-photo' : ''}">${owner.avatar ? `<img src="${escapeHTML(owner.avatar)}" alt="">` : escapeHTML(initials)}</span><div><strong>${escapeHTML(owner.label)}</strong><small>${escapeHTML(record.taskTitle)}</small></div></div></article>`;
     }).join("") : `<div class="training-report-empty compact"><i data-lucide="camera-off"></i><strong>Nenhuma foto neste dia</strong><span>O fogo indica que houve treino, mesmo sem registro fotográfico.</span></div>`;
     document.querySelectorAll(".training-calendar-day").forEach(day => day.classList.toggle("selected", day.dataset.date === dateStr));
+    renderTrainingSelectedDayInfo(dateStr, records);
+    list.querySelectorAll(".training-day-photo[data-training-photo-id]").forEach(image => image.addEventListener("click", () => {
+        const record = currentTrainingCalendarRecords.find(item => String(item.id) === String(image.dataset.trainingPhotoId));
+        if (record) openTrainingPhotoViewer(record);
+    }));
     lucide.createIcons();
+}
+
+function renderTrainingSelectedDayInfo(dateStr, records) {
+    const info = document.getElementById("training-selected-day-info");
+    if (!info) return;
+    const trained = records.length > 0 || getTrainingCompletionDates(currentFilter !== "all" ? currentFilter : null).has(dateStr);
+    if (!trained) { info.hidden = true; return; }
+    const owners = new Map();
+    records.forEach(record => {
+        const owner = getTrainingRecordOwner(record);
+        if (!owners.has(owner.label)) owners.set(owner.label, owner);
+    });
+    const avatars = [...owners.values()].map(owner => {
+        const initials = owner.label.replace("@", "").substring(0, 2).toUpperCase() || "P";
+        return `<span class="task-assignee-avatar ${owner.avatar ? "has-photo" : ""}" title="${escapeHTML(owner.label)}">${owner.avatar ? `<img src="${escapeHTML(owner.avatar)}" alt="">` : escapeHTML(initials)}</span>`;
+    }).join("");
+    const count = records.length;
+    info.innerHTML = `<strong>${count || 1} ${count === 1 ? "treino realizado" : "treinos realizados"}</strong><span class="training-selected-day-avatars">${avatars}</span>`;
+    info.hidden = false;
+}
+
+function openTrainingPhotoViewer(record) {
+    const owner = getTrainingRecordOwner(record);
+    const dateLabel = new Date(record.date + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" });
+    const viewer = document.createElement("div");
+    viewer.className = "training-photo-viewer";
+    viewer.innerHTML = `<div class="training-photo-viewer-backdrop"></div><article class="training-photo-viewer-card" role="dialog" aria-modal="true" aria-label="Foto do treino"><button type="button" class="training-photo-viewer-close" aria-label="Fechar"><i data-lucide="x"></i></button><img src="${escapeHTML(record.photo)}" alt="Foto do treino de ${escapeHTML(owner.label)}"><footer class="training-photo-viewer-caption"><div><strong>${escapeHTML(owner.label)} · ${escapeHTML(record.taskTitle)}</strong><span>${escapeHTML(dateLabel)}</span></div></footer></article>`;
+    document.body.appendChild(viewer);
+    if (window.lucide) window.lucide.createIcons();
+    const close = () => { viewer.classList.remove("visible"); document.removeEventListener("keydown", onKey); setTimeout(() => viewer.remove(), 210); };
+    const onKey = event => { if (event.key === "Escape") close(); };
+    viewer.querySelector(".training-photo-viewer-close").addEventListener("click", close);
+    viewer.querySelector(".training-photo-viewer-backdrop").addEventListener("click", close);
+    document.addEventListener("keydown", onKey);
+    requestAnimationFrame(() => viewer.classList.add("visible"));
 }
 
 async function renderTrainingReport() {
     const categoryName = currentFilter !== "all" && isTrainingCategory(currentFilter) ? currentFilter : null;
+    if (!currentTrainingCalendarRecords.length) currentTrainingCalendarRecords = getTrainingPhotoFeedCache();
     currentTrainingCalendarRecords = currentTrainingCalendarRecords.filter(record => !categoryName || record.category === categoryName);
     paintTrainingReport(categoryName);
     const refreshedRecords = await getTrainingPhotoRecords(categoryName);
     currentTrainingCalendarRecords = refreshedRecords;
     paintTrainingReport(categoryName);
+}
+
+function getTrainingPhotoFeedCache() {
+    if (!currentUser) return [];
+    try {
+        const cached = JSON.parse(localStorage.getItem(`training_photo_feed_${currentUser.id}`)) || {};
+        if (!cached.savedAt || Date.now() - cached.savedAt > 50 * 60 * 1000) return [];
+        return Array.isArray(cached.records) ? cached.records : [];
+    } catch (_) {
+        return [];
+    }
+}
+
+function saveTrainingPhotoFeedCache(records) {
+    if (!currentUser) return;
+    const lightweightRecords = records.slice(0, 120).map(record => ({
+        id: record.id, taskId: record.taskId, taskTitle: record.taskTitle, category: record.category,
+        date: record.date, photo: record.photo, createdBy: record.createdBy, creatorLabel: record.creatorLabel,
+        creatorAvatar: record.creatorAvatar, createdAt: record.createdAt
+    }));
+    localStorage.setItem(`training_photo_feed_${currentUser.id}`, JSON.stringify({ savedAt: Date.now(), records: lightweightRecords }));
+}
+
+function prefetchRecentTrainingPhotos(records) {
+    const monthPrefix = getLocalDateString(new Date()).slice(0, 7);
+    const recentPhotos = records.filter(record => record.photo && String(record.date || "").startsWith(monthPrefix)).slice(0, 6);
+    const prefetch = () => recentPhotos.forEach(record => {
+        const image = new Image();
+        image.decoding = "async";
+        image.src = record.photo;
+    });
+    if ("requestIdleCallback" in window) window.requestIdleCallback(prefetch, { timeout: 2200 });
+    else setTimeout(prefetch, 900);
+}
+
+async function warmTrainingPhotoCache() {
+    if (!supabaseClient || !currentUser || !navigator.onLine || !categories.some(category => isTrainingCategory(category.name))) return;
+    const records = await getTrainingPhotoRecords();
+    currentTrainingCalendarRecords = records;
 }
 
 function paintTrainingReport(categoryName) {
@@ -5188,7 +5277,9 @@ function paintTrainingReport(categoryName) {
         if (!initialGalleryDate && dayRecords.length) initialGalleryDate = dateStr;
         if (!firstTrainedDate && trained) firstTrainedDate = dateStr;
     }
-    summary.innerHTML = `<span>🔥</span><strong>${dates.size} ${dates.size === 1 ? "dia" : "dias"} de treino</strong><small>Intervalos também fazem parte de uma rotina saudável</small>`;
+    const participantCount = new Set(currentTrainingCalendarRecords.map(record => record.createdBy || getTrainingRecordOwner(record).label)).size;
+    const recordCount = currentTrainingCalendarRecords.length;
+    summary.innerHTML = `<span>🔥</span><strong>${dates.size} ${dates.size === 1 ? "dia" : "dias"} de treino • ${participantCount} ${participantCount === 1 ? "participante" : "participantes"} • ${recordCount} ${recordCount === 1 ? "registro" : "registros"}</strong><small>Intervalos também fazem parte de uma rotina saudável</small>`;
     renderTrainingDayGallery(initialGalleryDate || firstTrainedDate || todayStr);
     lucide.createIcons();
 }
@@ -7774,6 +7865,8 @@ function setupSupabaseAuth() {
             // Toda conta precisa definir um ID público antes de continuar.
             await ensureUserIdentifier();
             subscribeToCollaborationUpdates();
+            if ("requestIdleCallback" in window) window.requestIdleCallback(warmTrainingPhotoCache, { timeout: 3000 });
+            else setTimeout(warmTrainingPhotoCache, 1800);
             updateNotificationsSettingUI();
             if (areNotificationsEnabled() && "Notification" in window && Notification.permission === "granted") {
                 // Nunca cancela uma assinatura válida automaticamente ao abrir

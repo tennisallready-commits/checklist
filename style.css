@@ -3384,6 +3384,11 @@ body.theme-girly .modal-content::before {
 .training-calendar-day.has-photos { color: #fff; border-color: rgba(255,255,255,.2); }
 .training-calendar-day.today { box-shadow: inset 0 0 0 1px #fb923c; }
 .training-calendar-day.selected { outline: 2px solid #fb923c; outline-offset: 1px; }
+.training-selected-day-info { margin: 11px 0 0; padding: 9px 11px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid rgba(251,146,60,.22); border-radius: 12px; color: var(--text-secondary); background: rgba(251,146,60,.055); font-size: .64rem; }
+.training-selected-day-info[hidden] { display: none; }
+.training-selected-day-info strong { color: var(--text-primary); font-size: .68rem; }
+.training-selected-day-avatars { display: flex; align-items: center; padding-left: 7px; }
+.training-selected-day-avatars .task-assignee-avatar { width: 25px; height: 25px; margin-left: -7px; border: 2px solid var(--bg-surface-solid); font-size: .48rem; }
 .training-calendar-days-summary { margin: 14px 0; padding: 11px 13px; display: grid; grid-template-columns: auto 1fr; column-gap: 9px; align-items: center; border: 1px solid rgba(251,146,60,.24); border-radius: 13px; background: linear-gradient(135deg,rgba(251,146,60,.1),rgba(239,68,68,.05)); }
 .training-calendar-days-summary > span { grid-row: 1/3; font-size: 1.4rem; }
 .training-calendar-days-summary strong { color: var(--text-primary); font-size: .76rem; }
@@ -3396,7 +3401,8 @@ body.theme-girly .modal-content::before {
 .training-day-gallery-heading > b { color: var(--text-muted); font-size: .6rem; }
 .training-report-list { max-height: 260px; grid-template-columns: repeat(2,minmax(0,1fr)); }
 .training-day-photo-card { min-width: 0; overflow: hidden; border: 1px solid var(--border-color); border-radius: 14px; background: rgba(255,255,255,.025); }
-.training-day-photo { width: 100%; aspect-ratio: 4/3; display: block; object-fit: cover; }
+.training-day-photo { width: 100%; aspect-ratio: 4/3; display: block; object-fit: cover; cursor: zoom-in; transition: transform .22s ease,filter .22s ease; }
+.training-day-photo-card:hover .training-day-photo { transform: scale(1.015); filter: brightness(1.04); }
 .training-day-photo-caption { display: flex; align-items: center; gap: 7px; padding: 8px; }
 .training-day-photo-caption .task-assignee-avatar { width: 27px; height: 27px; flex: 0 0 27px; }
 .training-day-photo-caption > div { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
@@ -3404,6 +3410,18 @@ body.theme-girly .modal-content::before {
 .training-day-photo-caption strong { color: var(--text-primary); font-size: .67rem; }
 .training-day-photo-caption small { color: var(--text-muted); font-size: .55rem; }
 .training-report-empty.compact { grid-column: 1/-1; padding: 22px 12px; }
+.training-photo-viewer { position: fixed; inset: 0; z-index: 26000; display: grid; place-items: center; padding: 18px; opacity: 0; transition: opacity .2s ease; }
+.training-photo-viewer.visible { opacity: 1; }
+.training-photo-viewer-backdrop { position: absolute; inset: 0; background: rgba(2,4,10,.92); backdrop-filter: blur(14px); }
+.training-photo-viewer-card { position: relative; width: min(920px,100%); max-height: calc(100dvh - 36px); display: grid; overflow: hidden; border: 1px solid rgba(255,255,255,.14); border-radius: 20px; background: #080c16; box-shadow: 0 28px 90px rgba(0,0,0,.6); transform: scale(.97); transition: transform .2s ease; }
+.training-photo-viewer.visible .training-photo-viewer-card { transform: scale(1); }
+.training-photo-viewer-card > img { width: 100%; max-height: calc(100dvh - 135px); display: block; object-fit: contain; background: #02040a; }
+.training-photo-viewer-caption { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 12px 15px; color: #fff; }
+.training-photo-viewer-caption div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.training-photo-viewer-caption strong { font-size: .78rem; }
+.training-photo-viewer-caption span { color: rgba(255,255,255,.65); font-size: .62rem; }
+.training-photo-viewer-close { position: absolute; top: 12px; right: 12px; z-index: 2; width: 38px; height: 38px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.2); border-radius: 50%; color: #fff; background: rgba(0,0,0,.55); cursor: pointer; }
+.training-photo-viewer-close svg { width: 19px; height: 19px; }
 
 .settings-action-icon svg,
 .settings-action-chevron {
