@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.66";
+const SERVICE_WORKER_URL = "./sw.js?v=9.67";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -4701,29 +4701,34 @@ function isTrainingCategory(categoryName) {
 async function finishPendingTrainingCompletion(photoDataUrl) {
     const id = pendingTrainingCompletionId;
     if (id === null) return;
+    const pendingTask = tasks.find(item => String(item.id) === String(id))
+        || allActiveTasks.find(item => String(item.id) === String(id))
+        || (JSON.parse(localStorage.getItem("offline_tasks")) || []).find(item => String(item.id) === String(id));
     const pastNightException = pendingTrainingPastNightException;
     pendingTrainingCompletionId = null;
     pendingTrainingPastNightException = false;
     closeModal(modalTrainingPhoto);
     await commitTaskToggle(id, pastNightException);
     if (!photoDataUrl) return;
-    const task = tasks.find(item => String(item.id) === String(id));
     const records = await idb.get("training_photo_records") || [];
-    const record = { id: `${id}_${selectedDate}_${Date.now()}`, taskId: id, taskTitle: task?.title || "Treino", category: task?.category || "Treino", date: selectedDate, photo: photoDataUrl, createdBy: currentUser?.id || null, createdAt: new Date().toISOString() };
+    const record = { id: `${id}_${selectedDate}_${Date.now()}`, taskId: id, taskTitle: pendingTask?.title || "Treino", category: pendingTask?.category || currentFilter || "Treino", date: selectedDate, photo: photoDataUrl, createdBy: currentUser?.id || null, createdAt: new Date().toISOString() };
     records.unshift(record);
     await idb.put("training_photo_records", records.slice(0, 120));
-    const uploaded = await uploadTrainingPhotoRecord(record);
-    showAppNotice(uploaded ? "Foto compartilhada no relatório de treinos." : "Foto salva neste aparelho e será visível aqui.", uploaded ? "success" : "warning");
+    const uploadResult = await uploadTrainingPhotoRecord(record);
+    showAppNotice(uploadResult.ok ? "Foto compartilhada no relatório de treinos." : `Foto salva neste aparelho. Falha na nuvem: ${uploadResult.error}`, uploadResult.ok ? "success" : "warning");
 }
 
 async function uploadTrainingPhotoRecord(record) {
-    if (!supabaseClient || !currentUser || !navigator.onLine) return false;
+    if (!supabaseClient) return { ok: false, error: "Supabase indisponível" };
+    if (!currentUser) return { ok: false, error: "sessão não encontrada" };
+    if (!navigator.onLine) return { ok: false, error: "aparelho sem internet" };
     const category = categories.find(cat => cat.name === record.category);
-    if (!category || isTemporaryId(category.id)) return false;
+    if (!category) return { ok: false, error: "categoria não encontrada" };
+    if (isTemporaryId(category.id)) return { ok: false, error: "categoria ainda não sincronizada" };
     try {
         if (isTemporaryId(record.taskId)) {
-            for (let attempt = 0; attempt < 4 && isTemporaryId(record.taskId); attempt++) {
-                if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 350));
+            for (let attempt = 0; attempt < 12 && isTemporaryId(record.taskId); attempt++) {
+                if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 500));
                 const { data: cloudTask, error: lookupError } = await supabaseClient.from("tasks")
                     .select("id")
                     .eq("category_id", category.id)
@@ -4757,10 +4762,10 @@ async function uploadTrainingPhotoRecord(record) {
             await supabaseClient.storage.from("training-photos").remove([path]);
             throw metadataError;
         }
-        return true;
+        return { ok: true };
     } catch (error) {
         console.warn("A foto do treino ficou apenas no aparelho:", error.message);
-        return false;
+        return { ok: false, error: error.message || "erro desconhecido" };
     }
 }
 
