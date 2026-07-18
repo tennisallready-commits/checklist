@@ -1,9 +1,9 @@
-const CACHE_NAME = 'checklist-cache-v9.72';
+const CACHE_NAME = 'checklist-cache-v9.76';
 const CRITICAL_ASSETS = [
   './',
   './index.html',
   './style.css?v=8.12',
-  './app.js?v=9.53',
+  './app.js?v=9.57',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',

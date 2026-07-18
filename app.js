@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.72";
+const SERVICE_WORKER_URL = "./sw.js?v=9.76";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -2998,6 +2998,19 @@ async function loadData() {
                 }
             }
             dbCats = dedupeCategories(dbCats);
+            const cachedCategoryOrder = JSON.parse(localStorage.getItem("offline_categories")) || [];
+            const cachedOrderById = new Map(cachedCategoryOrder.map((cat, index) => [String(cat.id), index]));
+            const cachedOrderByName = new Map(cachedCategoryOrder.map((cat, index) => [cat.name, index]));
+            dbCats.sort((a, b) => {
+                const aLocal = cachedOrderById.get(String(a.id)) ?? cachedOrderByName.get(a.name);
+                const bLocal = cachedOrderById.get(String(b.id)) ?? cachedOrderByName.get(b.name);
+                if (aLocal !== undefined && bLocal !== undefined) return aLocal - bLocal;
+                if (aLocal !== undefined) return -1;
+                if (bLocal !== undefined) return 1;
+                const aCloud = Number.isFinite(Number(a.sort_order)) ? Number(a.sort_order) : Number.MAX_SAFE_INTEGER;
+                const bCloud = Number.isFinite(Number(b.sort_order)) ? Number(b.sort_order) : Number.MAX_SAFE_INTEGER;
+                return aCloud - bCloud;
+            });
             
             // Contas novas começam vazias. Os padrões só são criados quando o
             // usuário escolhe explicitamente "Restaurar Padrões do App".
@@ -4146,6 +4159,27 @@ function updateTaskCreationOnboarding() {
     document.body.classList.toggle("task-onboarding-visible", shouldShow);
 }
 
+function getTaskReminderDateTime(task, occurrenceDate = selectedDate) {
+    const reminderTime = task?.context?.reminder_time;
+    if (!reminderTime || !occurrenceDate) return null;
+    const reminderAt = new Date(`${occurrenceDate}T${reminderTime}:00`);
+    if (Number(task.context.reminder_offset_days) === 1) reminderAt.setDate(reminderAt.getDate() - 1);
+    return Number.isNaN(reminderAt.getTime()) ? null : reminderAt;
+}
+
+function hasPendingTaskReminder(task, occurrenceDate = selectedDate) {
+    const important = task?.context?.important === true || task?.context?.important === "true";
+    const reminderAt = getTaskReminderDateTime(task, occurrenceDate);
+    return important && reminderAt && reminderAt.getTime() > Date.now();
+}
+
+function refreshExpiredReminderIndicators() {
+    const now = Date.now();
+    document.querySelectorAll(".task-reminder-indicator[data-reminder-at]").forEach(indicator => {
+        if (Number(indicator.dataset.reminderAt) <= now) indicator.remove();
+    });
+}
+
 // Cria e configura o elemento DOM de um card de tarefa reutilizável
 function createTaskDOMElement(task) {
     const taskEl = document.createElement("div");
@@ -4156,6 +4190,8 @@ function createTaskDOMElement(task) {
     const trainingOwnerLabel = trainingOwnerEmail ? getIdentityLabel(trainingOwnerEmail) : "Dono da tarefa";
     const trainingOwnerAvatar = trainingOwnerEmail ? getIdentityAvatar(trainingOwnerEmail) : "";
     const trainingOwnerInitials = trainingOwnerLabel.replace("@", "").substring(0, 2).toUpperCase() || "DT";
+    const reminderAt = getTaskReminderDateTime(task);
+    const showReminderIndicator = hasPendingTaskReminder(task);
     
     // Exception for completing night shift tasks of the previous day during the morning (before 12 PM)
     const now = new Date();
@@ -4198,8 +4234,8 @@ function createTaskDOMElement(task) {
                 <div class="task-meta">
                     <span class="task-tag" style="${tagStyle}">${escapeHTML(task.category)}</span>
                     <span class="task-tag" style="background: rgba(255,255,255,0.02);">${getRecurrenceLabel(task)}</span>
-                    ${task.context && task.context.reminder_time && (task.context.important === true || task.context.important === "true") ? `
-                        <span class="task-reminder-indicator" title="Lembrete programado para ${escapeHTML(task.context.reminder_time)}" aria-label="Lembrete programado para ${escapeHTML(task.context.reminder_time)}">
+                    ${showReminderIndicator ? `
+                        <span class="task-reminder-indicator" data-reminder-at="${reminderAt.getTime()}" title="Lembrete programado para ${escapeHTML(task.context.reminder_time)}" aria-label="Lembrete programado para ${escapeHTML(task.context.reminder_time)}">
                             <i data-lucide="alarm-clock"></i>
                         </span>
                     ` : ''}
@@ -4851,7 +4887,50 @@ async function deleteTrainingCompletionsForTask(task) {
     return error ? { ok: false, error: error.message } : { ok: true };
 }
 
+let trainingOrphanCleanupPromise = null;
+async function cleanupOrphanedTrainingPhotos() {
+    if (trainingOrphanCleanupPromise) return trainingOrphanCleanupPromise;
+    trainingOrphanCleanupPromise = (async () => {
+        const cachedTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+        const activeTaskIds = new Set(cachedTasks.filter(task => task.is_active !== false).map(task => String(task.id)));
+        const localRecords = await idb.get("training_photo_records") || [];
+        await idb.put("training_photo_records", localRecords.filter(record => activeTaskIds.has(String(record.taskId))));
+
+        if (!supabaseClient || !currentUser || !navigator.onLine) return;
+        const { data: ownPhotos, error: photoError } = await supabaseClient.from("training_photos")
+            .select("id,task_id,photo_path")
+            .eq("created_by", currentUser.id);
+        if (photoError) throw photoError;
+        if (!ownPhotos?.length) return;
+
+        const taskIds = [...new Set(ownPhotos.map(photo => String(photo.task_id)).filter(Boolean))];
+        const { data: linkedTasks, error: taskError } = taskIds.length
+            ? await supabaseClient.from("tasks").select("id,is_active").in("id", taskIds)
+            : { data: [], error: null };
+        if (taskError) throw taskError;
+        const activeCloudTaskIds = new Set((linkedTasks || []).filter(task => task.is_active !== false).map(task => String(task.id)));
+        const orphanedPhotos = ownPhotos.filter(photo => !activeCloudTaskIds.has(String(photo.task_id)));
+        if (!orphanedPhotos.length) return;
+
+        const orphanIds = orphanedPhotos.map(photo => photo.id);
+        const orphanPaths = orphanedPhotos.map(photo => photo.photo_path).filter(Boolean);
+        const { error: metadataError } = await supabaseClient.from("training_photos").delete().in("id", orphanIds);
+        if (metadataError) throw metadataError;
+        if (orphanPaths.length) {
+            const { error: storageError } = await supabaseClient.storage.from("training-photos").remove(orphanPaths);
+            if (storageError) throw storageError;
+        }
+        console.log(`[Treino] ${orphanedPhotos.length} foto(s) antiga(s) sem tarefa foram removidas.`);
+    })().catch(error => {
+        console.warn("Não foi possível limpar fotos antigas sem tarefa:", error.message);
+    }).finally(() => {
+        trainingOrphanCleanupPromise = null;
+    });
+    return trainingOrphanCleanupPromise;
+}
+
 async function getTrainingPhotoRecords(categoryName = null) {
+    await cleanupOrphanedTrainingPhotos();
     const localRecords = await idb.get("training_photo_records") || [];
     const filteredLocal = categoryName ? localRecords.filter(record => record.category === categoryName) : localRecords;
     if (!supabaseClient || !currentUser || !navigator.onLine) return filteredLocal;
@@ -4871,7 +4950,8 @@ async function getTrainingPhotoRecords(categoryName = null) {
             if (signedError) throw signedError;
             (signed || []).forEach(item => signedByPath.set(item.path, item.signedUrl));
         }
-        const cloudRecords = (data || []).map(item => ({
+        const activeTaskIds = new Set((allActiveTasks || []).filter(task => task.is_active !== false).map(task => String(task.id)));
+        const cloudRecords = (data || []).filter(item => activeTaskIds.has(String(item.task_id))).map(item => ({
             id: item.id,
             taskId: item.task_id,
             taskTitle: item.task_title || "Treino",
@@ -5077,6 +5157,14 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
                     // Atualiza ID na memória
                     tasks = tasks.map(t => String(t.id) === String(tempId) ? { ...t, id: realTask.id } : t);
                     allActiveTasks = allActiveTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
+                    // Mantém o card já renderizado alinhado com o ID definitivo.
+                    // Sem isso, o primeiro check logo após a criação ainda usava
+                    // o ID temporário e não encontrava mais a tarefa na memória.
+                    document.querySelectorAll(".task-item[data-id]").forEach(taskElement => {
+                        if (String(taskElement.dataset.id) === String(tempId)) {
+                            taskElement.dataset.id = realTask.id;
+                        }
+                    });
                     // Atualiza local storage removendo o temporário e salvando o real
                     let currentLocalTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
                     currentLocalTasks = currentLocalTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
@@ -8198,10 +8286,12 @@ async function saveCategoryOrder() {
                     .update({ sort_order: index })
                     .eq('id', cat.id);
             });
-            await Promise.all(promises);
+            const results = await Promise.all(promises);
+            const firstError = results.find(result => result.error)?.error;
+            if (firstError) throw firstError;
             console.log("Ordem de categorias atualizada no Supabase.");
         } catch (e) {
-            console.warn("Dica: Adicione a coluna 'sort_order' na tabela 'categories' para salvar a ordem online!");
+            console.warn("A ordem foi salva neste aparelho, mas não pôde ser atualizada no Supabase:", e.message);
         }
     }
 }
@@ -9967,6 +10057,9 @@ function updateSmartReportButtonVisibility() {
     }
 }
 
-// Verifica as notificações de tarefas importantes a cada 60 segundos
-setInterval(checkImportantTaskNotifications, 60000);
+// Atualiza os indicadores e verifica as notificações a cada 60 segundos.
+setInterval(() => {
+    refreshExpiredReminderIndicators();
+    checkImportantTaskNotifications();
+}, 60000);
 })();
