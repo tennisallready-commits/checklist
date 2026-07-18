@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.07";
+const SERVICE_WORKER_URL = "./sw.js?v=10.08";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -761,8 +761,16 @@ function setupEventListeners() {
     document.getElementById("btn-close-training-report")?.addEventListener("click", () => closeModal(modalTrainingReport));
     modalTrainingReport?.querySelector(".modal-overlay")?.addEventListener("click", () => closeModal(modalTrainingReport));
     const finishTrainingWithoutPhoto = () => finishPendingTrainingCompletion(null);
+    const cancelPendingTrainingCompletion = () => {
+        if (pendingTrainingCompletionId === null) return;
+        pendingTrainingCompletionId = null;
+        pendingTrainingPastNightException = false;
+        inputTrainingPhoto.value = "";
+        closeModal(modalTrainingPhoto);
+    };
     document.getElementById("btn-skip-training-photo")?.addEventListener("click", finishTrainingWithoutPhoto);
     document.getElementById("btn-complete-without-photo")?.addEventListener("click", finishTrainingWithoutPhoto);
+    document.getElementById("btn-cancel-training-completion")?.addEventListener("click", cancelPendingTrainingCompletion);
     inputTrainingPhoto?.addEventListener("change", async () => {
         const file = inputTrainingPhoto.files?.[0];
         if (!file) return;
