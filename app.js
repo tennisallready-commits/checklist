@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.92";
+const SERVICE_WORKER_URL = "./sw.js?v=9.93";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -236,6 +236,7 @@ let selectedDate = "";
 let currentCalendarMonth = new Date();
 let currentTrainingCalendarMonth = new Date();
 let currentTrainingCalendarRecords = [];
+let trainingThumbnailCacheJob = null;
 
 // Async transaction locks (prevents double submits)
 let pendingDeletes = new Set();
@@ -4889,6 +4890,7 @@ async function finishPendingTrainingCompletion(photoDataUrl) {
     const record = { id: `${id}_${selectedDate}_${Date.now()}`, taskId: id, taskTitle: pendingTask?.title || "Treino", category: pendingTask?.category || currentFilter || "Treino", date: selectedDate, photo: photoDataUrl, createdBy: currentUser?.id || null, createdAt: new Date().toISOString() };
     records.unshift(record);
     await idb.put("training_photo_records", records.slice(0, 120));
+    scheduleTrainingThumbnailCache([record]);
     const uploadResult = await uploadTrainingPhotoRecord(record);
     showAppNotice(uploadResult.ok ? "Foto compartilhada no relatório de treinos." : `Foto salva neste aparelho. Falha na nuvem: ${uploadResult.error}`, uploadResult.ok ? "success" : "warning");
 }
@@ -4951,6 +4953,7 @@ async function deleteTrainingPhotosForTask(task) {
     const localRecords = await idb.get("training_photo_records") || [];
     const recordsToRemove = localRecords.filter(record => String(record.taskId) === String(task.id));
     await idb.put("training_photo_records", localRecords.filter(record => String(record.taskId) !== String(task.id)));
+    await removeTrainingThumbnailCache(recordsToRemove.map(record => record.id));
     if (!supabaseClient || !currentUser || isTemporaryId(task.id) || !navigator.onLine) {
         return { ok: true, localOnly: true };
     }
@@ -4972,6 +4975,7 @@ async function deleteTrainingPhotosForTask(task) {
             const { error: storageError } = await supabaseClient.storage.from("training-photos").remove(paths);
             if (storageError) throw storageError;
         }
+        await removeTrainingThumbnailCache((data || []).map(item => item.id));
         return { ok: true, removed: Math.max(recordsToRemove.length, (data || []).length) };
     } catch (error) {
         console.warn("A tarefa foi excluída, mas a foto não pôde ser removida da nuvem:", error.message);
@@ -5223,6 +5227,7 @@ async function renderTrainingReport() {
     const categoryName = currentFilter !== "all" && isTrainingCategory(currentFilter) ? currentFilter : null;
     if (!currentTrainingCalendarRecords.length) currentTrainingCalendarRecords = getTrainingPhotoFeedCache();
     currentTrainingCalendarRecords = currentTrainingCalendarRecords.filter(record => !categoryName || normalizeCategoryName(record.category) === normalizeCategoryName(categoryName));
+    currentTrainingCalendarRecords = await applyPersistentTrainingThumbnails(currentTrainingCalendarRecords);
     paintTrainingReport(categoryName);
     const refreshedRecords = await getTrainingPhotoRecords(categoryName);
     const currentById = new Map(currentTrainingCalendarRecords.map(record => [String(record.id), record]));
@@ -5230,7 +5235,7 @@ async function renderTrainingReport() {
         const current = currentById.get(String(record.id));
         // O Supabase gera uma URL assinada diferente a cada consulta. Enquanto a
         // foto for o mesmo registro, mantemos a URL que o navegador já carregou.
-        return current?.photo ? { ...record, photo: current.photo } : record;
+        return current?.photo ? { ...record, photo: current.photo, thumbnail: current.thumbnail || record.thumbnail } : record;
     });
     const signature = records => records.map(record => [
         String(record.id), String(record.taskId), record.date, record.taskTitle,
@@ -5260,6 +5265,94 @@ function saveTrainingPhotoFeedCache(records) {
         creatorAvatar: record.creatorAvatar, createdAt: record.createdAt
     }));
     localStorage.setItem(`training_photo_feed_${currentUser.id}`, JSON.stringify({ savedAt: Date.now(), records: lightweightRecords }));
+    scheduleTrainingThumbnailCache(records);
+}
+
+function getTrainingThumbnailCacheKey() {
+    return currentUser ? `training_photo_thumbnails_${currentUser.id}` : "";
+}
+
+async function applyPersistentTrainingThumbnails(records) {
+    const key = getTrainingThumbnailCacheKey();
+    if (!key || !records.length) return records;
+    try {
+        const cache = await idb.get(key) || {};
+        return records.map(record => cache[String(record.id)]?.dataUrl
+            ? { ...record, thumbnail: cache[String(record.id)].dataUrl }
+            : record);
+    } catch (_) {
+        return records;
+    }
+}
+
+function createTrainingThumbnail(photoUrl) {
+    return new Promise(async (resolve, reject) => {
+        try {
+            const response = await fetch(photoUrl);
+            if (!response.ok) throw new Error("foto indisponível");
+            const blob = await response.blob();
+            const objectUrl = URL.createObjectURL(blob);
+            const image = new Image();
+            image.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error("miniatura inválida")); };
+            image.onload = () => {
+                const scale = Math.min(1, 360 / Math.max(image.width, image.height));
+                const canvas = document.createElement("canvas");
+                canvas.width = Math.max(1, Math.round(image.width * scale));
+                canvas.height = Math.max(1, Math.round(image.height * scale));
+                canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+                URL.revokeObjectURL(objectUrl);
+                resolve(canvas.toDataURL("image/jpeg", .68));
+            };
+            image.src = objectUrl;
+        } catch (error) {
+            reject(error);
+        }
+    });
+}
+
+function scheduleTrainingThumbnailCache(records) {
+    if (!currentUser || !Array.isArray(records) || !records.length || trainingThumbnailCacheJob) return;
+    const cacheKey = getTrainingThumbnailCacheKey();
+    const snapshot = records.filter(record => record.id && record.photo).slice(0, 180);
+    const run = async () => {
+        if (!cacheKey) return;
+        const cutoff = new Date();
+        cutoff.setFullYear(cutoff.getFullYear() - 1);
+        const cutoffDate = getLocalDateString(cutoff);
+        const existing = await idb.get(cacheKey) || {};
+        const retained = Object.fromEntries(Object.entries(existing)
+            .filter(([, item]) => item?.date >= cutoffDate)
+            .sort((a, b) => String(b[1].savedAt || "").localeCompare(String(a[1].savedAt || "")))
+            .slice(0, 180));
+        let created = 0;
+        for (const record of snapshot) {
+            const id = String(record.id);
+            if (retained[id]?.dataUrl) continue;
+            if (created >= 12) break;
+            try {
+                retained[id] = { dataUrl: await createTrainingThumbnail(record.photo), date: record.date, savedAt: new Date().toISOString() };
+                created++;
+            } catch (_) { /* A foto completa continua disponível pela nuvem. */ }
+        }
+        if (created || Object.keys(retained).length !== Object.keys(existing).length) await idb.put(cacheKey, retained);
+    };
+    const start = () => {
+        trainingThumbnailCacheJob = run().catch(error => console.warn("Não foi possível guardar miniaturas:", error.message))
+            .finally(() => { trainingThumbnailCacheJob = null; });
+    };
+    trainingThumbnailCacheJob = { scheduled: true };
+    if ("requestIdleCallback" in window) window.requestIdleCallback(start, { timeout: 2500 });
+    else setTimeout(start, 1200);
+}
+
+async function removeTrainingThumbnailCache(ids) {
+    const key = getTrainingThumbnailCacheKey();
+    if (!key || !ids.length) return;
+    try {
+        const cache = await idb.get(key) || {};
+        ids.forEach(id => delete cache[String(id)]);
+        await idb.put(key, cache);
+    } catch (_) { /* limpeza não deve impedir a exclusão da tarefa */ }
 }
 
 function prefetchRecentTrainingPhotos(records) {
@@ -5306,7 +5399,8 @@ function paintTrainingReport(categoryName) {
         button.type = "button";
         button.className = `training-calendar-day ${trained ? "trained" : ""} ${dayRecords.length ? "has-photos" : ""} ${dateStr === todayStr ? "today" : ""}`;
         button.dataset.date = dateStr;
-        if (dayRecords[0]?.photo) button.style.setProperty("background-image", `linear-gradient(rgba(8,12,22,.18),rgba(8,12,22,.52)),url("${dayRecords[0].photo}")`, "important");
+        const calendarPhoto = dayRecords[0]?.thumbnail || dayRecords[0]?.photo;
+        if (calendarPhoto) button.style.setProperty("background-image", `linear-gradient(rgba(8,12,22,.18),rgba(8,12,22,.52)),url("${calendarPhoto}")`, "important");
         button.innerHTML = `<span>${day}</span>${trained ? '<b aria-label="Treino realizado">🔥</b>' : ''}${dayRecords.length > 1 ? `<em>+${dayRecords.length - 1}</em>` : ''}`;
         button.addEventListener("click", () => renderTrainingDayGallery(dateStr));
         grid.appendChild(button);
