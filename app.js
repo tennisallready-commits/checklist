@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.00";
+const SERVICE_WORKER_URL = "./sw.js?v=10.01";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -4987,9 +4987,6 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
                 let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
                 delete queue[`${id}_${selectedDate}`];
                 localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
-                if (task.completed && isTrainingCategory(task.category) && isCollaborativeCategory(task.category_id)) {
-                    requestSharedTaskPush(id, true, "training_completed");
-                }
             }
             pendingToggles.delete(id);
         }).catch(err => {
@@ -5015,18 +5012,28 @@ async function finishPendingTrainingCompletion(photoDataUrl) {
         || allActiveTasks.find(item => String(item.id) === String(id))
         || (JSON.parse(localStorage.getItem("offline_tasks")) || []).find(item => String(item.id) === String(id));
     const pastNightException = pendingTrainingPastNightException;
+    const trainingDate = selectedDate;
     pendingTrainingCompletionId = null;
     pendingTrainingPastNightException = false;
     closeModal(modalTrainingPhoto);
     await commitTaskToggle(id, pastNightException);
-    if (!photoDataUrl) return;
+    const notifyCompletion = taskId => {
+        if (pendingTask && (isCollaborativeCategory(pendingTask.category_id) || isTrainingCollaborativeCategory(pendingTask.category))) {
+            requestSharedTaskPush(taskId, true, "training_completed", trainingDate);
+        }
+    };
+    if (!photoDataUrl) {
+        notifyCompletion(id);
+        return;
+    }
     const records = await idb.get("training_photo_records") || [];
-    const record = { id: `${id}_${selectedDate}_${Date.now()}`, taskId: id, taskTitle: pendingTask?.title || "Treino", category: pendingTask?.category || currentFilter || "Treino", date: selectedDate, photo: photoDataUrl, createdBy: currentUser?.id || null, createdAt: new Date().toISOString() };
+    const record = { id: `${id}_${trainingDate}_${Date.now()}`, taskId: id, taskTitle: pendingTask?.title || "Treino", category: pendingTask?.category || currentFilter || "Treino", date: trainingDate, photo: photoDataUrl, createdBy: currentUser?.id || null, createdAt: new Date().toISOString() };
     records.unshift(record);
     await idb.put("training_photo_records", records.slice(0, 120));
     scheduleTrainingThumbnailCache([record]);
     const uploadResult = await uploadTrainingPhotoRecord(record);
     showAppNotice(uploadResult.ok ? "Foto compartilhada no relatório de treinos." : `Foto salva neste aparelho. Falha na nuvem: ${uploadResult.error}`, uploadResult.ok ? "success" : "warning");
+    if (uploadResult.ok) notifyCompletion(record.taskId);
 }
 
 async function uploadTrainingPhotoRecord(record) {
@@ -5725,10 +5732,10 @@ function canManageTrainingCollaborativeCategory(categoryName) {
     return !participantShare;
 }
 
-async function requestSharedTaskPush(taskId, silent = false, eventType = "training_created") {
+async function requestSharedTaskPush(taskId, silent = false, eventType = "training_created", trainingDate = null) {
     if (!supabaseClient || !taskId) return false;
     try {
-        const { data, error } = await supabaseClient.functions.invoke("send-task-push", { body: { task_id: taskId, event_type: eventType } });
+        const { data, error } = await supabaseClient.functions.invoke("send-task-push", { body: { task_id: taskId, event_type: eventType, training_date: trainingDate } });
         if (error) throw error;
         const sent = Number(data && data.sent || 0);
         const recipients = Number(data && data.recipients || 0);
@@ -6777,6 +6784,28 @@ async function focusSharedTaskFromNotification(notification) {
     selectedDate = getLocalDateString(new Date());
     updateDateDisplay();
     loadChecklistAndProgress().then(() => highlightRenderedTask(notification.task_id));
+}
+
+async function openTrainingCalendarFromPush(taskId, trainingDate) {
+    const validDate = /^\d{4}-\d{2}-\d{2}$/.test(String(trainingDate || ""))
+        ? String(trainingDate)
+        : getLocalDateString(new Date());
+    let targetTask = taskId ? getTaskById(taskId) : null;
+    if (!targetTask && taskId) targetTask = await primeTaskFromPush(taskId);
+    const trainingCategory = targetTask && isTrainingCategory(targetTask.category)
+        ? targetTask.category
+        : categories.find(category => isTrainingCategory(category.name))?.name;
+    if (trainingCategory) currentFilter = trainingCategory;
+    selectedDate = validDate;
+    currentTrainingCalendarMonth = new Date(`${validDate}T12:00:00`);
+    updateDateDisplay();
+    loadDataOffline();
+    renderCategories();
+    renderChecklist();
+    updateProgress();
+    openModal(modalTrainingReport);
+    await renderTrainingReport();
+    renderTrainingDayGallery(validDate);
 }
 
 function getTaskById(taskId) {
@@ -8195,10 +8224,15 @@ function setupSupabaseAuth() {
                     .catch(error => console.warn("Não foi possível restaurar a inscrição Web Push:", error.message));
             }
             const notificationTaskId = new URLSearchParams(window.location.search).get("notification_task");
+            const shouldOpenTrainingCalendar = new URLSearchParams(window.location.search).get("training_calendar") === "1";
+            const notificationTrainingDate = new URLSearchParams(window.location.search).get("training_date");
             const reminderTaskId = new URLSearchParams(window.location.search).get("reminder_task");
             const shouldOpenNotifications = new URLSearchParams(window.location.search).get("open_notifications") === "1";
             const collaborationInviteId = new URLSearchParams(window.location.search).get("collaboration_invite");
-            if (reminderTaskId) {
+            if (shouldOpenTrainingCalendar) {
+                history.replaceState({}, "", window.location.pathname);
+                setTimeout(() => openTrainingCalendarFromPush(notificationTaskId, notificationTrainingDate), 250);
+            } else if (reminderTaskId) {
                 history.replaceState({}, "", window.location.pathname);
                 setTimeout(() => openTaskReminderAction(reminderTaskId), 250);
             } else if (notificationTaskId) {
