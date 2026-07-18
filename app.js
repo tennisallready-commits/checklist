@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.01";
+const SERVICE_WORKER_URL = "./sw.js?v=10.02";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -1267,7 +1267,7 @@ function setupEventListeners() {
 
     // Toggle Task Complete (using event delegation)
     tasksListEl.addEventListener("click", async (e) => {
-        if (e.target.closest(".btn-task-action") || e.target.closest(".swipe-action-btn")) return;
+        if (e.target.closest(".btn-task-action") || e.target.closest(".swipe-action-btn") || e.target.closest(".task-description-toggle") || e.target.closest(".task-description-panel")) return;
 
         const item = e.target.closest(".task-item");
         if (!item) return;
@@ -1686,6 +1686,20 @@ function setupEventListeners() {
         });
     }
 
+    const setupDescriptionField = (buttonId, groupId, inputId) => {
+        const button = document.getElementById(buttonId);
+        const group = document.getElementById(groupId);
+        const input = document.getElementById(inputId);
+        if (!button || !group || !input) return;
+        button.addEventListener("click", () => {
+            group.hidden = false;
+            button.hidden = true;
+            input.focus();
+        });
+    };
+    setupDescriptionField("btn-add-task-description", "task-description-group", "task-description");
+    setupDescriptionField("btn-edit-task-description", "edit-task-description-group", "edit-task-description");
+
     formAddTask.addEventListener("submit", async (e) => {
         e.preventDefault();
         if (suppressTaskAutocompleteSubmit) {
@@ -1723,11 +1737,18 @@ function setupEventListeners() {
             const important = chkImp ? chkImp.checked : false;
             
             const queuedSharedTask = Boolean(assignedTo) && !navigator.onLine;
-            await addTask(inputTaskTitle.value.trim(), selectTaskCategory.value, selectTaskRecurring.value, taskDate, repeatDays, assignedTo, shifts, important);
+            const description = document.getElementById("task-description")?.value.trim() || "";
+            await addTask(inputTaskTitle.value.trim(), selectTaskCategory.value, selectTaskRecurring.value, taskDate, repeatDays, assignedTo, shifts, important, null, 0, description);
             if (queuedSharedTask) {
                 showAppNotice("Tarefa salva neste celular, mas ainda não enviada ao responsável. Para a outra pessoa receber, este celular precisa recuperar a internet e sincronizar o app.", "warning");
             }
             inputTaskTitle.value = "";
+            const descriptionInput = document.getElementById("task-description");
+            const descriptionGroup = document.getElementById("task-description-group");
+            const descriptionButton = document.getElementById("btn-add-task-description");
+            if (descriptionInput) descriptionInput.value = "";
+            if (descriptionGroup) descriptionGroup.hidden = true;
+            if (descriptionButton) descriptionButton.hidden = false;
             // Reset day toggles
             document.querySelectorAll("#repeat-days-group .day-toggle").forEach(b => b.classList.remove("active"));
             document.getElementById("repeat-days-group").style.display = "none";
@@ -1813,6 +1834,9 @@ function setupEventListeners() {
             }
         }
         context.turnos = editShifts;
+        const editedDescription = document.getElementById("edit-task-description")?.value.trim() || "";
+        if (editedDescription) context.description = editedDescription;
+        else delete context.description;
         const chkEditImp = document.getElementById("edit-task-important");
         if (chkEditImp) {
             context.important = chkEditImp.checked;
@@ -4423,6 +4447,7 @@ function createTaskDOMElement(task) {
     const trainingOwnerLabel = task.context?.creator_label || getIdentityLabelByUserId(task.user_id) || (trainingOwnerEmail ? getIdentityLabel(trainingOwnerEmail) : "Dono da tarefa");
     const trainingOwnerAvatar = getIdentityAvatarByUserId(task.user_id) || getCachedAvatarUrl(task.context?.creator_avatar_url || "") || (trainingOwnerEmail ? getIdentityAvatar(trainingOwnerEmail) : "");
     const trainingOwnerInitials = trainingOwnerLabel.replace("@", "").substring(0, 2).toUpperCase() || "DT";
+    const taskDescription = String(task.context?.description || "").trim();
     const reminderAt = getTaskReminderDateTime(task);
     const showReminderIndicator = hasPendingTaskReminder(task);
     
@@ -4488,6 +4513,7 @@ function createTaskDOMElement(task) {
                     ${trainingCollaborative ? `<span class="task-owner-identity" title="Tarefa de ${escapeHTML(trainingOwnerLabel)}"><span class="task-assignee-avatar owner ${trainingOwnerAvatar ? 'has-photo' : ''}">${trainingOwnerAvatar ? `<img src="${escapeHTML(trainingOwnerAvatar)}" alt="Foto de ${escapeHTML(trainingOwnerLabel)}" loading="eager" decoding="async" fetchpriority="high">` : escapeHTML(trainingOwnerInitials)}</span><small>${isTrainingTaskOwnedByCurrentUser(task) ? 'Sua tarefa' : escapeHTML(trainingOwnerLabel)}</small></span>` : ''}
                 </div>
             </div>
+            ${taskDescription ? `<button type="button" class="task-description-toggle" aria-expanded="false" aria-label="Mostrar descrição" title="Mostrar descrição"><i data-lucide="align-left"></i></button>` : ''}
             <!-- Global edit mode actions -->
             <div class="task-edit-actions">
                 <button class="btn-task-action rename" title="Renomear">
@@ -4498,7 +4524,21 @@ function createTaskDOMElement(task) {
                 </button>
             </div>
         </div>
+        ${taskDescription ? `<div class="task-description-panel" hidden><p>${escapeHTML(taskDescription)}</p></div>` : ''}
     `;
+
+    const descriptionToggle = taskEl.querySelector(".task-description-toggle");
+    const descriptionPanel = taskEl.querySelector(".task-description-panel");
+    descriptionToggle?.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const opening = descriptionPanel.hidden;
+        descriptionPanel.hidden = !opening;
+        taskEl.classList.toggle("description-open", opening);
+        descriptionToggle.setAttribute("aria-expanded", String(opening));
+        descriptionToggle.setAttribute("aria-label", opening ? "Ocultar descrição" : "Mostrar descrição");
+        descriptionToggle.title = opening ? "Ocultar descrição" : "Mostrar descrição";
+    });
 
     if (trainingViewOnly) {
         taskEl.classList.add("training-view-only");
@@ -4611,7 +4651,7 @@ function setupTaskDragAndDrop(container, shiftName) {
         if (!item) return;
 
         // Não arrasta se clicar em botões de ação ou checkbox
-        if (e.target.closest(".btn-task-action") || e.target.closest(".swipe-action-btn") || e.target.closest(".task-checkbox-wrapper")) return;
+        if (e.target.closest(".btn-task-action") || e.target.closest(".swipe-action-btn") || e.target.closest(".task-checkbox-wrapper") || e.target.closest(".task-description-toggle") || e.target.closest(".task-description-panel")) return;
 
         const touch = e.touches ? e.touches[0] : e;
         startY = touch.clientY;
@@ -5605,7 +5645,7 @@ function saveCompletionOffline(taskId, date, completed) {
     localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
 }
 
-async function addTask(title, category, recurrenceMode, customDate, repeatDays, assignedTo, shifts, important = false, reminderTime = null, reminderOffsetDays = 0) {
+async function addTask(title, category, recurrenceMode, customDate, repeatDays, assignedTo, shifts, important = false, reminderTime = null, reminderOffsetDays = 0, description = "") {
     if (!title) return;
     beginOptimisticMutation();
     if (isTrainingCollaborativeCategory(category)) {
@@ -5622,6 +5662,7 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
     if (shifts && shifts.length > 0) {
         context.turnos = shifts;
     }
+    if (description && description.trim()) context.description = description.trim();
     if (important) {
         context.important = true;
         context.reminder_time = reminderTime || addTaskReminderTime;
@@ -5941,6 +5982,13 @@ function openEditTaskModal(task) {
     
     document.getElementById("edit-task-id").value = task.id;
     document.getElementById("edit-task-title").value = task.title;
+    const descriptionInput = document.getElementById("edit-task-description");
+    const descriptionGroup = document.getElementById("edit-task-description-group");
+    const descriptionButton = document.getElementById("btn-edit-task-description");
+    const taskDescription = String(task.context?.description || "");
+    if (descriptionInput) descriptionInput.value = taskDescription;
+    if (descriptionGroup) descriptionGroup.hidden = !taskDescription;
+    if (descriptionButton) descriptionButton.hidden = Boolean(taskDescription);
     
     // Determine recurrence mode
     const editRecurring = document.getElementById("edit-task-recurring");

@@ -41,7 +41,7 @@
             }
         });
     </script>
-    <link rel="stylesheet" href="style.css?v=8.19">
+    <link rel="stylesheet" href="style.css?v=8.20">
     
     <!-- iOS / PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -320,7 +320,7 @@
             </div>
             <form id="form-add-task">
                 <div class="form-group">
-                    <label for="task-title">Descrição da Tarefa</label>
+                    <label for="task-title">Nome da tarefa</label>
                     <div class="task-title-autocomplete-wrapper">
                         <input type="text" id="task-title" required placeholder="Ex: Verificar temperatura do freezer" autocomplete="off" aria-autocomplete="list" aria-controls="task-title-autocomplete" aria-expanded="false">
                         <div id="task-title-autocomplete" class="task-title-autocomplete" role="listbox" aria-label="Tarefas já utilizadas"></div>
@@ -335,6 +335,11 @@
                             </div>
                         </div>
                     </div>
+                </div>
+                <button type="button" id="btn-add-task-description" class="task-description-form-toggle"><i data-lucide="align-left"></i><span>Adicionar descrição</span></button>
+                <div class="form-group task-description-form-group" id="task-description-group" hidden>
+                    <label for="task-description">Descrição</label>
+                    <textarea id="task-description" rows="3" maxlength="1000" placeholder="Adicione detalhes, instruções ou observações."></textarea>
                 </div>
                 <div class="form-group" style="margin-top: 10px;">
                     <label>Turno</label>
@@ -523,7 +528,7 @@
 
                 <div class="settings-version">
                     <span>Checklist</span>
-                        <strong>Versão 9.82</strong>
+                        <strong>Versão 9.83</strong>
                 </div>
             </div>
         </div>
@@ -660,8 +665,13 @@
             <form id="form-edit-task">
                 <input type="hidden" id="edit-task-id">
                 <div class="form-group">
-                    <label for="edit-task-title">Descrição</label>
+                    <label for="edit-task-title">Nome da tarefa</label>
                     <input type="text" id="edit-task-title" required autocomplete="off">
+                </div>
+                <button type="button" id="btn-edit-task-description" class="task-description-form-toggle"><i data-lucide="align-left"></i><span>Adicionar descrição</span></button>
+                <div class="form-group task-description-form-group" id="edit-task-description-group" hidden>
+                    <label for="edit-task-description">Descrição</label>
+                    <textarea id="edit-task-description" rows="3" maxlength="1000" placeholder="Adicione detalhes, instruções ou observações."></textarea>
                 </div>
                 <div class="form-group" style="margin-top: 10px;">
                     <label>Turno</label>
@@ -1104,6 +1114,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=9.82"></script>
+    <script src="app.js?v=9.83"></script>
 </body>
 </html>

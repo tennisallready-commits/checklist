@@ -1607,6 +1607,22 @@ body {
     min-width: 0;
 }
 
+.task-description-toggle { width: 32px; height: 32px; flex: 0 0 32px; display: grid; place-items: center; padding: 0; border: 1px solid var(--border-color); border-radius: 10px; color: var(--text-secondary); background: rgba(255,255,255,.035); cursor: pointer; transition: transform .18s ease, color .18s ease, background .18s ease; }
+.task-description-toggle svg { width: 15px; height: 15px; }
+.task-description-toggle:active { transform: scale(.9); }
+.task-description-toggle[aria-expanded="true"] { color: var(--primary); background: var(--primary-light); }
+.task-description-panel { position: relative; z-index: 2; margin-top: -1px; padding: 12px 14px 13px 46px; border: 1px solid var(--border-color); border-top: 0; border-radius: 0 0 var(--radius-md) var(--radius-md); background: var(--bg-surface); }
+.task-description-panel[hidden] { display: none; }
+.task-description-panel p { margin: 0; color: var(--text-secondary); font-size: .76rem; line-height: 1.55; white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
+.task-item.description-open .task-item-foreground { border-radius: var(--radius-md) var(--radius-md) 0 0; }
+.tasks-list.edit-mode .task-description-toggle { margin-left: auto; }
+
+.task-description-form-toggle { display: inline-flex; align-items: center; justify-content: center; gap: 7px; align-self: flex-start; padding: 8px 11px; border: 1px dashed color-mix(in srgb, var(--primary) 45%, transparent); border-radius: 10px; color: var(--primary); background: var(--primary-light); font-size: .7rem; font-weight: 800; cursor: pointer; }
+.task-description-form-toggle svg { width: 14px; height: 14px; }
+.task-description-form-toggle[hidden] { display: none; }
+.task-description-form-group textarea { width: 100%; min-height: 82px; resize: vertical; padding: 11px 12px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); background: var(--bg-surface-solid); font: inherit; font-size: .78rem; line-height: 1.45; outline: none; }
+.task-description-form-group textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
+
 .task-title {
     font-size: 0.875rem;
     font-weight: 600;
