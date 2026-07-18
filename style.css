@@ -1617,7 +1617,6 @@ body {
 .task-item.description-open .task-item-foreground { border-radius: var(--radius-md) var(--radius-md) 0 0; }
 .task-item.has-description .task-item-foreground { gap: 9px; }
 .task-item.has-description .task-meta { flex-wrap: wrap; row-gap: 4px; overflow: visible; }
-.task-item.has-description .task-owner-identity { max-width: min(145px, 100%); flex: 0 1 auto; }
 .task-item.has-description .task-description-toggle { align-self: center; margin-left: 2px; }
 .tasks-list.edit-mode .task-description-toggle { margin-left: auto; }
 
@@ -1745,9 +1744,7 @@ body.theme-girly .task-reminder-indicator {
 
 .task-assignee-avatar.has-photo { overflow: hidden; background: var(--bg-surface-solid); }
 .task-assignee-avatar img, .settings-profile-avatar img { width: 100%; height: 100%; display: block; object-fit: cover; }
-.task-owner-identity { display: inline-flex; align-items: center; gap: 5px; max-width: 145px; padding: 2px 7px 2px 3px; border: 1px solid rgba(251,146,60,.2); border-radius: 999px; background: rgba(251,146,60,.07); }
-.task-owner-identity .task-assignee-avatar { width: 23px; height: 23px; flex: 0 0 23px; border-color: rgba(251,146,60,.45); background: rgba(251,146,60,.14); color: #fb923c; font-size: .52rem; }
-.task-owner-identity small { overflow: hidden; color: var(--text-secondary); font-size: .58rem; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+.task-assignee-avatar.owner { width: 23px; height: 23px; flex: 0 0 23px; border-color: rgba(251,146,60,.45); background: rgba(251,146,60,.14); color: #fb923c; font-size: .52rem; }
 .settings-avatar-row { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(255,255,255,.02); }
 .settings-profile-avatar { width: 46px; height: 46px; display: grid; place-items: center; overflow: hidden; border: 2px solid rgba(139,92,246,.45); border-radius: 50%; color: var(--primary); background: rgba(139,92,246,.1); }
 .settings-profile-avatar svg { width: 21px; height: 21px; }
@@ -4673,7 +4670,7 @@ body.theme-girly .task-item.completed .task-item-foreground {
 
 .task-swipe-actions {
     position: absolute;
-    top: 50%;
+    top: var(--task-actions-center, 50%);
     right: 8px;
     width: 120px;
     height: 36px;

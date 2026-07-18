@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.05";
+const SERVICE_WORKER_URL = "./sw.js?v=10.07";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -4512,7 +4512,7 @@ function createTaskDOMElement(task) {
                         const isMe = currentUser && task.assigned_to.toLowerCase() === currentUser.email.toLowerCase();
                         return `<span class="task-assignee-avatar ${isMe ? '' : 'partner'} ${avatarUrl ? 'has-photo' : ''}" title="Atribuído a: ${escapeHTML(identityLabel)}">${avatarUrl ? `<img src="${escapeHTML(avatarUrl)}" alt="">` : escapeHTML(initials)}</span>`;
                     })() : ''}
-                    ${trainingCollaborative ? `<span class="task-owner-identity" title="Tarefa de ${escapeHTML(trainingOwnerLabel)}"><span class="task-assignee-avatar owner ${trainingOwnerAvatar ? 'has-photo' : ''}">${trainingOwnerAvatar ? `<img src="${escapeHTML(trainingOwnerAvatar)}" alt="Foto de ${escapeHTML(trainingOwnerLabel)}" loading="eager" decoding="async" fetchpriority="high">` : escapeHTML(trainingOwnerInitials)}</span><small>${isTrainingTaskOwnedByCurrentUser(task) ? 'Sua tarefa' : escapeHTML(trainingOwnerLabel)}</small></span>` : ''}
+                    ${trainingCollaborative ? `<span class="task-assignee-avatar owner ${trainingOwnerAvatar ? 'has-photo' : ''}" title="Tarefa de ${escapeHTML(trainingOwnerLabel)}" aria-label="Tarefa de ${escapeHTML(trainingOwnerLabel)}">${trainingOwnerAvatar ? `<img src="${escapeHTML(trainingOwnerAvatar)}" alt="Foto de ${escapeHTML(trainingOwnerLabel)}" loading="eager" decoding="async" fetchpriority="high">` : escapeHTML(trainingOwnerInitials)}</span>` : ''}
                 </div>
             </div>
             ${taskDescription ? `<button type="button" class="task-description-toggle" aria-expanded="false" aria-label="Mostrar descrição" title="Mostrar descrição"><i data-lucide="align-left"></i></button>` : ''}
@@ -4537,6 +4537,9 @@ function createTaskDOMElement(task) {
         const opening = descriptionPanel.hidden;
         descriptionPanel.hidden = !opening;
         taskEl.classList.toggle("description-open", opening);
+        const foreground = taskEl.querySelector(".task-item-foreground");
+        if (opening && foreground) taskEl.style.setProperty("--task-actions-center", `${foreground.offsetHeight / 2}px`);
+        else taskEl.style.removeProperty("--task-actions-center");
         descriptionToggle.setAttribute("aria-expanded", String(opening));
         descriptionToggle.setAttribute("aria-label", opening ? "Ocultar descrição" : "Mostrar descrição");
         descriptionToggle.title = opening ? "Ocultar descrição" : "Mostrar descrição";
