@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.15";
+const SERVICE_WORKER_URL = "./sw.js?v=10.17";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -10694,13 +10694,16 @@ async function saveCurrentSmartReport() {
             secondary: rootStyles.getPropertyValue("--text-secondary").trim() || "#94a3b8",
             border: rootStyles.getPropertyValue("--border-color").trim() || "rgba(148,163,184,.2)"
         };
-        const sourceElements = Array.from(content.querySelectorAll("h6, p, li"));
-        const blocks = sourceElements.map(element => ({
-            type: element.tagName === "H6" ? "heading" : (element.tagName === "LI" ? "list" : "body"),
-            text: element.innerText.trim()
-        })).filter(block => block.text);
-        const availabilityText = content.firstElementChild?.innerText?.trim();
-        if (availabilityText) blocks.unshift({ type: "body", text: availabilityText });
+        const aiStory = content.querySelector(".human-report-story");
+        const blocks = aiStory ? [
+            { type: "heading", text: aiStory.querySelector("h6")?.innerText.trim() || "Retrospectiva com IA" },
+            { type: "body", text: aiStory.querySelector(".human-report-overview")?.innerText.trim() || "" },
+            ...Array.from(aiStory.querySelectorAll(".human-report-achievements article")).map(element => ({ type: "list", text: element.innerText.trim() })),
+            ...Array.from(aiStory.querySelectorAll(".human-report-note")).map(element => ({ type: "body", text: element.innerText.trim() })),
+            { type: "body", text: aiStory.querySelector(".human-report-closing")?.innerText.trim() || "" },
+            { type: "body", text: aiStory.querySelector(".human-report-source")?.innerText.trim() || "" }
+        ].filter(block => block.text) : [];
+        if (!blocks.length) throw new Error("A retrospectiva com IA ainda não terminou de carregar.");
 
         const canvas = document.createElement("canvas");
         const context = canvas.getContext("2d");
@@ -10709,12 +10712,13 @@ async function saveCurrentSmartReport() {
         context.font = "500 27px Arial, sans-serif";
         let calculatedHeight = 390;
         blocks.forEach(block => {
-            context.font = block.type === "heading" ? "700 30px Arial, sans-serif" : "500 27px Arial, sans-serif";
+            context.font = (block.type === "heading" || block.type === "divider") ? "700 30px Arial, sans-serif" : "500 27px Arial, sans-serif";
             const prefixWidth = block.type === "list" ? 34 : 0;
             const lines = wrapReportCanvasText(context, block.text, contentWidth - prefixWidth);
-            calculatedHeight += lines.length * (block.type === "heading" ? 42 : 40) + (block.type === "heading" ? 30 : 22);
+            const headingLike = block.type === "heading" || block.type === "divider";
+            calculatedHeight += lines.length * (headingLike ? 42 : 40) + (headingLike ? 30 : 22);
         });
-        calculatedHeight += 120;
+        calculatedHeight += 180;
         canvas.width = width;
         canvas.height = Math.max(1080, calculatedHeight);
 
@@ -10753,9 +10757,9 @@ async function saveCurrentSmartReport() {
 
         let y = 325;
         blocks.forEach(block => {
-            const isHeading = block.type === "heading";
+            const isHeading = block.type === "heading" || block.type === "divider";
             context.font = isHeading ? "800 30px Arial, sans-serif" : "500 27px Arial, sans-serif";
-            context.fillStyle = isHeading ? colors.text : colors.secondary;
+            context.fillStyle = block.type === "divider" ? colors.primary : (isHeading ? colors.text : colors.secondary);
             if (isHeading) y += 12;
             const textX = block.type === "list" ? 146 : 112;
             const lines = wrapReportCanvasText(context, block.text, contentWidth - (block.type === "list" ? 34 : 0));
