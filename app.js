@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.90";
+const SERVICE_WORKER_URL = "./sw.js?v=9.92";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -178,20 +178,41 @@ function dedupeCategories(list) {
         const previous = byId.get(idKey);
         byId.set(idKey, previous ? { ...previous, ...category, type: category.type || previous.type || null } : category);
     });
-    const byOwnerAndName = new Map();
+    // A mesma categoria compartilhada pode chegar pela consulta do proprietário e
+    // pela consulta de compartilhamentos. Além disso, versões antigas permitiam
+    // que cada participante criasse seu próprio "Treino". Exibimos apenas uma
+    // categoria por nome, mas preservamos todos os IDs para consultar o histórico.
+    const byNormalizedName = new Map();
     [...byId.values()].forEach(category => {
         const normalizedName = normalizeCategoryName(category.name);
         const ownerId = category.user_id ? String(category.user_id) : "";
-        const stableKey = ownerId && normalizedName ? `${ownerId}::${normalizedName}` : `id::${String(category.id)}`;
-        const previous = byOwnerAndName.get(stableKey);
-        if (!previous) return byOwnerAndName.set(stableKey, category);
+        const stableKey = isTrainingCategory(category.name)
+            ? `training::${normalizedName}`
+            : (ownerId && normalizedName ? `${ownerId}::${normalizedName}` : `id::${String(category.id)}`);
+        const previous = byNormalizedName.get(stableKey);
+        if (!previous) {
+            return byNormalizedName.set(stableKey, { ...category, merged_category_ids: [category.id] });
+        }
         const previousTemporary = isTemporaryId(previous.id);
         const currentTemporary = isTemporaryId(category.id);
-        const canonical = previousTemporary && !currentTemporary ? category : previous;
+        const previousShared = (categoryShares || []).some(share => String(share.category_id) === String(previous.id) && share.accepted === true);
+        const currentShared = (categoryShares || []).some(share => String(share.category_id) === String(category.id) && share.accepted === true);
+        const canonical = previousTemporary && !currentTemporary
+            ? category
+            : (!previousShared && currentShared ? category : previous);
         const supplemental = canonical === category ? previous : category;
-        byOwnerAndName.set(stableKey, { ...supplemental, ...canonical, type: canonical.type || supplemental.type || null });
+        const mergedIds = [...new Set([
+            ...(previous.merged_category_ids || [previous.id]),
+            ...(category.merged_category_ids || [category.id])
+        ].filter(id => id !== undefined && id !== null))];
+        byNormalizedName.set(stableKey, {
+            ...supplemental,
+            ...canonical,
+            type: canonical.type || supplemental.type || null,
+            merged_category_ids: mergedIds
+        });
     });
-    return [...byOwnerAndName.values()];
+    return [...byNormalizedName.values()];
 }
 
 function normalizeCategoryName(value) {
@@ -5024,12 +5045,15 @@ async function getTrainingPhotoRecords(categoryName = null) {
     const localRecords = await idb.get("training_photo_records") || [];
     const filteredLocal = categoryName ? localRecords.filter(record => record.category === categoryName) : localRecords;
     if (!supabaseClient || !currentUser || !navigator.onLine) return filteredLocal;
-    const visibleCategories = categories.filter(category => isTrainingCategory(category.name) && (!categoryName || category.name === categoryName) && !isTemporaryId(category.id));
-    if (!visibleCategories.length) return filteredLocal;
+    const visibleCategories = categories.filter(category => isTrainingCategory(category.name) && (!categoryName || normalizeCategoryName(category.name) === normalizeCategoryName(categoryName)));
+    const visibleCategoryIds = [...new Set(visibleCategories.flatMap(category => category.merged_category_ids || [category.id]).filter(id => !isTemporaryId(id)))];
+    if (!visibleCategoryIds.length) return filteredLocal;
     try {
-        const categoryNameById = new Map(visibleCategories.map(category => [String(category.id), category.name]));
+        const categoryNameById = new Map(visibleCategories.flatMap(category =>
+            (category.merged_category_ids || [category.id]).map(id => [String(id), category.name])
+        ));
         const { data: feedData, error: feedError } = await supabaseClient.functions.invoke("training-photo-feed", {
-            body: { category_ids: visibleCategories.map(category => category.id) }
+            body: { category_ids: visibleCategoryIds }
         });
         if (!feedError && Array.isArray(feedData?.photos)) {
             const cloudRecords = feedData.photos.map(item => ({
@@ -5048,7 +5072,7 @@ async function getTrainingPhotoRecords(categoryName = null) {
         if (feedError) console.warn("Leitura protegida de fotos indisponível; tentando acesso direto:", feedError.message);
         const { data, error } = await supabaseClient.from("training_photos")
             .select("id,category_id,task_id,task_title,training_date,photo_path,created_by,creator_label,creator_avatar_url,created_at")
-            .in("category_id", visibleCategories.map(category => category.id))
+            .in("category_id", visibleCategoryIds)
             .order("created_at", { ascending: false });
         if (error) throw error;
         const photoTaskIds = [...new Set((data || []).map(item => String(item.task_id)).filter(Boolean))];
@@ -5198,10 +5222,22 @@ function openTrainingPhotoViewer(record) {
 async function renderTrainingReport() {
     const categoryName = currentFilter !== "all" && isTrainingCategory(currentFilter) ? currentFilter : null;
     if (!currentTrainingCalendarRecords.length) currentTrainingCalendarRecords = getTrainingPhotoFeedCache();
-    currentTrainingCalendarRecords = currentTrainingCalendarRecords.filter(record => !categoryName || record.category === categoryName);
+    currentTrainingCalendarRecords = currentTrainingCalendarRecords.filter(record => !categoryName || normalizeCategoryName(record.category) === normalizeCategoryName(categoryName));
     paintTrainingReport(categoryName);
     const refreshedRecords = await getTrainingPhotoRecords(categoryName);
-    currentTrainingCalendarRecords = refreshedRecords;
+    const currentById = new Map(currentTrainingCalendarRecords.map(record => [String(record.id), record]));
+    const stableRecords = refreshedRecords.map(record => {
+        const current = currentById.get(String(record.id));
+        // O Supabase gera uma URL assinada diferente a cada consulta. Enquanto a
+        // foto for o mesmo registro, mantemos a URL que o navegador já carregou.
+        return current?.photo ? { ...record, photo: current.photo } : record;
+    });
+    const signature = records => records.map(record => [
+        String(record.id), String(record.taskId), record.date, record.taskTitle,
+        record.createdBy, record.creatorLabel, record.creatorAvatar
+    ].join("|")).sort().join("\n");
+    if (signature(stableRecords) === signature(currentTrainingCalendarRecords)) return;
+    currentTrainingCalendarRecords = stableRecords;
     paintTrainingReport(categoryName);
 }
 
@@ -5402,7 +5438,12 @@ async function insertTaskWithCategoryFallback(taskPayload) {
 
 function isCollaborativeCategory(categoryId) {
     if (!categoryId) return false;
-    return (categoryShares || []).some(share => String(share.category_id) === String(categoryId) && share.accepted === true);
+    const category = categories.find(item =>
+        String(item.id) === String(categoryId)
+        || (item.merged_category_ids || []).some(id => String(id) === String(categoryId))
+    );
+    const relatedIds = new Set((category?.merged_category_ids || [categoryId]).map(String));
+    return (categoryShares || []).some(share => relatedIds.has(String(share.category_id)) && share.accepted === true);
 }
 
 function isTrainingCollaborativeCategory(categoryName) {
@@ -5416,7 +5457,7 @@ function canManageTrainingCollaborativeCategory(categoryName) {
     if (String(category.user_id || "") === String(currentUser.id)) return true;
     const myEmail = normalizeAccountEmail(currentUser.email);
     const participantShare = (categoryShares || []).find(share =>
-        String(share.category_id) === String(category.id)
+        (category.merged_category_ids || [category.id]).some(id => String(share.category_id) === String(id))
         && normalizeAccountEmail(share.collaborator_email) === myEmail
         && share.accepted === true
     );
