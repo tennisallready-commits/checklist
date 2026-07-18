@@ -1,9 +1,9 @@
-const CACHE_NAME = 'checklist-cache-v10.08';
+const CACHE_NAME = 'checklist-cache-v10.11';
 const CRITICAL_ASSETS = [
   './',
   './index.html',
-  './style.css?v=8.25',
-  './app.js?v=9.89',
+  './style.css?v=8.26',
+  './app.js?v=9.92',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -80,10 +80,17 @@ self.addEventListener('notificationclick', (event) => {
     ? event.notification.data.url
     : (taskId ? `./?notification_task=${encodeURIComponent(taskId)}` : './');
   const absoluteTargetUrl = new URL(targetUrl, self.registration.scope).href;
+  const target = new URL(absoluteTargetUrl);
+  const opensTrainingReport = target.searchParams.get('training_calendar') === '1';
+  const trainingDate = target.searchParams.get('training_date');
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       const existingClient = clientList.find((client) => 'focus' in client);
       if (existingClient) {
+        if (opensTrainingReport) {
+          existingClient.postMessage({ type: 'OPEN_TRAINING_REPORT', taskId, trainingDate });
+          return existingClient.focus();
+        }
         // No Android, o postMessage pode chegar enquanto o PWA ainda está
         // retomando. Usa somente a URL para não disparar duas rolagens.
         if ('navigate' in existingClient && absoluteTargetUrl.includes('?')) {

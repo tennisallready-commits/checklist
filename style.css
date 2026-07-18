@@ -461,6 +461,35 @@ body {
     height: 14px;
 }
 
+.human-report-story { margin-bottom: 16px; padding: 17px; border: 1px solid rgba(139,92,246,.24); border-radius: 14px; background: linear-gradient(145deg,rgba(139,92,246,.1),rgba(255,255,255,.018)); }
+.human-report-story > header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.human-report-story > header > span { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; color: #fff; background: linear-gradient(135deg,#8b5cf6,#6366f1); box-shadow: 0 8px 20px rgba(99,102,241,.2); }
+.human-report-story > header svg { width: 17px; height: 17px; }
+.human-report-story > header small { color: var(--primary); font-size: .57rem; font-weight: 900; letter-spacing: .1em; }
+.human-report-story h6 { margin: 2px 0 0; color: var(--text-primary); font-size: .92rem; }
+.human-report-overview { margin: 0 0 13px; color: var(--text-primary); font-size: .84rem; line-height: 1.65; }
+.human-report-achievements { display: grid; gap: 8px; }
+.human-report-achievements article { padding: 10px 11px; border: 1px solid var(--border-color); border-radius: 10px; background: rgba(255,255,255,.025); }
+.human-report-achievements strong { color: var(--text-primary); font-size: .75rem; }
+.human-report-achievements p,.human-report-note p { margin: 3px 0 0; color: var(--text-secondary); font-size: .72rem; line-height: 1.55; }
+.human-report-note { display: flex; align-items: flex-start; gap: 9px; margin-top: 10px; padding: 10px; border-radius: 10px; background: rgba(6,182,212,.07); }
+.human-report-note.attention { background: rgba(245,158,11,.07); }
+.human-report-note > svg { width: 16px; height: 16px; flex: 0 0 16px; margin-top: 1px; color: #06b6d4; }
+.human-report-note.attention > svg { color: #f59e0b; }
+.human-report-note strong { font-size: .71rem; }
+.human-report-closing { margin: 12px 0 0; padding-left: 11px; border-left: 2px solid var(--primary); color: var(--text-secondary); font-size: .73rem; font-style: italic; line-height: 1.55; }
+.human-report-source { margin-top: 13px; display: flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: .56rem; }
+.human-report-source svg { width: 12px; height: 12px; }
+.human-report-categories { display: grid; gap: 9px; }
+.human-report-category { padding: 10px 11px; border: 1px solid var(--border-color); border-radius: 10px; background: rgba(255,255,255,.02); }
+.human-report-category > header { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.human-report-category > header strong { color: var(--text-primary); font-size: .73rem; }
+.human-report-category > header small { color: #06b6d4; font-size: .6rem; font-weight: 800; }
+.human-report-category ul { margin: 0; padding-left: 16px; display: grid; gap: 7px; }
+.human-report-category li > span { display: block; color: var(--text-primary); font-size: .7rem; font-weight: 650; }
+.human-report-category li > small { display: block; margin-top: 1px; color: var(--text-muted); font-size: .57rem; }
+.human-report-category li > p { margin: 3px 0 0; color: var(--text-secondary); font-size: .62rem; line-height: 1.45; }
+
 .report-history-empty {
     display: flex;
     flex-direction: column;

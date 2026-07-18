@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.08";
+const SERVICE_WORKER_URL = "./sw.js?v=10.11";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -574,7 +574,9 @@ document.addEventListener("DOMContentLoaded", () => {
         });
 
         navigator.serviceWorker.addEventListener('message', event => {
-            if (event.data && event.data.type === 'OPEN_SHARED_TASK' && event.data.taskId) {
+            if (event.data && event.data.type === 'OPEN_TRAINING_REPORT') {
+                openTrainingCalendarFromPush(event.data.taskId, event.data.trainingDate);
+            } else if (event.data && event.data.type === 'OPEN_SHARED_TASK' && event.data.taskId) {
                 focusSharedTaskFromNotification({ task_id: event.data.taskId });
             } else if (event.data && event.data.type === 'OPEN_TASK_REMINDER' && event.data.taskId) {
                 openTaskReminderAction(event.data.taskId);
@@ -6851,12 +6853,41 @@ async function focusSharedTaskFromNotification(notification) {
     loadChecklistAndProgress().then(() => highlightRenderedTask(notification.task_id));
 }
 
+async function refreshTrainingPushDay(taskId, trainingDate, categoryName = null) {
+    if (!supabaseClient || !currentUser || !navigator.onLine) return false;
+    const visibleCategories = categories.filter(category => isTrainingCategory(category.name) && (!categoryName || normalizeCategoryName(category.name) === normalizeCategoryName(categoryName)));
+    const categoryIds = [...new Set(visibleCategories.flatMap(category => category.merged_category_ids || [category.id]).filter(id => !isTemporaryId(id)))];
+    if (!categoryIds.length) return false;
+    const categoryNameById = new Map(visibleCategories.flatMap(category => (category.merged_category_ids || [category.id]).map(id => [String(id), category.name])));
+    try {
+        const { data, error } = await supabaseClient.functions.invoke("training-photo-feed", {
+            body: { category_ids: categoryIds, task_id: taskId || null, training_date: trainingDate }
+        });
+        if (error || !Array.isArray(data?.photos)) throw new Error(error?.message || "Fotos indisponíveis");
+        const pushedRecords = data.photos.map(item => ({
+            id: item.id, taskId: item.task_id, taskTitle: item.task_title || "Treino",
+            category: categoryNameById.get(String(item.category_id)) || categoryName || "Treino",
+            date: item.training_date, photo: item.signed_url, createdBy: item.created_by,
+            creatorLabel: item.creator_label, creatorAvatar: item.creator_avatar_url, createdAt: item.created_at
+        })).filter(record => record.photo);
+        const merged = new Map([...getTrainingPhotoFeedCache(), ...currentTrainingCalendarRecords].map(record => [String(record.id), record]));
+        pushedRecords.forEach(record => merged.set(String(record.id), record));
+        currentTrainingCalendarRecords = [...merged.values()].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+        saveTrainingPhotoFeedCache(currentTrainingCalendarRecords);
+        paintTrainingReport(categoryName);
+        renderTrainingDayGallery(trainingDate);
+        return true;
+    } catch (error) {
+        console.warn("Não foi possível priorizar a foto aberta pelo push:", error.message);
+        return false;
+    }
+}
+
 async function openTrainingCalendarFromPush(taskId, trainingDate) {
     const validDate = /^\d{4}-\d{2}-\d{2}$/.test(String(trainingDate || ""))
         ? String(trainingDate)
         : getLocalDateString(new Date());
     let targetTask = taskId ? getTaskById(taskId) : null;
-    if (!targetTask && taskId) targetTask = await primeTaskFromPush(taskId);
     const trainingCategory = targetTask && isTrainingCategory(targetTask.category)
         ? targetTask.category
         : categories.find(category => isTrainingCategory(category.name))?.name;
@@ -6868,9 +6899,32 @@ async function openTrainingCalendarFromPush(taskId, trainingDate) {
     renderCategories();
     renderChecklist();
     updateProgress();
+    currentTrainingCalendarRecords = getTrainingPhotoFeedCache();
     openModal(modalTrainingReport);
-    await renderTrainingReport();
+    paintTrainingReport(trainingCategory || null);
     renderTrainingDayGallery(validDate);
+    if (appSessionLoader) appSessionLoader.classList.add("hidden");
+    setAppContainerVisible(true);
+
+    // Miniaturas persistentes entram sem bloquear a abertura do modal.
+    applyPersistentTrainingThumbnails(currentTrainingCalendarRecords).then(records => {
+        currentTrainingCalendarRecords = records;
+        if (!modalTrainingReport?.classList.contains("active")) return;
+        paintTrainingReport(trainingCategory || null);
+        renderTrainingDayGallery(validDate);
+    }).catch(() => {});
+
+    const targetedLoaded = await refreshTrainingPushDay(taskId, validDate, trainingCategory || null);
+    if (!targetedLoaded) renderTrainingReport().then(() => renderTrainingDayGallery(validDate));
+    if (!targetTask && taskId) {
+        primeTaskFromPush(taskId).then(task => {
+            if (!task || !isTrainingCategory(task.category) || !modalTrainingReport?.classList.contains("active")) return;
+            currentFilter = task.category;
+            renderCategories();
+            paintTrainingReport(task.category);
+            renderTrainingDayGallery(validDate);
+        }).catch(() => {});
+    }
 }
 
 function getTaskById(taskId) {
@@ -8238,11 +8292,22 @@ function setupSupabaseAuth() {
             document.getElementById("auth-container").style.display = "none";
             if (!restoredFromCache) setAppContainerVisible(false);
 
+            const startupParams = new URLSearchParams(window.location.search);
+            const earlyNotificationTaskId = startupParams.get("notification_task");
+            const earlyTrainingDate = startupParams.get("training_date");
+            const earlyTrainingPush = startupParams.get("training_calendar") === "1";
+            let earlyTrainingPromise = null;
+            if (earlyTrainingPush) {
+                // O destino do push aparece antes de sincronizações, perfil e
+                // realtime. O cache pinta o modal; a foto nova entra em seguida.
+                history.replaceState({}, "", window.location.pathname);
+                earlyTrainingPromise = openTrainingCalendarFromPush(earlyNotificationTaskId, earlyTrainingDate);
+            }
+
             // Um push de tarefa tem prioridade sobre a sincronização completa:
             // mostra o cartão imediatamente e continua o carregamento depois.
-            const earlyNotificationTaskId = new URLSearchParams(window.location.search).get("notification_task");
             let earlyNotificationTaskHandled = false;
-            if (earlyNotificationTaskId) {
+            if (earlyNotificationTaskId && !earlyTrainingPush) {
                 const primedTask = await primeTaskFromPush(earlyNotificationTaskId);
                 if (primedTask) {
                     earlyNotificationTaskHandled = true;
@@ -8288,15 +8353,20 @@ function setupSupabaseAuth() {
                 ensurePushSubscription({ forceRefresh: false })
                     .catch(error => console.warn("Não foi possível restaurar a inscrição Web Push:", error.message));
             }
-            const notificationTaskId = new URLSearchParams(window.location.search).get("notification_task");
-            const shouldOpenTrainingCalendar = new URLSearchParams(window.location.search).get("training_calendar") === "1";
-            const notificationTrainingDate = new URLSearchParams(window.location.search).get("training_date");
+            const notificationTaskId = earlyNotificationTaskId;
+            const shouldOpenTrainingCalendar = earlyTrainingPush;
+            const notificationTrainingDate = earlyTrainingDate;
             const reminderTaskId = new URLSearchParams(window.location.search).get("reminder_task");
             const shouldOpenNotifications = new URLSearchParams(window.location.search).get("open_notifications") === "1";
             const collaborationInviteId = new URLSearchParams(window.location.search).get("collaboration_invite");
             if (shouldOpenTrainingCalendar) {
-                history.replaceState({}, "", window.location.pathname);
-                setTimeout(() => openTrainingCalendarFromPush(notificationTaskId, notificationTrainingDate), 250);
+                // Revalida o modal que já foi aberto pelo caminho rápido, sem
+                // fechá-lo nem reiniciar suas fotos.
+                earlyTrainingPromise?.catch(error => console.warn("Abertura rápida do treino indisponível:", error));
+                setTimeout(() => {
+                    if (!modalTrainingReport?.classList.contains("active")) return;
+                    renderTrainingReport().then(() => renderTrainingDayGallery(notificationTrainingDate || getLocalDateString(new Date())));
+                }, 50);
             } else if (reminderTaskId) {
                 history.replaceState({}, "", window.location.pathname);
                 setTimeout(() => openTaskReminderAction(reminderTaskId), 250);
@@ -9780,6 +9850,52 @@ async function loadAndRenderReportHistory(containerEl, titleEl) {
     if (window.lucide) window.lucide.createIcons();
 }
 
+function getReportTaskContext(task) {
+    const category = categories.find(item => item.name === task.category || String(item.id) === String(task.category_id));
+    return category?.type || "Não classificada";
+}
+
+function getReportTaskDescription(task) {
+    let context = task.context || {};
+    if (typeof context === "string") {
+        try { context = JSON.parse(context); } catch (_) { context = {}; }
+    }
+    return String(task.description || context.description || "").trim();
+}
+
+async function generateHumanSmartReport(facts, cacheKey) {
+    const storageKey = `human_smart_report_${currentUser?.id || "local"}_${cacheKey}`;
+    try {
+        const cached = JSON.parse(localStorage.getItem(storageKey) || "null");
+        if (cached?.analysis && cached?.fingerprint === JSON.stringify(facts)) return cached.analysis;
+    } catch (_) {}
+    if (!supabaseClient || !currentUser || facts.completed === 0) return null;
+    try {
+        const { data, error } = await supabaseClient.functions.invoke("generate-smart-report", { body: { facts } });
+        if (error || data?.error || !data?.analysis) throw new Error(data?.error || error?.message || "Análise indisponível");
+        localStorage.setItem(storageKey, JSON.stringify({ fingerprint: JSON.stringify(facts), analysis: data.analysis, savedAt: Date.now() }));
+        return data.analysis;
+    } catch (error) {
+        console.warn("Análise humana do relatório indisponível; exibindo fatos calculados pelo app.", error.message);
+        return null;
+    }
+}
+
+function renderHumanSmartReport(analysis) {
+    if (!analysis) return "";
+    const achievements = Array.isArray(analysis.achievements) ? analysis.achievements.slice(0, 6) : [];
+    return `
+        <section class="human-report-story">
+            <header><span><i data-lucide="sparkles"></i></span><div><small>RETROSPECTIVA COM IA</small><h6>O que marcou este período</h6></div></header>
+            <p class="human-report-overview">${escapeHTML(analysis.overview || "")}</p>
+            ${achievements.length ? `<div class="human-report-achievements">${achievements.map(item => `<article><strong>${escapeHTML(item.title || "Realização")}</strong><p>${escapeHTML(item.detail || "")}</p></article>`).join("")}</div>` : ""}
+            ${analysis.rhythm ? `<div class="human-report-note"><i data-lucide="calendar-days"></i><div><strong>Seu ritmo</strong><p>${escapeHTML(analysis.rhythm)}</p></div></div>` : ""}
+            ${analysis.pending ? `<div class="human-report-note attention"><i data-lucide="circle-dashed"></i><div><strong>O que ficou aberto</strong><p>${escapeHTML(analysis.pending)}</p></div></div>` : ""}
+            ${analysis.closing ? `<p class="human-report-closing">${escapeHTML(analysis.closing)}</p>` : ""}
+            <small class="human-report-source"><i data-lucide="shield-check"></i> Texto criado somente a partir das tarefas e conclusões registradas.</small>
+        </section>`;
+}
+
 async function loadAndRenderReport(days, containerEl) {
     const now = new Date();
     let isExpired = false;
@@ -10036,6 +10152,56 @@ async function loadAndRenderReport(days, containerEl) {
         recommendation = "Mantenha a consistência atual distribuindo uniformemente a conclusão das tarefas ao longo do dia.";
     }
 
+    // A IA recebe apenas fatos já calculados. Ela redige a retrospectiva, mas não calcula métricas.
+    const completedOccurrences = currentPlannedOccurrences.filter(occurrence => currentCompletionKeys.has(occurrence.key));
+    const pendingOccurrences = currentPlannedOccurrences.filter(occurrence => !currentCompletionKeys.has(occurrence.key));
+    const completionCountByDate = {};
+    completedOccurrences.forEach(occurrence => {
+        completionCountByDate[occurrence.date] = (completionCountByDate[occurrence.date] || 0) + 1;
+    });
+    const busiestDateEntry = Object.entries(completionCountByDate).sort((a, b) => b[1] - a[1])[0];
+    const formatFactDate = dateStr => new Date(`${dateStr}T12:00:00`).toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "2-digit" });
+    const taskContextObject = task => {
+        if (typeof task.context !== "string") return task.context || {};
+        try { return JSON.parse(task.context); } catch (_) { return {}; }
+    };
+    const reportFacts = {
+        period: `${periods.currentStartStr} a ${periods.currentEndStr}`,
+        periodType: days === 365 ? "anual" : days === 30 ? "mensal" : "semanal",
+        planned: currentPlannedCount,
+        completed: currentCompletedPlannedCount,
+        rate: currentRate,
+        previousRate: previousPlannedCount > 0 ? previousRate : null,
+        activeDays: Object.keys(completionCountByDate).length,
+        busiestDay: busiestDateEntry ? `${formatFactDate(busiestDateEntry[0])}, com ${busiestDateEntry[1]} conclusões` : "",
+        categories: activeCats.map(category => {
+            const categoryCompleted = completedOccurrences.filter(item => (item.task.category || "Sem categoria") === category.name);
+            const categoryPending = pendingOccurrences.filter(item => (item.task.category || "Sem categoria") === category.name);
+            return {
+                name: category.name,
+                context: category.type || getReportTaskContext(categoryCompleted[0]?.task || categoryPending[0]?.task || {}),
+                planned: catPlanned[category.name] || 0,
+                completed: catCompletions[category.name] || 0,
+                completedTasks: categoryCompleted.slice(0, days === 365 ? 30 : 18).map(item => {
+                    const context = taskContextObject(item.task);
+                    return { title: item.task.title, date: item.date, shift: (context.turnos || []).join(", "), description: getReportTaskDescription(item.task) };
+                }),
+                pendingTasks: categoryPending.slice(0, 10).map(item => {
+                    const context = taskContextObject(item.task);
+                    return { title: item.task.title, date: item.date, important: context.important === true || context.important === "true" };
+                })
+            };
+        })
+    };
+    const reportCacheKey = `${getReportPeriodType(days)}_${periods.currentStartStr}_${periods.currentEndStr}`;
+    const humanAnalysis = await generateHumanSmartReport(reportFacts, reportCacheKey);
+    const humanAnalysisHtml = renderHumanSmartReport(humanAnalysis);
+    const completedWorkHtml = reportFacts.categories.filter(category => category.completedTasks.length).map(category => `
+        <article class="human-report-category">
+            <header><strong>${escapeHTML(category.name)}</strong><small>${category.completed} ${category.completed === 1 ? "conclusão" : "conclusões"}</small></header>
+            <ul>${category.completedTasks.map(task => `<li><span>${escapeHTML(task.title)}</span><small>${escapeHTML(formatFactDate(task.date))}${task.shift ? ` · ${escapeHTML(task.shift)}` : ""}</small>${task.description ? `<p>${escapeHTML(task.description)}</p>` : ""}</li>`).join("")}</ul>
+        </article>`).join("");
+
     // Calcular prazo real de expiração
     let expirationMessage = "";
     if (isDebugMode) {
@@ -10065,6 +10231,7 @@ async function loadAndRenderReport(days, containerEl) {
     // 9. Construir o relatório final em 4 blocos curtos e diretos
     let contentHtml = `
         ${warningHtml}
+        ${humanAnalysisHtml}
         
         <div class="smart-report-container" style="display: flex; flex-direction: column; gap: 16px; text-align: left; line-height: 1.5; color: var(--text-primary); font-size: 0.88rem;">
             
@@ -10089,16 +10256,12 @@ async function loadAndRenderReport(days, containerEl) {
                 </ul>
             </section>
 
-            <!-- 3. FUNÇÕES REALIZADAS -->
+            <!-- 3. REALIZAÇÕES REGISTRADAS -->
             <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px;">
                 <h6 style="margin: 0 0 8px 0; color: #06b6d4; font-size: 0.9rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <i data-lucide="briefcase-business" style="width: 14px; height: 14px;"></i> 3. Funções Realizadas por Categoria
+                    <i data-lucide="list-checks" style="width: 14px; height: 14px;"></i> 3. O que você realizou
                 </h6>
-                <ul style="margin: 0; padding-left: 18px; color: var(--text-secondary); font-size: 0.82rem; display: flex; flex-direction: column; gap: 4px;">
-                    ${functionSummaries.length > 0
-                        ? functionSummaries.map(summary => `<li>${summary}</li>`).join("")
-                        : "<li>Nenhuma função concluída foi registrada no período.</li>"}
-                </ul>
+                <div class="human-report-categories">${completedWorkHtml || "<p style=\"margin:0;color:var(--text-secondary);font-size:.82rem;\">Nenhuma tarefa concluída foi registrada no período.</p>"}</div>
             </section>
 
             <!-- 4. PONTOS DE ATENÇÃO -->
