@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.99";
+const SERVICE_WORKER_URL = "./sw.js?v=10.00";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -249,6 +249,8 @@ const collaborationIdentityByEmail = new Map();
 const collaborationAvatarByEmail = new Map();
 const collaborationIdentityByUserId = new Map();
 const collaborationAvatarByUserId = new Map();
+const persistentAvatarByUrl = new Map();
+const pendingAvatarCacheUrls = new Set();
 let identifierSetupResolver = null;
 function getCurrentReminderTime() {
     const now = new Date();
@@ -627,6 +629,10 @@ async function initApp() {
     try {
         await idb.init();
         await idb.loadAllToCache();
+        const savedAvatars = await idb.get("priority_profile_avatars") || {};
+        Object.entries(savedAvatars).forEach(([url, dataUrl]) => {
+            if (url && dataUrl) persistentAvatarByUrl.set(url, dataUrl);
+        });
     } catch (e) {
         console.error("Falha ao inicializar IndexedDB:", e);
     }
@@ -2446,7 +2452,7 @@ function getPlainIdentityLabel(email) {
 }
 
 function getIdentityAvatar(email) {
-    return collaborationAvatarByEmail.get(normalizeAccountEmail(email)) || "";
+    return getCachedAvatarUrl(collaborationAvatarByEmail.get(normalizeAccountEmail(email)) || "");
 }
 
 function getIdentityLabelByUserId(userId) {
@@ -2455,7 +2461,59 @@ function getIdentityLabelByUserId(userId) {
 }
 
 function getIdentityAvatarByUserId(userId) {
-    return collaborationAvatarByUserId.get(String(userId || "")) || "";
+    return getCachedAvatarUrl(collaborationAvatarByUserId.get(String(userId || "")) || "");
+}
+
+function getCachedAvatarUrl(url) {
+    return url ? (persistentAvatarByUrl.get(url) || url) : "";
+}
+
+async function createProfileAvatarThumbnail(url) {
+    const response = await fetch(url, { cache: "force-cache" });
+    if (!response.ok) throw new Error("avatar indisponível");
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+        const image = await new Promise((resolve, reject) => {
+            const candidate = new Image();
+            candidate.onload = () => resolve(candidate);
+            candidate.onerror = () => reject(new Error("avatar inválido"));
+            candidate.src = objectUrl;
+        });
+        const size = 128;
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const context = canvas.getContext("2d");
+        const scale = Math.max(size / image.width, size / image.height);
+        const width = image.width * scale;
+        const height = image.height * scale;
+        context.drawImage(image, (size - width) / 2, (size - height) / 2, width, height);
+        return canvas.toDataURL("image/jpeg", .76);
+    } finally {
+        URL.revokeObjectURL(objectUrl);
+    }
+}
+
+function cachePriorityAvatars(urls) {
+    const uniqueUrls = [...new Set((urls || []).filter(url => url && !persistentAvatarByUrl.has(url) && !pendingAvatarCacheUrls.has(url)))];
+    if (!uniqueUrls.length) return;
+    const prioritizedUrls = uniqueUrls.slice(0, 12);
+    prioritizedUrls.forEach(url => pendingAvatarCacheUrls.add(url));
+    Promise.all(prioritizedUrls.map(async url => {
+        try {
+            persistentAvatarByUrl.set(url, await createProfileAvatarThumbnail(url));
+        } catch (_) {
+            // O endereço original continua sendo usado se a cópia local falhar.
+        } finally {
+            pendingAvatarCacheUrls.delete(url);
+        }
+    })).then(async () => {
+        const compactCache = Object.fromEntries([...persistentAvatarByUrl.entries()].slice(-40));
+        await idb.put("priority_profile_avatars", compactCache);
+        renderChecklist();
+        if (modalTrainingReport?.classList.contains("active")) paintTrainingReport(currentFilter !== "all" ? currentFilter : null);
+    }).catch(() => {});
 }
 
 function renderSettingsProfileAvatar() {
@@ -2478,6 +2536,7 @@ async function uploadProfileAvatar(file) {
     if (profileError) throw profileError;
     collaborationAvatarByEmail.set(normalizeAccountEmail(currentUser.email), avatarUrl);
     collaborationAvatarByUserId.set(String(currentUser.id), avatarUrl);
+    cachePriorityAvatars([avatarUrl]);
     renderSettingsProfileAvatar();
     renderChecklist();
 }
@@ -2519,6 +2578,11 @@ async function loadCollaborationIdentityLabels() {
         });
     }
     renderSettingsProfileAvatar();
+    cachePriorityAvatars([
+        ...collaborationAvatarByEmail.values(),
+        ...collaborationAvatarByUserId.values(),
+        ...(allActiveTasks || []).map(task => task.context?.creator_avatar_url)
+    ]);
 }
 
 async function ensureCollaborationProfile(userId) {
@@ -2528,7 +2592,10 @@ async function ensureCollaborationProfile(userId) {
     if (error || !data?.[0]) return;
     const profile = data[0];
     if (profile.username) collaborationIdentityByUserId.set(normalizedId, profile.username);
-    if (profile.avatar_url) collaborationAvatarByUserId.set(normalizedId, profile.avatar_url);
+    if (profile.avatar_url) {
+        collaborationAvatarByUserId.set(normalizedId, profile.avatar_url);
+        cachePriorityAvatars([profile.avatar_url]);
+    }
 }
 
 async function ensureUserIdentifier() {
@@ -4354,7 +4421,7 @@ function createTaskDOMElement(task) {
     const trainingViewOnly = trainingCollaborative && !isTrainingTaskOwnedByCurrentUser(task);
     const trainingOwnerEmail = trainingCollaborative ? getTrainingTaskOwnerEmail(task) : "";
     const trainingOwnerLabel = task.context?.creator_label || getIdentityLabelByUserId(task.user_id) || (trainingOwnerEmail ? getIdentityLabel(trainingOwnerEmail) : "Dono da tarefa");
-    const trainingOwnerAvatar = task.context?.creator_avatar_url || getIdentityAvatarByUserId(task.user_id) || (trainingOwnerEmail ? getIdentityAvatar(trainingOwnerEmail) : "");
+    const trainingOwnerAvatar = getIdentityAvatarByUserId(task.user_id) || getCachedAvatarUrl(task.context?.creator_avatar_url || "") || (trainingOwnerEmail ? getIdentityAvatar(trainingOwnerEmail) : "");
     const trainingOwnerInitials = trainingOwnerLabel.replace("@", "").substring(0, 2).toUpperCase() || "DT";
     const reminderAt = getTaskReminderDateTime(task);
     const showReminderIndicator = hasPendingTaskReminder(task);
@@ -4418,7 +4485,7 @@ function createTaskDOMElement(task) {
                         const isMe = currentUser && task.assigned_to.toLowerCase() === currentUser.email.toLowerCase();
                         return `<span class="task-assignee-avatar ${isMe ? '' : 'partner'} ${avatarUrl ? 'has-photo' : ''}" title="Atribuído a: ${escapeHTML(identityLabel)}">${avatarUrl ? `<img src="${escapeHTML(avatarUrl)}" alt="">` : escapeHTML(initials)}</span>`;
                     })() : ''}
-                    ${trainingCollaborative ? `<span class="task-owner-identity" title="Tarefa de ${escapeHTML(trainingOwnerLabel)}"><span class="task-assignee-avatar owner ${trainingOwnerAvatar ? 'has-photo' : ''}">${trainingOwnerAvatar ? `<img src="${escapeHTML(trainingOwnerAvatar)}" alt="Foto de ${escapeHTML(trainingOwnerLabel)}">` : escapeHTML(trainingOwnerInitials)}</span><small>${isTrainingTaskOwnedByCurrentUser(task) ? 'Sua tarefa' : escapeHTML(trainingOwnerLabel)}</small></span>` : ''}
+                    ${trainingCollaborative ? `<span class="task-owner-identity" title="Tarefa de ${escapeHTML(trainingOwnerLabel)}"><span class="task-assignee-avatar owner ${trainingOwnerAvatar ? 'has-photo' : ''}">${trainingOwnerAvatar ? `<img src="${escapeHTML(trainingOwnerAvatar)}" alt="Foto de ${escapeHTML(trainingOwnerLabel)}" loading="eager" decoding="async" fetchpriority="high">` : escapeHTML(trainingOwnerInitials)}</span><small>${isTrainingTaskOwnedByCurrentUser(task) ? 'Sua tarefa' : escapeHTML(trainingOwnerLabel)}</small></span>` : ''}
                 </div>
             </div>
             <!-- Global edit mode actions -->
@@ -5235,7 +5302,7 @@ function getCurrentTrainingStreak(dates) {
 }
 
 function getTrainingRecordOwner(record) {
-    if (record.creatorLabel) return { label: record.creatorLabel, avatar: record.creatorAvatar || "" };
+    if (record.creatorLabel) return { label: record.creatorLabel, avatar: getCachedAvatarUrl(record.creatorAvatar || "") };
     const task = allActiveTasks.find(item => String(item.id) === String(record.taskId));
     const email = task ? getTrainingTaskOwnerEmail(task) : "";
     if (email) return { label: getIdentityLabel(email), avatar: getIdentityAvatar(email) };
@@ -5278,7 +5345,7 @@ function renderTrainingSelectedDayInfo(dateStr, records) {
     });
     const avatars = [...owners.values()].map(owner => {
         const initials = owner.label.replace("@", "").substring(0, 2).toUpperCase() || "P";
-        return `<span class="task-assignee-avatar ${owner.avatar ? "has-photo" : ""}" title="${escapeHTML(owner.label)}">${owner.avatar ? `<img src="${escapeHTML(owner.avatar)}" alt="">` : escapeHTML(initials)}</span>`;
+        return `<span class="task-assignee-avatar ${owner.avatar ? "has-photo" : ""}" title="${escapeHTML(owner.label)}">${owner.avatar ? `<img src="${escapeHTML(owner.avatar)}" alt="" loading="eager" decoding="async" fetchpriority="high">` : escapeHTML(initials)}</span>`;
     }).join("");
     const count = records.length;
     info.innerHTML = `<strong>${count || 1} ${count === 1 ? "treino realizado" : "treinos realizados"}</strong><span class="training-selected-day-avatars">${avatars}</span>`;
@@ -5343,6 +5410,7 @@ function saveTrainingPhotoFeedCache(records) {
         creatorAvatar: record.creatorAvatar, createdAt: record.createdAt
     }));
     localStorage.setItem(`training_photo_feed_${currentUser.id}`, JSON.stringify({ savedAt: Date.now(), records: lightweightRecords }));
+    cachePriorityAvatars(records.map(record => record.creatorAvatar));
     scheduleTrainingThumbnailCache(records);
 }
 
