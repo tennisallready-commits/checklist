@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.76";
+const SERVICE_WORKER_URL = "./sw.js?v=9.78";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -2781,9 +2781,10 @@ function updateCollaborationInviteAttention() {
     if (notificationsBadge) notificationsBadge.style.display = needsAttention ? "block" : "none";
     btnNotifications.classList.toggle("invite-attention", needsAttention);
     if (collabInviteReadyLabel) {
+        const unreadTrainingOnly = unreadTasks.length > 0 && unreadTasks.every(notification => isTrainingCategory(notification.category_name));
         collabInviteReadyLabel.textContent = unseenInvites.length > 0
             ? "Você recebeu um convite"
-            : "Você recebeu uma nova tarefa";
+            : unreadTrainingOnly ? "Há um novo treino para acompanhar" : "Você recebeu uma nova tarefa";
         collabInviteReadyLabel.setAttribute("aria-hidden", needsAttention ? "false" : "true");
     }
 }
@@ -2809,6 +2810,14 @@ function subscribeToCollaborationUpdates() {
     if (!supabaseClient || !currentUser) return;
     if (collaborationRealtimeChannel) supabaseClient.removeChannel(collaborationRealtimeChannel);
     const email = normalizeAccountEmail(currentUser.email);
+    let refreshTimer = null;
+    const refreshSharedTrainingData = () => {
+        clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(async () => {
+            await loadChecklistAndProgress();
+            if (modalTrainingReport?.classList.contains("active")) await renderTrainingReport();
+        }, 220);
+    };
     collaborationRealtimeChannel = supabaseClient
         .channel(`collaboration-invites-${currentUser.id}`)
         .on("postgres_changes", {
@@ -2837,13 +2846,19 @@ function subscribeToCollaborationUpdates() {
             if (areNotificationsEnabled()) showSharedTaskAlert(notification);
             loadChecklistAndProgress();
         })
+        .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, refreshSharedTrainingData)
+        .on("postgres_changes", { event: "*", schema: "public", table: "completions" }, refreshSharedTrainingData)
+        .on("postgres_changes", { event: "*", schema: "public", table: "training_photos" }, refreshSharedTrainingData)
         .subscribe();
 }
 
 function showSharedTaskAlert(notification) {
-    const title = "Nova tarefa compartilhada";
+    const trainingNotification = isTrainingCategory(notification.category_name);
+    const title = trainingNotification ? "Novo treino para acompanhar" : "Nova tarefa compartilhada";
     const categoryText = notification.category_name ? ` em ${notification.category_name}` : "";
-    const body = `“${notification.task_title || "Nova tarefa"}” foi adicionada${categoryText}.`;
+    const body = trainingNotification
+        ? `“${notification.task_title || "Treino"}” foi adicionado${categoryText}. Disponível somente para visualização.`
+        : `“${notification.task_title || "Nova tarefa"}” foi adicionada${categoryText}.`;
 
     const toast = document.createElement("div");
     toast.className = "shared-task-toast";
@@ -4943,15 +4958,21 @@ async function getTrainingPhotoRecords(categoryName = null) {
             .in("category_id", visibleCategories.map(category => category.id))
             .order("created_at", { ascending: false });
         if (error) throw error;
-        const paths = (data || []).map(item => item.photo_path);
+        const photoTaskIds = [...new Set((data || []).map(item => String(item.task_id)).filter(Boolean))];
+        const { data: linkedPhotoTasks, error: linkedTasksError } = photoTaskIds.length
+            ? await supabaseClient.from("tasks").select("id,is_active").in("id", photoTaskIds)
+            : { data: [], error: null };
+        if (linkedTasksError) throw linkedTasksError;
+        const activeTaskIds = new Set((linkedPhotoTasks || []).filter(task => task.is_active !== false).map(task => String(task.id)));
+        const visiblePhotoRows = (data || []).filter(item => activeTaskIds.has(String(item.task_id)));
+        const paths = visiblePhotoRows.map(item => item.photo_path);
         const signedByPath = new Map();
         if (paths.length) {
             const { data: signed, error: signedError } = await supabaseClient.storage.from("training-photos").createSignedUrls(paths, 3600);
             if (signedError) throw signedError;
             (signed || []).forEach(item => signedByPath.set(item.path, item.signedUrl));
         }
-        const activeTaskIds = new Set((allActiveTasks || []).filter(task => task.is_active !== false).map(task => String(task.id)));
-        const cloudRecords = (data || []).filter(item => activeTaskIds.has(String(item.task_id))).map(item => ({
+        const cloudRecords = visiblePhotoRows.map(item => ({
             id: item.id,
             taskId: item.task_id,
             taskTitle: item.task_title || "Treino",
@@ -6086,11 +6107,12 @@ function renderNotifications() {
             ? createdAt.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
             : "";
         item.className = `shared-task-notification-item ${isUnread ? "unread" : ""}`;
+        const trainingNotification = isTrainingCategory(notification.category_name);
         item.innerHTML = `
             <div class="shared-task-notification-icon"><i data-lucide="list-checks"></i></div>
             <div class="shared-task-notification-copy">
-                <strong>Nova tarefa compartilhada</strong>
-                <span>“${escapeHTML(notification.task_title || "Nova tarefa")}” foi adicionada${notification.category_name ? ` em <b>${escapeHTML(notification.category_name)}</b>` : ""}.</span>
+                <strong>${trainingNotification ? "Novo treino para acompanhar" : "Nova tarefa compartilhada"}</strong>
+                <span>“${escapeHTML(notification.task_title || (trainingNotification ? "Treino" : "Nova tarefa"))}” foi adicionad${trainingNotification ? "o" : "a"}${notification.category_name ? ` em <b>${escapeHTML(notification.category_name)}</b>` : ""}.${trainingNotification ? " Somente para visualização." : ""}</span>
                 ${notification.assigned_to ? `<small>Atribuída a ${escapeHTML(getIdentityLabel(notification.assigned_to))}${timeLabel ? ` • ${escapeHTML(timeLabel)}` : ""}</small>` : (timeLabel ? `<small>${escapeHTML(timeLabel)}</small>` : "")}
             </div>
         `;
