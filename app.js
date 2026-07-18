@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.63";
+const SERVICE_WORKER_URL = "./sw.js?v=9.66";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -1190,7 +1190,7 @@ function setupEventListeners() {
 
 
     // Toggle Task Complete (using event delegation)
-    tasksListEl.addEventListener("click", (e) => {
+    tasksListEl.addEventListener("click", async (e) => {
         if (e.target.closest(".btn-task-action") || e.target.closest(".swipe-action-btn")) return;
 
         const item = e.target.closest(".task-item");
@@ -1227,7 +1227,7 @@ function setupEventListeners() {
             }
         }
 
-        if (isEditMode || (isHistoryMode && !isPastNightShiftException) || isFutureDate) return;
+        if (isEditMode || (isHistoryMode && !isPastNightShiftException)) return;
 
         const taskId = String(item.dataset.id).match(/^\d+$/) ? parseInt(item.dataset.id, 10) : item.dataset.id;
         const selectedTask = tasks.find(task => String(task.id) === String(taskId));
@@ -1248,7 +1248,7 @@ function setupEventListeners() {
             }
         }
         
-        toggleTask(taskId);
+        await toggleTask(taskId, { completeAtCurrentMoment: isFutureDate });
     });
 
     // Exit edit mode on click outside categories bar
@@ -1618,11 +1618,6 @@ function setupEventListeners() {
         }
         const btnSubmit = formAddTask.querySelector("button[type='submit']");
         if (!btnSubmit || btnSubmit.disabled) return;
-        if (isTrainingCollaborativeCategory(selectTaskCategory.value) && !canManageTrainingCollaborativeCategory(selectTaskCategory.value)) {
-            showAppNotice("Participantes podem apenas visualizar esta categoria de treino.", "warning");
-            return;
-        }
-        
         btnSubmit.disabled = true;
         const originalText = btnSubmit.innerHTML;
         btnSubmit.innerHTML = `<span class="loading-spinner"></span> Salvando...`;
@@ -1723,8 +1718,8 @@ function setupEventListeners() {
 
         // Mescla turnos no context existente (evita bugs caso seja string stringificada)
         const existingTask = tasks.find(t => String(t.id) === String(taskId));
-        if (existingTask && isTrainingCollaborativeCategory(existingTask.category) && !canManageTrainingCollaborativeCategory(existingTask.category)) {
-            showAppNotice("Participantes podem apenas visualizar esta categoria de treino.", "warning");
+        if (existingTask && isTrainingCategory(existingTask.category) && !isTrainingTaskOwnedByCurrentUser(existingTask)) {
+            showAppNotice("Somente o dono pode editar esta tarefa de treino.", "warning");
             closeModal(modalEditTask);
             return;
         }
@@ -2711,7 +2706,7 @@ async function repairAndTestPushNotifications() {
 }
 
 function canCurrentUserCheckTask(task) {
-    if (task && isTrainingCollaborativeCategory(task.category)) return isTrainingTaskOwnedByCurrentUser(task);
+    if (task && isTrainingCategory(task.category)) return isTrainingTaskOwnedByCurrentUser(task);
     if (!task || !normalizeAccountEmail(task.assigned_to)) return true;
     return Boolean(currentUser) && normalizeAccountEmail(task.assigned_to) === normalizeAccountEmail(currentUser.email);
 }
@@ -2732,7 +2727,7 @@ function getTrainingTaskOwnerEmail(task) {
 }
 
 function showTaskCheckPermissionNotice(task) {
-    const trainingViewOnly = task && isTrainingCollaborativeCategory(task.category) && !isTrainingTaskOwnedByCurrentUser(task);
+    const trainingViewOnly = task && isTrainingCategory(task.category) && !isTrainingTaskOwnedByCurrentUser(task);
     const responsible = task && task.assigned_to ? getIdentityLabel(task.assigned_to) : "o responsável";
     const toast = document.createElement("div");
     toast.className = "shared-task-toast task-check-permission-toast";
@@ -3325,16 +3320,13 @@ function renderCategories() {
     categories.forEach(cat => {
         const opt = document.createElement("option");
         opt.value = cat.name;
-        const trainingViewOnly = isTrainingCollaborativeCategory(cat.name) && !canManageTrainingCollaborativeCategory(cat.name);
-        opt.textContent = trainingViewOnly ? `${cat.name} (somente visualização)` : cat.name;
-        opt.disabled = trainingViewOnly;
+        opt.textContent = cat.name;
         select.appendChild(opt);
 
         if (selectEditTaskCategory) {
             const optEdit = document.createElement("option");
             optEdit.value = cat.name;
-            optEdit.textContent = trainingViewOnly ? `${cat.name} (somente visualização)` : cat.name;
-            optEdit.disabled = trainingViewOnly;
+            optEdit.textContent = cat.name;
             selectEditTaskCategory.appendChild(optEdit);
         }
     });
@@ -4130,8 +4122,8 @@ function updateTaskCreationOnboarding() {
 function createTaskDOMElement(task) {
     const taskEl = document.createElement("div");
     const canCheckTask = canCurrentUserCheckTask(task);
-    const trainingCollaborative = isTrainingCollaborativeCategory(task.category);
-    const trainingViewOnly = trainingCollaborative && (!canManageTrainingCollaborativeCategory(task.category) || !isTrainingTaskOwnedByCurrentUser(task));
+    const trainingCollaborative = isTrainingCategory(task.category);
+    const trainingViewOnly = trainingCollaborative && !isTrainingTaskOwnedByCurrentUser(task);
     const trainingOwnerEmail = trainingCollaborative ? getTrainingTaskOwnerEmail(task) : "";
     const trainingOwnerLabel = trainingOwnerEmail ? getIdentityLabel(trainingOwnerEmail) : "Dono da tarefa";
     const trainingOwnerAvatar = trainingOwnerEmail ? getIdentityAvatar(trainingOwnerEmail) : "";
@@ -4563,7 +4555,60 @@ function updateProgress() {
 // ----------------------------------------------------
 // State Management & Storage
 // ----------------------------------------------------
-async function toggleTask(id) {
+function getCurrentShiftName(date = new Date()) {
+    const hour = date.getHours();
+    if (hour >= 12 && hour < 18) return "Tarde";
+    if (hour >= 18) return "Noite";
+    return "Manhã";
+}
+
+async function moveFutureTaskToCurrentMoment(id) {
+    const now = new Date();
+    const todayStr = getLocalDateString(now);
+    const task = tasks.find(item => String(item.id) === String(id)) || allActiveTasks.find(item => String(item.id) === String(id));
+    if (!task) return false;
+    let context = {};
+    if (typeof task.context === "string") {
+        try { context = JSON.parse(task.context); } catch (_) { context = {}; }
+    } else context = { ...(task.context || {}) };
+    context.turnos = [getCurrentShiftName(now)];
+    const updates = { created_at: now.toISOString(), context };
+    const applyUpdates = item => String(item.id) === String(id) ? { ...item, ...updates, completed: false } : item;
+    tasks = tasks.map(applyUpdates);
+    allActiveTasks = allActiveTasks.map(applyUpdates);
+    const localTasks = (JSON.parse(localStorage.getItem("offline_tasks")) || []).map(applyUpdates);
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+    if (supabaseClient && currentUser && !isTemporaryId(id)) {
+        const queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+        queue[id] = { ...(queue[id] || {}), ...updates };
+        localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
+        supabaseClient.from("tasks").update(updates).eq("id", id).then(({ error }) => {
+            if (error) return console.warn("A tarefa foi movida para hoje apenas neste aparelho por enquanto:", error.message);
+            const pending = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+            delete pending[id];
+            localStorage.setItem("offline_task_updates_queue", JSON.stringify(pending));
+        }).catch(error => console.warn("Não foi possível sincronizar a nova data da tarefa:", error.message));
+    }
+    selectedDate = todayStr;
+    updateDateDisplay();
+    loadDataOffline();
+    // Uma recorrência planejada para outro dia da semana também precisa
+    // aparecer hoje como ocorrência excepcional quando foi realizada agora.
+    if (!tasks.some(item => String(item.id) === String(id))) {
+        const movedTask = allActiveTasks.find(item => String(item.id) === String(id));
+        if (movedTask) tasks.push({ ...movedTask, completed: false });
+    }
+    renderChecklist();
+    updateProgress();
+    showAppNotice(`Tarefa movida para hoje, no turno da ${getCurrentShiftName(now)}.`, "success");
+    return true;
+}
+
+async function toggleTask(id, options = {}) {
+    if (options.completeAtCurrentMoment && selectedDate > getLocalDateString(new Date())) {
+        const moved = await moveFutureTaskToCurrentMoment(id);
+        if (!moved) return;
+    }
     // Exception for completing night shift tasks of the previous day during the morning (before 12 PM)
     const now = new Date();
     const todayStr = getLocalDateString(now);
@@ -4584,7 +4629,7 @@ async function toggleTask(id) {
     }
     
     if (isHistoryMode && !isPastNightShiftException) return;
-    if (pendingToggles.has(id)) return;
+    if (pendingToggles.has(id) || pendingTrainingCompletionId !== null) return;
 
     if (task && !task.completed && isTrainingCategory(task.category)) {
         pendingTrainingCompletionId = id;
@@ -4676,6 +4721,22 @@ async function uploadTrainingPhotoRecord(record) {
     const category = categories.find(cat => cat.name === record.category);
     if (!category || isTemporaryId(category.id)) return false;
     try {
+        if (isTemporaryId(record.taskId)) {
+            for (let attempt = 0; attempt < 4 && isTemporaryId(record.taskId); attempt++) {
+                if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 350));
+                const { data: cloudTask, error: lookupError } = await supabaseClient.from("tasks")
+                    .select("id")
+                    .eq("category_id", category.id)
+                    .eq("user_id", currentUser.id)
+                    .eq("title", record.taskTitle)
+                    .order("created_at", { ascending: false })
+                    .limit(1)
+                    .maybeSingle();
+                if (lookupError) throw lookupError;
+                if (cloudTask?.id) record.taskId = cloudTask.id;
+            }
+            if (isTemporaryId(record.taskId)) throw new Error("A tarefa ainda não terminou de sincronizar.");
+        }
         const blob = await (await fetch(record.photo)).blob();
         const safeRecordId = String(record.id).replace(/[^a-zA-Z0-9_-]/g, "-");
         const path = `${category.id}/${currentUser.id}/${safeRecordId}.jpg`;
@@ -4871,10 +4932,6 @@ function saveCompletionOffline(taskId, date, completed) {
 async function addTask(title, category, recurrenceMode, customDate, repeatDays, assignedTo, shifts, important = false, reminderTime = null, reminderOffsetDays = 0) {
     if (!title) return;
     if (isTrainingCollaborativeCategory(category)) {
-        if (!canManageTrainingCollaborativeCategory(category)) {
-            showAppNotice("Participantes podem apenas visualizar esta categoria de treino.", "warning");
-            return;
-        }
         assignedTo = null;
     }
     const isRecurring = recurrenceMode !== "once";
@@ -5092,9 +5149,9 @@ function renameTaskOffline(id, newTitle, context) {
 async function updateTask(id, updates) {
     localDataVersion++;
     const existingTask = tasks.find(t => String(t.id) === String(id));
-    if (existingTask && isTrainingCollaborativeCategory(existingTask.category)) {
-        if (!canManageTrainingCollaborativeCategory(existingTask.category)) {
-            showAppNotice("Participantes podem apenas visualizar esta categoria de treino.", "warning");
+    if (existingTask && isTrainingCategory(existingTask.category)) {
+        if (!isTrainingTaskOwnedByCurrentUser(existingTask)) {
+            showAppNotice("Somente o dono pode editar esta tarefa de treino.", "warning");
             return;
         }
         updates.assigned_to = null;
@@ -5182,8 +5239,8 @@ function getRecurrenceLabel(task) {
 // Edit Task Modal
 function openEditTaskModal(task) {
     const modalEditTask = document.getElementById("modal-edit-task");
-    if (isTrainingCollaborativeCategory(task.category) && !canManageTrainingCollaborativeCategory(task.category)) {
-        showAppNotice("Participantes podem apenas visualizar esta categoria de treino.", "warning");
+    if (isTrainingCategory(task.category) && !isTrainingTaskOwnedByCurrentUser(task)) {
+        showAppNotice("Somente o dono pode editar esta tarefa de treino.", "warning");
         return;
     }
     
@@ -5257,8 +5314,8 @@ function openEditTaskModal(task) {
 async function deleteTask(id) {
     localDataVersion++;
     const existingTask = tasks.find(task => String(task.id) === String(id));
-    if (existingTask && isTrainingCollaborativeCategory(existingTask.category) && !canManageTrainingCollaborativeCategory(existingTask.category)) {
-        showAppNotice("Participantes podem apenas visualizar esta categoria de treino.", "warning");
+    if (existingTask && isTrainingCategory(existingTask.category) && !isTrainingTaskOwnedByCurrentUser(existingTask)) {
+        showAppNotice("Somente o dono pode excluir esta tarefa de treino.", "warning");
         return;
     }
     if (pendingDeletes.has(id)) return;
@@ -5312,8 +5369,8 @@ function deleteTaskOffline(id) {
 
 async function excludeTaskForToday(id) {
     const existingTask = tasks.find(task => String(task.id) === String(id));
-    if (existingTask && isTrainingCollaborativeCategory(existingTask.category) && !canManageTrainingCollaborativeCategory(existingTask.category)) {
-        showAppNotice("Participantes podem apenas visualizar esta categoria de treino.", "warning");
+    if (existingTask && isTrainingCategory(existingTask.category) && !isTrainingTaskOwnedByCurrentUser(existingTask)) {
+        showAppNotice("Somente o dono pode alterar esta tarefa de treino.", "warning");
         return;
     }
     localDataVersion++;

@@ -1573,8 +1573,7 @@ body {
     flex-shrink: 0;
 }
 
-/* Desativa visualmente o checkbox em dias futuros (Planejamento) ou passados (Histórico) */
-.planning-mode .task-checkbox,
+/* O planejamento futuro aceita check; apenas o histórico permanece bloqueado. */
 .history-mode .task-checkbox {
     cursor: not-allowed;
     opacity: 0.55;
