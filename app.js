@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.70";
+const SERVICE_WORKER_URL = "./sw.js?v=9.72";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -4813,8 +4813,14 @@ async function deleteTrainingPhotosForTask(task) {
             .eq("task_id", String(task.id));
         if (lookupError) throw lookupError;
         const paths = (data || []).map(item => item.photo_path).filter(Boolean);
-        const { error: metadataError } = await supabaseClient.from("training_photos").delete().eq("task_id", String(task.id));
+        const { data: deletedRows, error: metadataError } = await supabaseClient.from("training_photos")
+            .delete()
+            .eq("task_id", String(task.id))
+            .select("id");
         if (metadataError) throw metadataError;
+        if ((data || []).length && !(deletedRows || []).length) {
+            throw new Error("a permissão do Supabase não autorizou excluir o registro da foto");
+        }
         if (paths.length) {
             const { error: storageError } = await supabaseClient.storage.from("training-photos").remove(paths);
             if (storageError) throw storageError;
@@ -4824,6 +4830,25 @@ async function deleteTrainingPhotosForTask(task) {
         console.warn("A tarefa foi excluída, mas a foto não pôde ser removida da nuvem:", error.message);
         return { ok: false, error: error.message || "erro desconhecido" };
     }
+}
+
+async function deleteTrainingCompletionsForTask(task) {
+    if (!task || !isTrainingCategory(task.category)) return { ok: true };
+    const taskId = String(task.id);
+    const localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+    localStorage.setItem("offline_completions", JSON.stringify(
+        localCompletions.filter(item => String(item.task_id) !== taskId)
+    ));
+    const completionQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+    Object.keys(completionQueue).forEach(key => {
+        if (key.startsWith(`${taskId}_`)) delete completionQueue[key];
+    });
+    localStorage.setItem("offline_completions_queue", JSON.stringify(completionQueue));
+    if (!supabaseClient || !currentUser || isTemporaryId(task.id) || !navigator.onLine) {
+        return { ok: true, localOnly: true };
+    }
+    const { error } = await supabaseClient.from("completions").delete().eq("task_id", task.id);
+    return error ? { ok: false, error: error.message } : { ok: true };
 }
 
 async function getTrainingPhotoRecords(categoryName = null) {
@@ -5384,7 +5409,9 @@ async function deleteTask(id) {
     pendingDeletes.add(id);
 
     const photoDeletion = await deleteTrainingPhotosForTask(existingTask);
+    const completionDeletion = await deleteTrainingCompletionsForTask(existingTask);
     if (!photoDeletion.ok) showAppNotice(`Tarefa removida deste aparelho, mas a foto ainda aguarda exclusão na nuvem: ${photoDeletion.error}`, "warning");
+    if (!completionDeletion.ok) showAppNotice(`Tarefa removida deste aparelho, mas o histórico de conclusão ainda aguarda exclusão na nuvem: ${completionDeletion.error}`, "warning");
 
     // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
     tasks = tasks.filter(t => String(t.id) !== String(id));
