@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.67";
+const SERVICE_WORKER_URL = "./sw.js?v=9.70";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -169,6 +169,30 @@ const LEGACY_AUTO_SEEDED_CATEGORIES = ["Tio Nan", "Cassol", "PUCRS"];
 
 // Default tasks database for initial setup (offline fallback and reset option)
 const DEFAULT_TASKS = [];
+
+function dedupeCategories(list) {
+    const byId = new Map();
+    (Array.isArray(list) ? list : []).forEach(category => {
+        if (!category) return;
+        const idKey = category.id !== undefined && category.id !== null ? String(category.id) : `missing-${byId.size}`;
+        const previous = byId.get(idKey);
+        byId.set(idKey, previous ? { ...previous, ...category, type: category.type || previous.type || null } : category);
+    });
+    const byOwnerAndName = new Map();
+    [...byId.values()].forEach(category => {
+        const normalizedName = String(category.name || "").trim().toLocaleLowerCase("pt-BR");
+        const ownerId = category.user_id ? String(category.user_id) : "";
+        const stableKey = ownerId && normalizedName ? `${ownerId}::${normalizedName}` : `id::${String(category.id)}`;
+        const previous = byOwnerAndName.get(stableKey);
+        if (!previous) return byOwnerAndName.set(stableKey, category);
+        const previousTemporary = isTemporaryId(previous.id);
+        const currentTemporary = isTemporaryId(category.id);
+        const canonical = previousTemporary && !currentTemporary ? category : previous;
+        const supplemental = canonical === category ? previous : category;
+        byOwnerAndName.set(stableKey, { ...supplemental, ...canonical, type: canonical.type || supplemental.type || null });
+    });
+    return [...byOwnerAndName.values()];
+}
 
 // App State
 let tasks = [];
@@ -2973,6 +2997,7 @@ async function loadData() {
                     console.error("Erro ao carregar categorias compartilhadas:", err);
                 }
             }
+            dbCats = dedupeCategories(dbCats);
             
             // Contas novas começam vazias. Os padrões só são criados quando o
             // usuário escolhe explicitamente "Restaurar Padrões do App".
@@ -3105,6 +3130,7 @@ async function loadData() {
                 }
                 return dbCat;
             });
+            dbCats = dedupeCategories(dbCats);
             localStorage.setItem("offline_categories", JSON.stringify(dbCats));
             // Usa imediatamente os tipos recuperados do cache local. Antes eles
             // eram salvos, mas a lista em memória continuava desatualizada.
@@ -3173,7 +3199,8 @@ async function loadData() {
 function loadDataOffline() {
     categoryShares = JSON.parse(localStorage.getItem("offline_category_shares")) || [];
     pendingInvites = [];
-    let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+    let localCats = dedupeCategories(JSON.parse(localStorage.getItem("offline_categories")) || []);
+    localStorage.setItem("offline_categories", JSON.stringify(localCats));
     categories = localCats.filter(c => c.is_active);
 
     // 2. Fetch tasks offline
@@ -3254,6 +3281,7 @@ function setupCategoriesOverflowFade() {
 }
 
 function renderCategories() {
+    categories = dedupeCategories(categories);
     const bar = document.getElementById("categories-bar");
     const select = document.getElementById("task-category");
     const manageList = document.getElementById("manage-categories-list");
@@ -4746,7 +4774,7 @@ async function uploadTrainingPhotoRecord(record) {
         const safeRecordId = String(record.id).replace(/[^a-zA-Z0-9_-]/g, "-");
         const path = `${category.id}/${currentUser.id}/${safeRecordId}.jpg`;
         const { error: uploadError } = await supabaseClient.storage.from("training-photos").upload(path, blob, { contentType: "image/jpeg", upsert: false });
-        if (uploadError) throw uploadError;
+        if (uploadError) throw new Error(`envio do arquivo: ${uploadError.message}`);
         const { error: metadataError } = await supabaseClient.from("training_photos").insert({
             id: record.id,
             category_id: category.id,
@@ -4760,11 +4788,40 @@ async function uploadTrainingPhotoRecord(record) {
         });
         if (metadataError) {
             await supabaseClient.storage.from("training-photos").remove([path]);
-            throw metadataError;
+            throw new Error(`registro da foto: ${metadataError.message}`);
         }
+        const cachedRecords = await idb.get("training_photo_records") || [];
+        await idb.put("training_photo_records", cachedRecords.map(item => String(item.id) === String(record.id) ? { ...item, taskId: record.taskId, photoPath: path } : item));
         return { ok: true };
     } catch (error) {
         console.warn("A foto do treino ficou apenas no aparelho:", error.message);
+        return { ok: false, error: error.message || "erro desconhecido" };
+    }
+}
+
+async function deleteTrainingPhotosForTask(task) {
+    if (!task || !isTrainingCategory(task.category)) return { ok: true };
+    const localRecords = await idb.get("training_photo_records") || [];
+    const recordsToRemove = localRecords.filter(record => String(record.taskId) === String(task.id));
+    await idb.put("training_photo_records", localRecords.filter(record => String(record.taskId) !== String(task.id)));
+    if (!supabaseClient || !currentUser || isTemporaryId(task.id) || !navigator.onLine) {
+        return { ok: true, localOnly: true };
+    }
+    try {
+        const { data, error: lookupError } = await supabaseClient.from("training_photos")
+            .select("id,photo_path")
+            .eq("task_id", String(task.id));
+        if (lookupError) throw lookupError;
+        const paths = (data || []).map(item => item.photo_path).filter(Boolean);
+        const { error: metadataError } = await supabaseClient.from("training_photos").delete().eq("task_id", String(task.id));
+        if (metadataError) throw metadataError;
+        if (paths.length) {
+            const { error: storageError } = await supabaseClient.storage.from("training-photos").remove(paths);
+            if (storageError) throw storageError;
+        }
+        return { ok: true, removed: Math.max(recordsToRemove.length, (data || []).length) };
+    } catch (error) {
+        console.warn("A tarefa foi excluída, mas a foto não pôde ser removida da nuvem:", error.message);
         return { ok: false, error: error.message || "erro desconhecido" };
     }
 }
@@ -5325,6 +5382,9 @@ async function deleteTask(id) {
     }
     if (pendingDeletes.has(id)) return;
     pendingDeletes.add(id);
+
+    const photoDeletion = await deleteTrainingPhotosForTask(existingTask);
+    if (!photoDeletion.ok) showAppNotice(`Tarefa removida deste aparelho, mas a foto ainda aguarda exclusão na nuvem: ${photoDeletion.error}`, "warning");
 
     // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
     tasks = tasks.filter(t => String(t.id) !== String(id));
