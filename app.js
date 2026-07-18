@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.93";
+const SERVICE_WORKER_URL = "./sw.js?v=9.95";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -5399,9 +5399,26 @@ function paintTrainingReport(categoryName) {
         button.type = "button";
         button.className = `training-calendar-day ${trained ? "trained" : ""} ${dayRecords.length ? "has-photos" : ""} ${dateStr === todayStr ? "today" : ""}`;
         button.dataset.date = dateStr;
-        const calendarPhoto = dayRecords[0]?.thumbnail || dayRecords[0]?.photo;
-        if (calendarPhoto) button.style.setProperty("background-image", `linear-gradient(rgba(8,12,22,.18),rgba(8,12,22,.52)),url("${calendarPhoto}")`, "important");
-        button.innerHTML = `<span>${day}</span>${trained ? '<b aria-label="Treino realizado">🔥</b>' : ''}${dayRecords.length > 1 ? `<em>+${dayRecords.length - 1}</em>` : ''}`;
+        const participantPhotos = [];
+        const participantKeys = new Set();
+        dayRecords.forEach(record => {
+            const owner = getTrainingRecordOwner(record);
+            const key = String(record.createdBy || owner.label);
+            if (!participantKeys.has(key) && (record.thumbnail || record.photo)) {
+                participantKeys.add(key);
+                participantPhotos.push(record.thumbnail || record.photo);
+            }
+        });
+        const hasTwoParticipants = participantPhotos.length > 1;
+        const calendarPhoto = participantPhotos[0] || dayRecords[0]?.thumbnail || dayRecords[0]?.photo;
+        if (calendarPhoto && !hasTwoParticipants) button.style.setProperty("background-image", `linear-gradient(rgba(8,12,22,.18),rgba(8,12,22,.52)),url("${calendarPhoto}")`, "important");
+        const additionalCount = hasTwoParticipants ? Math.max(0, dayRecords.length - 2) : Math.max(0, dayRecords.length - 1);
+        button.innerHTML = `${hasTwoParticipants ? '<i class="training-calendar-participant-photos" aria-label="Fotos de dois participantes"><u></u><u></u></i>' : ''}<span>${day}</span>${trained ? '<b aria-label="Treino realizado">🔥</b>' : ''}${additionalCount ? `<em>+${additionalCount}</em>` : ''}`;
+        if (hasTwoParticipants) {
+            button.querySelectorAll(".training-calendar-participant-photos > u").forEach((photo, index) => {
+                photo.style.backgroundImage = `url("${participantPhotos[index]}")`;
+            });
+        }
         button.addEventListener("click", () => renderTrainingDayGallery(dateStr));
         grid.appendChild(button);
         if (!initialGalleryDate && dayRecords.length) initialGalleryDate = dateStr;
@@ -5409,7 +5426,7 @@ function paintTrainingReport(categoryName) {
     }
     const participantCount = new Set(currentTrainingCalendarRecords.map(record => record.createdBy || getTrainingRecordOwner(record).label)).size;
     const recordCount = currentTrainingCalendarRecords.length;
-    summary.innerHTML = `<span>🔥</span><strong>${dates.size} ${dates.size === 1 ? "dia" : "dias"} de treino • ${participantCount} ${participantCount === 1 ? "participante" : "participantes"} • ${recordCount} ${recordCount === 1 ? "registro" : "registros"}</strong><small>Intervalos também fazem parte de uma rotina saudável</small>`;
+    summary.innerHTML = `<span>🔥</span><strong>${dates.size} ${dates.size === 1 ? "dia" : "dias"} de treino • ${participantCount} ${participantCount === 1 ? "participante" : "participantes"} • ${recordCount} ${recordCount === 1 ? "registro" : "registros"}</strong>`;
     renderTrainingDayGallery(initialGalleryDate || firstTrainedDate || todayStr);
     lucide.createIcons();
 }

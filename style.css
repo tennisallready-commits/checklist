@@ -3377,6 +3377,10 @@ body.theme-girly .modal-content::before {
 .training-calendar-weekdays { margin-bottom: 6px; color: var(--text-muted); font-size: .58rem; font-weight: 900; text-align: center; text-transform: uppercase; }
 .training-calendar-day,.training-calendar-day-spacer { aspect-ratio: 1; min-width: 0; }
 .training-calendar-day { position: relative; display: grid; place-items: center; padding: 0; overflow: hidden; border: 1px solid transparent; border-radius: 11px; background: rgba(255,255,255,.025); color: var(--text-secondary); cursor: pointer; background-position: center; background-size: cover; }
+.training-calendar-participant-photos { position: absolute; inset: 0; display: grid; grid-template-columns: 1fr 1fr; z-index: 0; }
+.training-calendar-participant-photos::after { content: ""; position: absolute; inset: 0; background: linear-gradient(rgba(8,12,22,.12),rgba(8,12,22,.5)); pointer-events: none; }
+.training-calendar-participant-photos > u { min-width: 0; background-position: center; background-size: cover; text-decoration: none; }
+.training-calendar-participant-photos > u + u { border-left: 1px solid rgba(255,255,255,.8); }
 .training-calendar-day > span { position: relative; z-index: 2; font-size: .72rem; font-weight: 800; text-shadow: 0 1px 4px rgba(0,0,0,.65); }
 .training-calendar-day > b { position: absolute; right: 1px; bottom: 1px; z-index: 3; font-size: .7rem; filter: drop-shadow(0 1px 3px rgba(0,0,0,.5)); }
 .training-calendar-day > em { position: absolute; left: 2px; bottom: 2px; z-index: 3; padding: 1px 3px; border-radius: 5px; color: #fff; background: rgba(15,23,42,.78); font-size: .48rem; font-style: normal; font-weight: 900; }
@@ -3390,7 +3394,7 @@ body.theme-girly .modal-content::before {
 .training-selected-day-avatars { display: flex; align-items: center; padding-left: 7px; }
 .training-selected-day-avatars .task-assignee-avatar { width: 25px; height: 25px; margin-left: -7px; border: 2px solid var(--bg-surface-solid); font-size: .48rem; }
 .training-calendar-days-summary { margin: 14px 0; padding: 11px 13px; display: grid; grid-template-columns: auto 1fr; column-gap: 9px; align-items: center; border: 1px solid rgba(251,146,60,.24); border-radius: 13px; background: linear-gradient(135deg,rgba(251,146,60,.1),rgba(239,68,68,.05)); }
-.training-calendar-days-summary > span { grid-row: 1/3; font-size: 1.4rem; }
+.training-calendar-days-summary > span { font-size: 1.4rem; }
 .training-calendar-days-summary strong { color: var(--text-primary); font-size: .76rem; }
 .training-calendar-days-summary small { color: var(--text-muted); font-size: .58rem; }
 .training-day-gallery { padding-top: 12px; border-top: 1px solid var(--border-color); }
