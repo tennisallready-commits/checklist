@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.83";
+const SERVICE_WORKER_URL = "./sw.js?v=9.87";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -180,7 +180,7 @@ function dedupeCategories(list) {
     });
     const byOwnerAndName = new Map();
     [...byId.values()].forEach(category => {
-        const normalizedName = String(category.name || "").trim().toLocaleLowerCase("pt-BR");
+        const normalizedName = normalizeCategoryName(category.name);
         const ownerId = category.user_id ? String(category.user_id) : "";
         const stableKey = ownerId && normalizedName ? `${ownerId}::${normalizedName}` : `id::${String(category.id)}`;
         const previous = byOwnerAndName.get(stableKey);
@@ -192,6 +192,13 @@ function dedupeCategories(list) {
         byOwnerAndName.set(stableKey, { ...supplemental, ...canonical, type: canonical.type || supplemental.type || null });
     });
     return [...byOwnerAndName.values()];
+}
+
+function normalizeCategoryName(value) {
+    return String(value || "")
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/[\u200B-\u200D\uFEFF]/g, "")
+        .replace(/\s+/g, " ").trim().toLocaleLowerCase("pt-BR");
 }
 
 // App State
@@ -702,21 +709,17 @@ function setupEventListeners() {
     const openContextualTrainingReport = async () => {
         if (currentFilter === "all" || !isTrainingCategory(currentFilter)) return;
         currentTrainingCalendarMonth = new Date(selectedDate + "T12:00:00");
-        showTrainingReportLoading();
         openModal(modalTrainingReport);
-        await new Promise(resolve => requestAnimationFrame(resolve));
-        await renderTrainingReport();
+        renderTrainingReport();
     };
     document.getElementById("btn-open-training-calendar")?.addEventListener("click", openContextualTrainingReport);
     document.getElementById("btn-training-calendar-prev")?.addEventListener("click", async () => {
         currentTrainingCalendarMonth.setMonth(currentTrainingCalendarMonth.getMonth() - 1);
-        showTrainingReportLoading();
-        await renderTrainingReport();
+        renderTrainingReport();
     });
     document.getElementById("btn-training-calendar-next")?.addEventListener("click", async () => {
         currentTrainingCalendarMonth.setMonth(currentTrainingCalendarMonth.getMonth() + 1);
-        showTrainingReportLoading();
-        await renderTrainingReport();
+        renderTrainingReport();
     });
     document.getElementById("btn-close-training-report")?.addEventListener("click", () => closeModal(modalTrainingReport));
     modalTrainingReport?.querySelector(".modal-overlay")?.addEventListener("click", () => closeModal(modalTrainingReport));
@@ -4742,6 +4745,11 @@ async function moveFutureTaskToCurrentMoment(id) {
 
 async function toggleTask(id, options = {}) {
     if (options.completeAtCurrentMoment && selectedDate > getLocalDateString(new Date())) {
+        const futureTask = tasks.find(item => String(item.id) === String(id)) || allActiveTasks.find(item => String(item.id) === String(id));
+        if (futureTask && isTrainingCategory(futureTask.category)) {
+            showAppNotice("Tarefas de treino só podem ser finalizadas no dia programado.", "warning");
+            return;
+        }
         const moved = await moveFutureTaskToCurrentMoment(id);
         if (!moved) return;
     }
@@ -4754,6 +4762,10 @@ async function toggleTask(id, options = {}) {
     
     let isPastNightShiftException = false;
     let task = tasks.find(t => String(t.id) === String(id));
+    if (task?.completed && isTrainingCategory(task.category)) {
+        showAppNotice("Um treino finalizado não pode ser desmarcado.", "warning");
+        return;
+    }
     if (!canCurrentUserCheckTask(task)) {
         showTaskCheckPermissionNotice(task);
         return;
@@ -5136,7 +5148,14 @@ function renderTrainingDayGallery(dateStr) {
 
 async function renderTrainingReport() {
     const categoryName = currentFilter !== "all" && isTrainingCategory(currentFilter) ? currentFilter : null;
-    currentTrainingCalendarRecords = await getTrainingPhotoRecords(categoryName);
+    currentTrainingCalendarRecords = currentTrainingCalendarRecords.filter(record => !categoryName || record.category === categoryName);
+    paintTrainingReport(categoryName);
+    const refreshedRecords = await getTrainingPhotoRecords(categoryName);
+    currentTrainingCalendarRecords = refreshedRecords;
+    paintTrainingReport(categoryName);
+}
+
+function paintTrainingReport(categoryName) {
     const dates = getTrainingCompletionDates(categoryName);
     currentTrainingCalendarRecords.forEach(record => dates.add(record.date));
     const summary = document.getElementById("training-report-summary");
@@ -6592,7 +6611,7 @@ async function addCategory(name, type) {
     // temporário com um nome que já está visível no aparelho.
     const localExisting = categories.find(category =>
         category.is_active !== false
-        && String(category.name || "").trim().toLocaleLowerCase("pt-BR") === normalizedName.toLocaleLowerCase("pt-BR")
+        && normalizeCategoryName(category.name) === normalizeCategoryName(normalizedName)
     );
     if (localExisting) {
         showAppNotice(`A categoria “${localExisting.name}” já existe.`, "warning");
