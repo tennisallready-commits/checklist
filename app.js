@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.04";
+const SERVICE_WORKER_URL = "./sw.js?v=10.05";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -1835,8 +1835,10 @@ function setupEventListeners() {
         }
         context.turnos = editShifts;
         const editedDescription = document.getElementById("edit-task-description")?.value.trim() || "";
-        if (editedDescription) context.description = editedDescription;
-        else delete context.description;
+        // O valor vazio precisa ser explícito: updateTask mescla o contexto
+        // anterior para preservar lembretes e turnos, portanto apenas apagar a
+        // propriedade faria a descrição antiga reaparecer nessa mesclagem.
+        context.description = editedDescription;
         const chkEditImp = document.getElementById("edit-task-important");
         if (chkEditImp) {
             context.important = chkEditImp.checked;
