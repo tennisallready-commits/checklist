@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.11";
+const SERVICE_WORKER_URL = "./sw.js?v=10.14";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -6284,12 +6284,12 @@ function setupModalSwipeToClose(modal) {
             return;
         }
         
-        // Só arrasta se começar a deslizar do cabeçalho ou se o scroll interno estiver no topo (scrollTop === 0)
-        const scrollContainer = content.querySelector(".manage-tasks-body") || content.querySelector(".modal-body") || content;
-        const isScrollAtTop = scrollContainer.scrollTop === 0;
+        // O gesto de fechar começa somente no cabeçalho/alça. Iniciá-lo em
+        // qualquer ponto quando a lista está no topo faz o Safari capturar o
+        // primeiro movimento e, de forma intermitente, perder o scroll nativo.
         const touchedHeader = e.target.closest(".modal-header") || (e.touches[0].clientY - content.getBoundingClientRect().top < 60);
         
-        if (touchedHeader || isScrollAtTop) {
+        if (touchedHeader) {
             startY = e.touches[0].clientY;
             startX = e.touches[0].clientX;
             currentY = startY;
@@ -9864,7 +9864,7 @@ function getReportTaskDescription(task) {
 }
 
 async function generateHumanSmartReport(facts, cacheKey) {
-    const storageKey = `human_smart_report_${currentUser?.id || "local"}_${cacheKey}`;
+    const storageKey = `human_smart_report_v2_${currentUser?.id || "local"}_${cacheKey}`;
     try {
         const cached = JSON.parse(localStorage.getItem(storageKey) || "null");
         if (cached?.analysis && cached?.fingerprint === JSON.stringify(facts)) return cached.analysis;
@@ -9883,7 +9883,7 @@ async function generateHumanSmartReport(facts, cacheKey) {
 
 function renderHumanSmartReport(analysis) {
     if (!analysis) return "";
-    const achievements = Array.isArray(analysis.achievements) ? analysis.achievements.slice(0, 6) : [];
+    const achievements = Array.isArray(analysis.achievements) ? analysis.achievements.slice(0, 3) : [];
     return `
         <section class="human-report-story">
             <header><span><i data-lucide="sparkles"></i></span><div><small>RETROSPECTIVA COM IA</small><h6>O que marcou este período</h6></div></header>
