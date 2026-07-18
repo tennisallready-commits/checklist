@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.80";
+const SERVICE_WORKER_URL = "./sw.js?v=9.83";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -693,19 +693,29 @@ function setupEventListeners() {
     setupTaskTitleAutocomplete();
     setupAiTaskCreator();
 
+    const showTrainingReportLoading = () => {
+        const grid = document.getElementById("training-calendar-grid");
+        const summary = document.getElementById("training-report-summary");
+        if (grid) grid.innerHTML = '<div class="training-calendar-loading"><span class="loading-spinner"></span><strong>Carregando treinos…</strong></div>';
+        if (summary) summary.innerHTML = '<small>Buscando fotos e dias treinados</small>';
+    };
     const openContextualTrainingReport = async () => {
         if (currentFilter === "all" || !isTrainingCategory(currentFilter)) return;
         currentTrainingCalendarMonth = new Date(selectedDate + "T12:00:00");
-        await renderTrainingReport();
+        showTrainingReportLoading();
         openModal(modalTrainingReport);
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        await renderTrainingReport();
     };
     document.getElementById("btn-open-training-calendar")?.addEventListener("click", openContextualTrainingReport);
     document.getElementById("btn-training-calendar-prev")?.addEventListener("click", async () => {
         currentTrainingCalendarMonth.setMonth(currentTrainingCalendarMonth.getMonth() - 1);
+        showTrainingReportLoading();
         await renderTrainingReport();
     });
     document.getElementById("btn-training-calendar-next")?.addEventListener("click", async () => {
         currentTrainingCalendarMonth.setMonth(currentTrainingCalendarMonth.getMonth() + 1);
+        showTrainingReportLoading();
         await renderTrainingReport();
     });
     document.getElementById("btn-close-training-report")?.addEventListener("click", () => closeModal(modalTrainingReport));
@@ -2432,13 +2442,15 @@ async function loadCollaborationIdentityLabels() {
     });
     (allActiveTasks || []).forEach(task => { if (task.assigned_to) emails.add(task.assigned_to); });
     const { data, error } = await supabaseClient.rpc("resolve_collaboration_identifiers", { lookup_emails: [...emails] });
-    if (error) return console.warn("Não foi possível carregar IDs públicos:", error.message);
-    collaborationIdentityByEmail.clear();
-    collaborationAvatarByEmail.clear();
-    (data || []).forEach(item => {
-        collaborationIdentityByEmail.set(normalizeAccountEmail(item.email), item.username);
-        if (item.avatar_url) collaborationAvatarByEmail.set(normalizeAccountEmail(item.email), item.avatar_url);
-    });
+    if (error) console.warn("Não foi possível carregar IDs públicos por e-mail:", error.message);
+    else {
+        collaborationIdentityByEmail.clear();
+        collaborationAvatarByEmail.clear();
+        (data || []).forEach(item => {
+            collaborationIdentityByEmail.set(normalizeAccountEmail(item.email), item.username);
+            if (item.avatar_url) collaborationAvatarByEmail.set(normalizeAccountEmail(item.email), item.avatar_url);
+        });
+    }
     const userIds = new Set([currentUser.id]);
     (categories || []).forEach(category => { if (category.user_id) userIds.add(category.user_id); });
     (allActiveTasks || []).forEach(task => { if (task.user_id) userIds.add(task.user_id); });
@@ -2458,6 +2470,16 @@ async function loadCollaborationIdentityLabels() {
         });
     }
     renderSettingsProfileAvatar();
+}
+
+async function ensureCollaborationProfile(userId) {
+    const normalizedId = String(userId || "");
+    if (!normalizedId || collaborationIdentityByUserId.has(normalizedId) || !supabaseClient) return;
+    const { data, error } = await supabaseClient.rpc("resolve_collaboration_profiles", { lookup_user_ids: [normalizedId] });
+    if (error || !data?.[0]) return;
+    const profile = data[0];
+    if (profile.username) collaborationIdentityByUserId.set(normalizedId, profile.username);
+    if (profile.avatar_url) collaborationAvatarByUserId.set(normalizedId, profile.avatar_url);
 }
 
 async function ensureUserIdentifier() {
@@ -2870,8 +2892,9 @@ function subscribeToCollaborationUpdates() {
             schema: "public",
             table: "shared_task_notifications",
             filter: `recipient_id=eq.${currentUser.id}`
-        }, payload => {
+        }, async payload => {
             const notification = payload.new || {};
+            await ensureCollaborationProfile(notification.actor_id);
             if (!sharedTaskNotifications.some(item => String(item.id) === String(notification.id))) {
                 sharedTaskNotifications.unshift(notification);
             }
@@ -4236,8 +4259,8 @@ function createTaskDOMElement(task) {
     const trainingCollaborative = isTrainingCategory(task.category);
     const trainingViewOnly = trainingCollaborative && !isTrainingTaskOwnedByCurrentUser(task);
     const trainingOwnerEmail = trainingCollaborative ? getTrainingTaskOwnerEmail(task) : "";
-    const trainingOwnerLabel = getIdentityLabelByUserId(task.user_id) || (trainingOwnerEmail ? getIdentityLabel(trainingOwnerEmail) : "Dono da tarefa");
-    const trainingOwnerAvatar = getIdentityAvatarByUserId(task.user_id) || (trainingOwnerEmail ? getIdentityAvatar(trainingOwnerEmail) : "");
+    const trainingOwnerLabel = task.context?.creator_label || getIdentityLabelByUserId(task.user_id) || (trainingOwnerEmail ? getIdentityLabel(trainingOwnerEmail) : "Dono da tarefa");
+    const trainingOwnerAvatar = task.context?.creator_avatar_url || getIdentityAvatarByUserId(task.user_id) || (trainingOwnerEmail ? getIdentityAvatar(trainingOwnerEmail) : "");
     const trainingOwnerInitials = trainingOwnerLabel.replace("@", "").substring(0, 2).toUpperCase() || "DT";
     const reminderAt = getTaskReminderDateTime(task);
     const showReminderIndicator = hasPendingTaskReminder(task);
@@ -4982,7 +5005,7 @@ async function cleanupOrphanedTrainingPhotos() {
 }
 
 async function getTrainingPhotoRecords(categoryName = null) {
-    await cleanupOrphanedTrainingPhotos();
+    cleanupOrphanedTrainingPhotos();
     const localRecords = await idb.get("training_photo_records") || [];
     const filteredLocal = categoryName ? localRecords.filter(record => record.category === categoryName) : localRecords;
     if (!supabaseClient || !currentUser || !navigator.onLine) return filteredLocal;
@@ -4990,6 +5013,21 @@ async function getTrainingPhotoRecords(categoryName = null) {
     if (!visibleCategories.length) return filteredLocal;
     try {
         const categoryNameById = new Map(visibleCategories.map(category => [String(category.id), category.name]));
+        const { data: feedData, error: feedError } = await supabaseClient.functions.invoke("training-photo-feed", {
+            body: { category_ids: visibleCategories.map(category => category.id) }
+        });
+        if (!feedError && Array.isArray(feedData?.photos)) {
+            const cloudRecords = feedData.photos.map(item => ({
+                id: item.id, taskId: item.task_id, taskTitle: item.task_title || "Treino",
+                category: categoryNameById.get(String(item.category_id)) || "Treino",
+                date: item.training_date, photo: item.signed_url, createdBy: item.created_by,
+                creatorLabel: item.creator_label, creatorAvatar: item.creator_avatar_url, createdAt: item.created_at
+            })).filter(record => record.photo);
+            const merged = new Map(cloudRecords.map(record => [String(record.id), record]));
+            filteredLocal.forEach(record => { if (!merged.has(String(record.id))) merged.set(String(record.id), record); });
+            return [...merged.values()].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+        }
+        if (feedError) console.warn("Leitura protegida de fotos indisponível; tentando acesso direto:", feedError.message);
         const { data, error } = await supabaseClient.from("training_photos")
             .select("id,category_id,task_id,task_title,training_date,photo_path,created_by,creator_label,creator_avatar_url,created_at")
             .in("category_id", visibleCategories.map(category => category.id))
@@ -5175,6 +5213,11 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
         context.reminder_time = reminderTime || addTaskReminderTime;
         context.reminder_offset_days = reminderTime ? (Number(reminderOffsetDays) === 1 ? 1 : 0) : addTaskReminderOffsetDays;
         context.reminder_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
+    }
+    if (currentUser) {
+        context.creator_user_id = currentUser.id;
+        context.creator_label = getIdentityLabel(currentUser.email) || currentUser.email?.split("@")[0] || "Participante";
+        context.creator_avatar_url = getIdentityAvatarByUserId(currentUser.id) || getIdentityAvatar(currentUser.email) || "";
     }
     console.log(`%c[Motor de Contexto] Tarefa: "${title}" na guia "${category}"`, "color: #8b5cf6; font-weight: bold;", context);
 

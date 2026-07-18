@@ -3371,6 +3371,9 @@ body.theme-girly .modal-content::before {
 .training-calendar-nav button svg { width: 17px; height: 17px; }
 .training-calendar-nav strong { color: var(--text-primary); font-size: .86rem; text-align: center; }
 .training-calendar-weekdays,.training-calendar-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 6px; }
+.training-calendar-loading { grid-column: 1 / -1; display: flex; min-height: 230px; flex-direction: column; align-items: center; justify-content: center; gap: 11px; color: var(--text-secondary); }
+.training-calendar-loading .loading-spinner { width: 25px; height: 25px; }
+.training-calendar-loading strong { font-size: .72rem; }
 .training-calendar-weekdays { margin-bottom: 6px; color: var(--text-muted); font-size: .58rem; font-weight: 900; text-align: center; text-transform: uppercase; }
 .training-calendar-day,.training-calendar-day-spacer { aspect-ratio: 1; min-width: 0; }
 .training-calendar-day { position: relative; display: grid; place-items: center; padding: 0; overflow: hidden; border: 1px solid transparent; border-radius: 11px; background: rgba(255,255,255,.025); color: var(--text-secondary); cursor: pointer; background-position: center; background-size: cover; }
@@ -5080,6 +5083,21 @@ body.theme-girly #header-mini-date {
         box-shadow: var(--shadow-sm);
         backdrop-filter: blur(18px);
         -webkit-backdrop-filter: blur(18px);
+    }
+
+    body.theme-girly {
+        background: radial-gradient(circle at 12% 8%, rgba(244, 114, 182, .16), transparent 30%), radial-gradient(circle at 88% 90%, rgba(251, 113, 133, .12), transparent 32%), #fff1f5;
+    }
+
+    body.theme-girly .progress-card-container.compact-header-section {
+        border-color: rgba(219, 39, 119, .15);
+        background: rgba(255, 247, 250, .82);
+    }
+
+    body.theme-girly .app-container:not(.history-mode):not(.planning-mode) .compact-date-block.date-picker-wrapper {
+        background: linear-gradient(135deg, rgba(219, 39, 119, .12), rgba(244, 63, 94, .08)) !important;
+        border-color: rgba(219, 39, 119, .45) !important;
+        color: #db2777 !important;
     }
 
     .compact-progress-block,
