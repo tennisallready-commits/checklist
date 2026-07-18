@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.02";
+const SERVICE_WORKER_URL = "./sw.js?v=10.04";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -4463,7 +4463,7 @@ function createTaskDOMElement(task) {
         isPastNightShiftException = true;
     }
     
-    taskEl.className = `task-item ${task.completed ? 'completed' : ''} ${isPastNightShiftException ? 'editable-past-night' : ''} ${canCheckTask ? '' : 'check-locked'}`;
+    taskEl.className = `task-item ${task.completed ? 'completed' : ''} ${isPastNightShiftException ? 'editable-past-night' : ''} ${canCheckTask ? '' : 'check-locked'} ${taskDescription ? 'has-description' : ''}`;
     taskEl.dataset.id = task.id;
 
     // Estilo dinâmico da categoria
@@ -5987,8 +5987,12 @@ function openEditTaskModal(task) {
     const descriptionButton = document.getElementById("btn-edit-task-description");
     const taskDescription = String(task.context?.description || "");
     if (descriptionInput) descriptionInput.value = taskDescription;
-    if (descriptionGroup) descriptionGroup.hidden = !taskDescription;
-    if (descriptionButton) descriptionButton.hidden = Boolean(taskDescription);
+    if (descriptionGroup) descriptionGroup.hidden = true;
+    if (descriptionButton) {
+        descriptionButton.hidden = false;
+        const label = descriptionButton.querySelector("span");
+        if (label) label.textContent = taskDescription ? "Ver descrição" : "Adicionar descrição";
+    }
     
     // Determine recurrence mode
     const editRecurring = document.getElementById("edit-task-recurring");
