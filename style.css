@@ -1090,6 +1090,16 @@ body {
     backdrop-filter: var(--blur-glass);
     box-shadow: var(--shadow-sm);
 }
+.training-report-shortcut { display: none; width: 100%; height: 100%; flex-direction: column; align-items: center; justify-content: center; gap: 5px; text-align: center; }
+.compact-progress-block.training-report-mode { overflow: hidden; border-color: rgba(251,146,60,.22); background: linear-gradient(145deg,rgba(251,146,60,.1),rgba(239,68,68,.04)); box-shadow: 0 8px 24px rgba(239,68,68,.06); }
+.compact-progress-block.training-report-mode > :not(.training-report-shortcut) { display: none !important; }
+.compact-progress-block.training-report-mode .training-report-shortcut { display: flex; }
+.training-calendar-main-button { width: min(124px,100%); aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; padding: 12px; border: 1px solid rgba(255,255,255,.18); border-radius: 24px; color: #fff; background: linear-gradient(145deg,#fb923c,#ef4444); box-shadow: 0 12px 28px rgba(239,68,68,.24); cursor: pointer; transition: transform .2s ease,box-shadow .2s ease; }
+.training-calendar-main-button:hover { transform: translateY(-2px); box-shadow: 0 16px 32px rgba(239,68,68,.3); }
+.training-calendar-main-button:active { transform: scale(.96); }
+.training-calendar-main-button:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+.training-calendar-main-button svg { width: 30px; height: 30px; }
+.training-calendar-main-button span { max-width: 95px; font-size: .72rem; font-weight: 900; line-height: 1.15; text-align: center; }
 
 .compact-date-block.date-picker-wrapper {
     border-radius: var(--radius-md) !important;
@@ -1721,6 +1731,9 @@ body.theme-girly .task-reminder-indicator {
 
 .task-assignee-avatar.has-photo { overflow: hidden; background: var(--bg-surface-solid); }
 .task-assignee-avatar img, .settings-profile-avatar img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.task-owner-identity { display: inline-flex; align-items: center; gap: 5px; max-width: 145px; padding: 2px 7px 2px 3px; border: 1px solid rgba(251,146,60,.2); border-radius: 999px; background: rgba(251,146,60,.07); }
+.task-owner-identity .task-assignee-avatar { width: 23px; height: 23px; flex: 0 0 23px; border-color: rgba(251,146,60,.45); background: rgba(251,146,60,.14); color: #fb923c; font-size: .52rem; }
+.task-owner-identity small { overflow: hidden; color: var(--text-secondary); font-size: .58rem; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
 .settings-avatar-row { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(255,255,255,.02); }
 .settings-profile-avatar { width: 46px; height: 46px; display: grid; place-items: center; overflow: hidden; border: 2px solid rgba(139,92,246,.45); border-radius: 50%; color: var(--primary); background: rgba(139,92,246,.1); }
 .settings-profile-avatar svg { width: 21px; height: 21px; }
@@ -1763,6 +1776,8 @@ body.theme-girly .task-reminder-indicator {
     background: var(--success-gradient);
     color: #fff;
 }
+.task-item.training-view-only .task-item-foreground { cursor: default; }
+.task-item.training-view-only .task-checkbox { cursor: not-allowed; }
 
 .task-item.completed .task-title {
     color: var(--text-muted);
@@ -3322,6 +3337,71 @@ body.theme-girly .modal-content::before {
     background: rgba(139, 92, 246, .11);
     color: var(--primary);
 }
+.settings-action-icon.training { color: #fb923c; background: rgba(251,146,60,.12); }
+
+.training-photo-modal { position: relative; max-width: 360px; padding: 30px 24px 22px; text-align: center; }
+.training-photo-close { position: absolute; top: 14px; right: 14px; }
+.training-photo-hero { width: 72px; height: 72px; margin: 0 auto 16px; display: grid; place-items: center; border-radius: 24px; color: #fff; background: linear-gradient(135deg,#fb923c,#ef4444); box-shadow: 0 14px 32px rgba(239,68,68,.25); transform: rotate(-3deg); }
+.training-photo-hero svg { width: 30px; height: 30px; }
+.training-photo-kicker,.training-report-kicker { display: block; color: #fb923c; font-size: .65rem; font-weight: 900; letter-spacing: .14em; }
+.training-photo-modal h2 { margin: 7px 0; }
+.training-photo-modal p { margin: 0 auto 20px; max-width: 260px; color: var(--text-secondary); font-size: .78rem; line-height: 1.5; }
+.training-photo-action { display: flex; justify-content: center; align-items: center; gap: 8px; padding: 12px; cursor: pointer; }
+.training-photo-skip { margin-top: 10px; padding: 8px; border: 0; background: transparent; color: var(--text-muted); font-size: .72rem; font-weight: 700; cursor: pointer; }
+.training-report-modal { max-width: 520px; }
+.training-report-modal .modal-header h2 { margin: 3px 0 0; }
+.training-report-summary { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin-bottom: 18px; }
+.training-report-summary article { min-width: 0; padding: 13px 8px; display: grid; justify-items: center; gap: 3px; border: 1px solid var(--border-color); border-radius: 14px; background: rgba(251,146,60,.06); }
+.training-report-summary article > span,.training-report-summary svg { width: 22px; height: 22px; font-size: 20px; color: #fb923c; }
+.training-report-summary strong { color: var(--text-primary); font-size: 1.15rem; }
+.training-report-summary small { color: var(--text-muted); font-size: .58rem; text-align: center; }
+.training-report-list { max-height: 55vh; overflow-y: auto; display: grid; gap: 10px; }
+.training-report-entry { display: grid; grid-template-columns: 92px 1fr; gap: 12px; align-items: center; padding: 8px; border: 1px solid var(--border-color); border-radius: 14px; }
+.training-report-entry img { width: 92px; height: 78px; border-radius: 10px; object-fit: cover; }
+.training-report-entry div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.training-report-entry time,.training-report-entry small { color: var(--text-muted); font-size: .62rem; }
+.training-report-entry strong { color: var(--text-primary); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.training-report-empty { padding: 34px 20px; display: grid; justify-items: center; gap: 7px; color: var(--text-muted); text-align: center; }
+.training-report-empty svg { width: 30px; height: 30px; color: #fb923c; }
+.training-report-empty strong { color: var(--text-primary); font-size: .82rem; }
+.training-report-empty span { font-size: .68rem; line-height: 1.5; }
+.training-report-modal { width: min(520px,calc(100vw - 24px)); max-height: min(88vh,760px); overflow-y: auto; }
+.training-calendar-nav { display: grid; grid-template-columns: 34px 1fr 34px; align-items: center; gap: 8px; margin: 2px 0 12px; padding: 7px; border: 1px solid var(--border-color); border-radius: 13px; background: rgba(255,255,255,.025); }
+.training-calendar-nav button { width: 34px; height: 34px; display: grid; place-items: center; border: 0; border-radius: 10px; background: transparent; color: var(--text-primary); cursor: pointer; }
+.training-calendar-nav button:hover { background: rgba(251,146,60,.12); color: #fb923c; }
+.training-calendar-nav button svg { width: 17px; height: 17px; }
+.training-calendar-nav strong { color: var(--text-primary); font-size: .86rem; text-align: center; }
+.training-calendar-weekdays,.training-calendar-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 6px; }
+.training-calendar-weekdays { margin-bottom: 6px; color: var(--text-muted); font-size: .58rem; font-weight: 900; text-align: center; text-transform: uppercase; }
+.training-calendar-day,.training-calendar-day-spacer { aspect-ratio: 1; min-width: 0; }
+.training-calendar-day { position: relative; display: grid; place-items: center; padding: 0; overflow: hidden; border: 1px solid transparent; border-radius: 11px; background: rgba(255,255,255,.025); color: var(--text-secondary); cursor: pointer; background-position: center; background-size: cover; }
+.training-calendar-day > span { position: relative; z-index: 2; font-size: .72rem; font-weight: 800; text-shadow: 0 1px 4px rgba(0,0,0,.65); }
+.training-calendar-day > b { position: absolute; right: 1px; bottom: 1px; z-index: 3; font-size: .7rem; filter: drop-shadow(0 1px 3px rgba(0,0,0,.5)); }
+.training-calendar-day > em { position: absolute; left: 2px; bottom: 2px; z-index: 3; padding: 1px 3px; border-radius: 5px; color: #fff; background: rgba(15,23,42,.78); font-size: .48rem; font-style: normal; font-weight: 900; }
+.training-calendar-day.trained:not(.has-photos) { border-color: rgba(251,146,60,.25); background: rgba(251,146,60,.08); }
+.training-calendar-day.has-photos { color: #fff; border-color: rgba(255,255,255,.2); }
+.training-calendar-day.today { box-shadow: inset 0 0 0 1px #fb923c; }
+.training-calendar-day.selected { outline: 2px solid #fb923c; outline-offset: 1px; }
+.training-calendar-days-summary { margin: 14px 0; padding: 11px 13px; display: grid; grid-template-columns: auto 1fr; column-gap: 9px; align-items: center; border: 1px solid rgba(251,146,60,.24); border-radius: 13px; background: linear-gradient(135deg,rgba(251,146,60,.1),rgba(239,68,68,.05)); }
+.training-calendar-days-summary > span { grid-row: 1/3; font-size: 1.4rem; }
+.training-calendar-days-summary strong { color: var(--text-primary); font-size: .76rem; }
+.training-calendar-days-summary small { color: var(--text-muted); font-size: .58rem; }
+.training-day-gallery { padding-top: 12px; border-top: 1px solid var(--border-color); }
+.training-day-gallery-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.training-day-gallery-heading div { display: flex; flex-direction: column; gap: 2px; }
+.training-day-gallery-heading span { color: #fb923c; font-size: .55rem; font-weight: 900; letter-spacing: .11em; }
+.training-day-gallery-heading strong { color: var(--text-primary); font-size: .78rem; text-transform: capitalize; }
+.training-day-gallery-heading > b { color: var(--text-muted); font-size: .6rem; }
+.training-report-list { max-height: 260px; grid-template-columns: repeat(2,minmax(0,1fr)); }
+.training-day-photo-card { min-width: 0; overflow: hidden; border: 1px solid var(--border-color); border-radius: 14px; background: rgba(255,255,255,.025); }
+.training-day-photo { width: 100%; aspect-ratio: 4/3; display: block; object-fit: cover; }
+.training-day-photo-caption { display: flex; align-items: center; gap: 7px; padding: 8px; }
+.training-day-photo-caption .task-assignee-avatar { width: 27px; height: 27px; flex: 0 0 27px; }
+.training-day-photo-caption > div { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.training-day-photo-caption strong,.training-day-photo-caption small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.training-day-photo-caption strong { color: var(--text-primary); font-size: .67rem; }
+.training-day-photo-caption small { color: var(--text-muted); font-size: .55rem; }
+.training-report-empty.compact { grid-column: 1/-1; padding: 22px 12px; }
 
 .settings-action-icon svg,
 .settings-action-chevron {
@@ -4089,6 +4169,19 @@ body.theme-girly .app-container.tomorrow-mode .history-badge {
     color: var(--text-muted);
     opacity: 0.25;
 }
+.calendar-day { overflow: visible; }
+.calendar-day > span { line-height: 1; }
+.calendar-day.has-training-photo { overflow: hidden; border: 1px solid rgba(255,255,255,.22); background-position: center; background-size: cover; color: #fff; box-shadow: 0 3px 10px rgba(15,23,42,.2); }
+.calendar-day.has-training-photo > span { position: absolute; top: 4px; left: 5px; z-index: 2; color: #fff; font-size: .68rem; font-weight: 900; line-height: 1; text-shadow: 0 1px 4px rgba(0,0,0,.9); }
+.calendar-day.has-training-photo.today { border-color: #fb923c; box-shadow: 0 0 0 2px rgba(251,146,60,.2); }
+.calendar-day.has-training-photo.selected { background-position: center !important; background-size: cover !important; outline: 2px solid var(--primary); outline-offset: 1px; }
+.calendar-day.has-training-photo .calendar-fire { right: 1px; bottom: 1px; }
+.calendar-fire { position: absolute; right: -2px; bottom: -4px; z-index: 2; font-size: .78rem; line-height: 1; filter: drop-shadow(0 2px 3px rgba(239,68,68,.28)); }
+.calendar-day.selected .calendar-fire { transform: scale(1.12); }
+.calendar-streak-summary { margin: -7px 0 13px; padding: 10px 12px; display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center; border: 1px solid rgba(251,146,60,.24); border-radius: 12px; background: linear-gradient(135deg,rgba(251,146,60,.1),rgba(239,68,68,.05)); }
+.calendar-streak-summary > span { grid-row: 1 / 3; font-size: 1.45rem; }
+.calendar-streak-summary strong { color: var(--text-primary); font-size: .75rem; }
+.calendar-streak-summary small { color: var(--text-muted); font-size: .59rem; }
 
 /* Deletion & Confetti Animations */
 .task-item {

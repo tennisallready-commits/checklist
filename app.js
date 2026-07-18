@@ -5,10 +5,10 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.56";
-// O esquema atual do projeto não possui categories.type. O valor continua no
-// cache e no motor de contexto, mas não deve ser enviado nessa tabela.
-const CATEGORIES_CLOUD_SUPPORTS_TYPE = false;
+const SERVICE_WORKER_URL = "./sw.js?v=9.63";
+// O tipo acompanha a categoria na nuvem para que regras especiais, como a
+// visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
+const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
 
 // ----------------------------------------------------
 // IndexedDB & Shadow Storage Configuration
@@ -182,6 +182,8 @@ let currentTheme = "default";
 // Selected date format YYYY-MM-DD
 let selectedDate = "";
 let currentCalendarMonth = new Date();
+let currentTrainingCalendarMonth = new Date();
+let currentTrainingCalendarRecords = [];
 
 // Async transaction locks (prevents double submits)
 let pendingDeletes = new Set();
@@ -479,6 +481,11 @@ const btnPrevMonth = document.getElementById("btn-prev-month");
 const btnNextMonth = document.getElementById("btn-next-month");
 const calendarMonthYear = document.getElementById("calendar-month-year");
 const calendarDaysGrid = document.getElementById("calendar-days-grid");
+const modalTrainingPhoto = document.getElementById("modal-training-photo");
+const inputTrainingPhoto = document.getElementById("input-training-photo");
+const modalTrainingReport = document.getElementById("modal-training-report");
+let pendingTrainingCompletionId = null;
+let pendingTrainingPastNightException = false;
 
 // ----------------------------------------------------
 // Initialization
@@ -659,6 +666,40 @@ function setupEventListeners() {
 
     setupTaskTitleAutocomplete();
     setupAiTaskCreator();
+
+    const openContextualTrainingReport = async () => {
+        if (currentFilter === "all" || !isTrainingCategory(currentFilter)) return;
+        currentTrainingCalendarMonth = new Date(selectedDate + "T12:00:00");
+        await renderTrainingReport();
+        openModal(modalTrainingReport);
+    };
+    document.getElementById("btn-open-training-calendar")?.addEventListener("click", openContextualTrainingReport);
+    document.getElementById("btn-training-calendar-prev")?.addEventListener("click", async () => {
+        currentTrainingCalendarMonth.setMonth(currentTrainingCalendarMonth.getMonth() - 1);
+        await renderTrainingReport();
+    });
+    document.getElementById("btn-training-calendar-next")?.addEventListener("click", async () => {
+        currentTrainingCalendarMonth.setMonth(currentTrainingCalendarMonth.getMonth() + 1);
+        await renderTrainingReport();
+    });
+    document.getElementById("btn-close-training-report")?.addEventListener("click", () => closeModal(modalTrainingReport));
+    modalTrainingReport?.querySelector(".modal-overlay")?.addEventListener("click", () => closeModal(modalTrainingReport));
+    const finishTrainingWithoutPhoto = () => finishPendingTrainingCompletion(null);
+    document.getElementById("btn-skip-training-photo")?.addEventListener("click", finishTrainingWithoutPhoto);
+    document.getElementById("btn-complete-without-photo")?.addEventListener("click", finishTrainingWithoutPhoto);
+    inputTrainingPhoto?.addEventListener("change", async () => {
+        const file = inputTrainingPhoto.files?.[0];
+        if (!file) return;
+        try {
+            const photo = await compressTrainingPhoto(file);
+            await finishPendingTrainingCompletion(photo);
+        } catch (error) {
+            console.error("Erro ao preparar foto do treino:", error);
+            showAppNotice("Não foi possível salvar essa foto. Tente novamente.", "error");
+        } finally {
+            inputTrainingPhoto.value = "";
+        }
+    });
 
     // Smart Report Modal Events
     // Smart Report Tab Switcher and Listeners
@@ -1577,6 +1618,10 @@ function setupEventListeners() {
         }
         const btnSubmit = formAddTask.querySelector("button[type='submit']");
         if (!btnSubmit || btnSubmit.disabled) return;
+        if (isTrainingCollaborativeCategory(selectTaskCategory.value) && !canManageTrainingCollaborativeCategory(selectTaskCategory.value)) {
+            showAppNotice("Participantes podem apenas visualizar esta categoria de treino.", "warning");
+            return;
+        }
         
         btnSubmit.disabled = true;
         const originalText = btnSubmit.innerHTML;
@@ -1602,7 +1647,7 @@ function setupEventListeners() {
         const shifts = Array.from(document.querySelectorAll("#add-shift-selector .shift-toggle-btn.active")).map(b => b.dataset.shift);
 
         try {
-            const assignedTo = selectTaskAssignedTo ? selectTaskAssignedTo.value : null;
+            const assignedTo = isTrainingCollaborativeCategory(selectTaskCategory.value) ? null : (selectTaskAssignedTo ? selectTaskAssignedTo.value : null);
             const chkImp = document.getElementById("task-important");
             const important = chkImp ? chkImp.checked : false;
             
@@ -1673,12 +1718,17 @@ function setupEventListeners() {
 
         const createdAt = newDate ? new Date(newDate + "T12:00:00").toISOString() : undefined;
 
-        const assignedTo = selectEditTaskAssignedTo ? selectEditTaskAssignedTo.value : null;
         const newCategory = selectEditTaskCategory ? selectEditTaskCategory.value : null;
         const editShifts = Array.from(document.querySelectorAll("#edit-shift-selector .shift-toggle-btn.active")).map(b => b.dataset.shift);
 
         // Mescla turnos no context existente (evita bugs caso seja string stringificada)
         const existingTask = tasks.find(t => String(t.id) === String(taskId));
+        if (existingTask && isTrainingCollaborativeCategory(existingTask.category) && !canManageTrainingCollaborativeCategory(existingTask.category)) {
+            showAppNotice("Participantes podem apenas visualizar esta categoria de treino.", "warning");
+            closeModal(modalEditTask);
+            return;
+        }
+        const assignedTo = newCategory && isTrainingCollaborativeCategory(newCategory) ? null : (selectEditTaskAssignedTo ? selectEditTaskAssignedTo.value : null);
         let context = {};
         if (existingTask && existingTask.context) {
             if (typeof existingTask.context === 'string') {
@@ -2661,16 +2711,35 @@ async function repairAndTestPushNotifications() {
 }
 
 function canCurrentUserCheckTask(task) {
+    if (task && isTrainingCollaborativeCategory(task.category)) return isTrainingTaskOwnedByCurrentUser(task);
     if (!task || !normalizeAccountEmail(task.assigned_to)) return true;
     return Boolean(currentUser) && normalizeAccountEmail(task.assigned_to) === normalizeAccountEmail(currentUser.email);
 }
 
+function isTrainingTaskOwnedByCurrentUser(task) {
+    if (!task || !currentUser) return false;
+    if (task.user_id) return String(task.user_id) === String(currentUser.id);
+    return canManageTrainingCollaborativeCategory(task.category);
+}
+
+function getTrainingTaskOwnerEmail(task) {
+    if (!task) return "";
+    if (currentUser && String(task.user_id || "") === String(currentUser.id)) return currentUser.email || "";
+    const category = categories.find(cat => cat.name === task.category);
+    const ownerShare = (categoryShares || []).find(share => String(share.category_id) === String(category?.id) && share.owner_email);
+    if (category && String(task.user_id || category.user_id || "") === String(category.user_id || "")) return ownerShare?.owner_email || "";
+    return "";
+}
+
 function showTaskCheckPermissionNotice(task) {
+    const trainingViewOnly = task && isTrainingCollaborativeCategory(task.category) && !isTrainingTaskOwnedByCurrentUser(task);
     const responsible = task && task.assigned_to ? getIdentityLabel(task.assigned_to) : "o responsável";
     const toast = document.createElement("div");
     toast.className = "shared-task-toast task-check-permission-toast";
     toast.setAttribute("role", "status");
-    toast.innerHTML = `<i data-lucide="lock-keyhole"></i><div><strong>Check restrito</strong><span>Esta tarefa foi atribuída a ${escapeHTML(responsible)}. Somente essa pessoa pode dar check.</span></div>`;
+    toast.innerHTML = trainingViewOnly
+        ? `<i data-lucide="eye"></i><div><strong>Tarefa somente para visualização</strong><span>Somente a pessoa dona desta tarefa de treino pode dar check.</span></div>`
+        : `<i data-lucide="lock-keyhole"></i><div><strong>Check restrito</strong><span>Esta tarefa foi atribuída a ${escapeHTML(responsible)}. Somente essa pessoa pode dar check.</span></div>`;
     document.body.appendChild(toast);
     if (window.lucide) window.lucide.createIcons();
     requestAnimationFrame(() => toast.classList.add("active"));
@@ -3020,6 +3089,7 @@ async function loadData() {
                 repeat_days: task.repeat_days || null,
                 context: typeof task.context === 'string' ? ( () => { try { return JSON.parse(task.context); } catch(e) { return {}; } } )() : task.context || null,
                 assigned_to: task.assigned_to || null,
+                user_id: task.user_id || null,
                 created_at: task.created_at,
                 completed: completedTodayIds.has(String(task.id))
             }));
@@ -3032,6 +3102,10 @@ async function loadData() {
             dbCats = dbCats.map(dbCat => {
                 const localCat = localCatsBefore.find(lc => String(lc.id) === String(dbCat.id) || lc.name === dbCat.name);
                 if (localCat && localCat.type && !dbCat.type) {
+                    if (CATEGORIES_CLOUD_SUPPORTS_TYPE && String(dbCat.user_id) === String(currentUser.id) && !isTemporaryId(dbCat.id)) {
+                        supabaseClient.from("categories").update({ type: localCat.type }).eq("id", dbCat.id)
+                            .then(({ error }) => { if (error) console.warn("Tipo da categoria ainda não pôde ser sincronizado:", error.message); });
+                    }
                     return { ...dbCat, type: localCat.type };
                 }
                 return dbCat;
@@ -3154,10 +3228,12 @@ function loadDataOffline() {
         id: task.id,
         title: task.title,
         category: task.category,
+        category_id: task.category_id || null,
         is_recurring: task.is_recurring,
         repeat_days: task.repeat_days || null,
         context: typeof task.context === 'string' ? ( () => { try { return JSON.parse(task.context); } catch(e) { return {}; } } )() : task.context || null,
         assigned_to: task.assigned_to || null,
+        user_id: task.user_id || null,
         created_at: task.created_at,
         completed: completedTodayIds.has(String(task.id))
     }));
@@ -3249,13 +3325,16 @@ function renderCategories() {
     categories.forEach(cat => {
         const opt = document.createElement("option");
         opt.value = cat.name;
-        opt.textContent = cat.name;
+        const trainingViewOnly = isTrainingCollaborativeCategory(cat.name) && !canManageTrainingCollaborativeCategory(cat.name);
+        opt.textContent = trainingViewOnly ? `${cat.name} (somente visualização)` : cat.name;
+        opt.disabled = trainingViewOnly;
         select.appendChild(opt);
 
         if (selectEditTaskCategory) {
             const optEdit = document.createElement("option");
             optEdit.value = cat.name;
-            optEdit.textContent = cat.name;
+            optEdit.textContent = trainingViewOnly ? `${cat.name} (somente visualização)` : cat.name;
+            optEdit.disabled = trainingViewOnly;
             selectEditTaskCategory.appendChild(optEdit);
         }
     });
@@ -3749,6 +3828,7 @@ function setupTaskTitleAutocomplete() {
 }
 
 function renderChecklist() {
+    updateTrainingProgressMode();
     // Aborta a renderização se o usuário estiver arrastando uma tarefa para não causar flash/zerar a tela
     if (isDraggingTask) return;
 
@@ -3997,6 +4077,25 @@ function renderChecklist() {
     }
 }
 
+function updateTrainingProgressMode() {
+    const block = document.querySelector(".compact-progress-block");
+    if (!block) return;
+    const trainingSelected = currentFilter !== "all" && isTrainingCategory(currentFilter);
+    if (trainingSelected && block.classList.contains("completed")) block.dataset.progressWasCompleted = "true";
+    block.classList.toggle("training-report-mode", trainingSelected);
+    if (trainingSelected) block.classList.remove("completed");
+    else if (block.dataset.progressWasCompleted === "true") {
+        block.classList.add("completed");
+        delete block.dataset.progressWasCompleted;
+    }
+    if (trainingSelected) {
+        block.querySelector(".training-report-shortcut")?.setAttribute("aria-hidden", "false");
+    } else {
+        block.querySelector(".training-report-shortcut")?.setAttribute("aria-hidden", "true");
+    }
+    if (window.lucide) window.lucide.createIcons();
+}
+
 function showCategoryOnboardingSlide(index) {
     const slides = Array.from(document.querySelectorAll(".category-onboarding-slide"));
     const dots = Array.from(document.querySelectorAll(".category-onboarding-dots span"));
@@ -4031,6 +4130,12 @@ function updateTaskCreationOnboarding() {
 function createTaskDOMElement(task) {
     const taskEl = document.createElement("div");
     const canCheckTask = canCurrentUserCheckTask(task);
+    const trainingCollaborative = isTrainingCollaborativeCategory(task.category);
+    const trainingViewOnly = trainingCollaborative && (!canManageTrainingCollaborativeCategory(task.category) || !isTrainingTaskOwnedByCurrentUser(task));
+    const trainingOwnerEmail = trainingCollaborative ? getTrainingTaskOwnerEmail(task) : "";
+    const trainingOwnerLabel = trainingOwnerEmail ? getIdentityLabel(trainingOwnerEmail) : "Dono da tarefa";
+    const trainingOwnerAvatar = trainingOwnerEmail ? getIdentityAvatar(trainingOwnerEmail) : "";
+    const trainingOwnerInitials = trainingOwnerLabel.replace("@", "").substring(0, 2).toUpperCase() || "DT";
     
     // Exception for completing night shift tasks of the previous day during the morning (before 12 PM)
     const now = new Date();
@@ -4063,7 +4168,7 @@ function createTaskDOMElement(task) {
         </div>
         <!-- Main content of the task (on top) -->
         <div class="task-item-foreground">
-            <div class="task-checkbox-wrapper" ${canCheckTask ? '' : `title="Somente ${escapeHTML(getIdentityLabel(task.assigned_to))} pode dar check" aria-disabled="true"`}>
+            <div class="task-checkbox-wrapper" ${canCheckTask ? '' : `title="${trainingViewOnly ? 'Somente a pessoa dona desta tarefa de treino pode dar check' : `Somente ${escapeHTML(getIdentityLabel(task.assigned_to))} pode dar check`}" aria-disabled="true"`}>
                 <div class="task-checkbox">
                     <i data-lucide="${task.completed || canCheckTask ? 'check' : 'lock-keyhole'}"></i>
                 </div>
@@ -4084,13 +4189,14 @@ function createTaskDOMElement(task) {
                         if (t === 'Noite') iconName = 'moon';
                         return `<span class="task-tag shift-tag" style="background: rgba(139, 92, 246, 0.06); color: var(--primary); font-weight: 700; display: inline-flex; align-items: center; gap: 3px;"><i data-lucide="${iconName}" style="width: 10px; height: 10px;"></i>${escapeHTML(t)}</span>`;
                     }).join('') : ''}
-                    ${task.assigned_to ? (() => {
+                    ${task.assigned_to && !isTrainingCollaborativeCategory(task.category) ? (() => {
                         const identityLabel = getIdentityLabel(task.assigned_to);
                         const initials = identityLabel.replace('@', '').substring(0, 2).toUpperCase();
                         const avatarUrl = getIdentityAvatar(task.assigned_to);
                         const isMe = currentUser && task.assigned_to.toLowerCase() === currentUser.email.toLowerCase();
                         return `<span class="task-assignee-avatar ${isMe ? '' : 'partner'} ${avatarUrl ? 'has-photo' : ''}" title="Atribuído a: ${escapeHTML(identityLabel)}">${avatarUrl ? `<img src="${escapeHTML(avatarUrl)}" alt="">` : escapeHTML(initials)}</span>`;
                     })() : ''}
+                    ${trainingCollaborative ? `<span class="task-owner-identity" title="Tarefa de ${escapeHTML(trainingOwnerLabel)}"><span class="task-assignee-avatar owner ${trainingOwnerAvatar ? 'has-photo' : ''}">${trainingOwnerAvatar ? `<img src="${escapeHTML(trainingOwnerAvatar)}" alt="Foto de ${escapeHTML(trainingOwnerLabel)}">` : escapeHTML(trainingOwnerInitials)}</span><small>${isTrainingTaskOwnedByCurrentUser(task) ? 'Sua tarefa' : escapeHTML(trainingOwnerLabel)}</small></span>` : ''}
                 </div>
             </div>
             <!-- Global edit mode actions -->
@@ -4104,6 +4210,11 @@ function createTaskDOMElement(task) {
             </div>
         </div>
     `;
+
+    if (trainingViewOnly) {
+        taskEl.classList.add("training-view-only");
+        taskEl.querySelectorAll(".task-edit-actions, .task-swipe-actions").forEach(element => { element.style.display = "none"; });
+    }
 
     // Configura botões de ação estáticos (Modo Edição global)
     const btnDelete = taskEl.querySelector(".task-edit-actions .btn-task-action.delete");
@@ -4173,7 +4284,7 @@ function createTaskDOMElement(task) {
     btnSwipeRename.addEventListener("touchend", handleRenameAction, { passive: false });
 
     // Configura o gesto físico de deslize
-    setupSwipeToReveal(taskEl);
+    if (!trainingViewOnly) setupSwipeToReveal(taskEl);
 
     return taskEl;
 }
@@ -4436,10 +4547,16 @@ function updateProgress() {
     const compactProgressBlock = document.querySelector(".compact-progress-block");
     if (percentage === 100 && total > 0) {
         progressRingWrapper.classList.add("completed");
-        if (compactProgressBlock) compactProgressBlock.classList.add("completed");
+        if (compactProgressBlock?.classList.contains("training-report-mode")) {
+            compactProgressBlock.dataset.progressWasCompleted = "true";
+            compactProgressBlock.classList.remove("completed");
+        } else if (compactProgressBlock) compactProgressBlock.classList.add("completed");
     } else {
         progressRingWrapper.classList.remove("completed");
-        if (compactProgressBlock) compactProgressBlock.classList.remove("completed");
+        if (compactProgressBlock) {
+            compactProgressBlock.classList.remove("completed");
+            compactProgressBlock.dataset.progressWasCompleted = "false";
+        }
     }
 }
 
@@ -4447,8 +4564,6 @@ function updateProgress() {
 // State Management & Storage
 // ----------------------------------------------------
 async function toggleTask(id) {
-    localDataVersion++;
-    
     // Exception for completing night shift tasks of the previous day during the morning (before 12 PM)
     const now = new Date();
     const todayStr = getLocalDateString(now);
@@ -4470,6 +4585,20 @@ async function toggleTask(id) {
     
     if (isHistoryMode && !isPastNightShiftException) return;
     if (pendingToggles.has(id)) return;
+
+    if (task && !task.completed && isTrainingCategory(task.category)) {
+        pendingTrainingCompletionId = id;
+        pendingTrainingPastNightException = isPastNightShiftException;
+        openModal(modalTrainingPhoto);
+        return;
+    }
+    await commitTaskToggle(id, isPastNightShiftException);
+}
+
+async function commitTaskToggle(id, isPastNightShiftException = false) {
+    localDataVersion++;
+    if (isHistoryMode && !isPastNightShiftException) return;
+    if (pendingToggles.has(id)) return;
     pendingToggles.add(id);
 
     // Toggle local state immediately for visual response
@@ -4484,7 +4613,7 @@ async function toggleTask(id) {
         navigator.vibrate(12);
     }
 
-    task = tasks.find(t => String(t.id) === String(id));
+    const task = tasks.find(t => String(t.id) === String(id));
     if (!task) {
         pendingToggles.delete(id);
         return;
@@ -4517,6 +4646,210 @@ async function toggleTask(id) {
     }
 }
 
+function isTrainingCategory(categoryName) {
+    const category = categories.find(cat => cat.name === categoryName);
+    const value = `${category?.type || ""} ${category?.name || categoryName || ""}`
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    return /(^|\s)(treino|academia|gym|musculacao)(\s|$)/.test(value);
+}
+
+async function finishPendingTrainingCompletion(photoDataUrl) {
+    const id = pendingTrainingCompletionId;
+    if (id === null) return;
+    const pastNightException = pendingTrainingPastNightException;
+    pendingTrainingCompletionId = null;
+    pendingTrainingPastNightException = false;
+    closeModal(modalTrainingPhoto);
+    await commitTaskToggle(id, pastNightException);
+    if (!photoDataUrl) return;
+    const task = tasks.find(item => String(item.id) === String(id));
+    const records = await idb.get("training_photo_records") || [];
+    const record = { id: `${id}_${selectedDate}_${Date.now()}`, taskId: id, taskTitle: task?.title || "Treino", category: task?.category || "Treino", date: selectedDate, photo: photoDataUrl, createdBy: currentUser?.id || null, createdAt: new Date().toISOString() };
+    records.unshift(record);
+    await idb.put("training_photo_records", records.slice(0, 120));
+    const uploaded = await uploadTrainingPhotoRecord(record);
+    showAppNotice(uploaded ? "Foto compartilhada no relatório de treinos." : "Foto salva neste aparelho e será visível aqui.", uploaded ? "success" : "warning");
+}
+
+async function uploadTrainingPhotoRecord(record) {
+    if (!supabaseClient || !currentUser || !navigator.onLine) return false;
+    const category = categories.find(cat => cat.name === record.category);
+    if (!category || isTemporaryId(category.id)) return false;
+    try {
+        const blob = await (await fetch(record.photo)).blob();
+        const safeRecordId = String(record.id).replace(/[^a-zA-Z0-9_-]/g, "-");
+        const path = `${category.id}/${currentUser.id}/${safeRecordId}.jpg`;
+        const { error: uploadError } = await supabaseClient.storage.from("training-photos").upload(path, blob, { contentType: "image/jpeg", upsert: false });
+        if (uploadError) throw uploadError;
+        const { error: metadataError } = await supabaseClient.from("training_photos").insert({
+            id: record.id,
+            category_id: category.id,
+            task_id: String(record.taskId),
+            task_title: record.taskTitle,
+            training_date: record.date,
+            photo_path: path,
+            created_by: currentUser.id,
+            creator_label: getIdentityLabel(currentUser.email),
+            creator_avatar_url: getIdentityAvatar(currentUser.email) || null
+        });
+        if (metadataError) {
+            await supabaseClient.storage.from("training-photos").remove([path]);
+            throw metadataError;
+        }
+        return true;
+    } catch (error) {
+        console.warn("A foto do treino ficou apenas no aparelho:", error.message);
+        return false;
+    }
+}
+
+async function getTrainingPhotoRecords(categoryName = null) {
+    const localRecords = await idb.get("training_photo_records") || [];
+    const filteredLocal = categoryName ? localRecords.filter(record => record.category === categoryName) : localRecords;
+    if (!supabaseClient || !currentUser || !navigator.onLine) return filteredLocal;
+    const visibleCategories = categories.filter(category => isTrainingCategory(category.name) && (!categoryName || category.name === categoryName) && !isTemporaryId(category.id));
+    if (!visibleCategories.length) return filteredLocal;
+    try {
+        const categoryNameById = new Map(visibleCategories.map(category => [String(category.id), category.name]));
+        const { data, error } = await supabaseClient.from("training_photos")
+            .select("id,category_id,task_id,task_title,training_date,photo_path,created_by,creator_label,creator_avatar_url,created_at")
+            .in("category_id", visibleCategories.map(category => category.id))
+            .order("created_at", { ascending: false });
+        if (error) throw error;
+        const paths = (data || []).map(item => item.photo_path);
+        const signedByPath = new Map();
+        if (paths.length) {
+            const { data: signed, error: signedError } = await supabaseClient.storage.from("training-photos").createSignedUrls(paths, 3600);
+            if (signedError) throw signedError;
+            (signed || []).forEach(item => signedByPath.set(item.path, item.signedUrl));
+        }
+        const cloudRecords = (data || []).map(item => ({
+            id: item.id,
+            taskId: item.task_id,
+            taskTitle: item.task_title || "Treino",
+            category: categoryNameById.get(String(item.category_id)) || "Treino",
+            date: item.training_date,
+            photo: signedByPath.get(item.photo_path),
+            createdBy: item.created_by,
+            creatorLabel: item.creator_label,
+            creatorAvatar: item.creator_avatar_url,
+            createdAt: item.created_at
+        })).filter(record => record.photo);
+        const merged = new Map(cloudRecords.map(record => [String(record.id), record]));
+        filteredLocal.forEach(record => { if (!merged.has(String(record.id))) merged.set(String(record.id), record); });
+        return [...merged.values()].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+    } catch (error) {
+        console.warn("Não foi possível carregar fotos compartilhadas de treino:", error.message);
+        return filteredLocal;
+    }
+}
+
+function compressTrainingPhoto(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(reader.error);
+        reader.onload = () => {
+            const image = new Image();
+            image.onerror = () => reject(new Error("Não foi possível abrir a foto."));
+            image.onload = () => {
+                const scale = Math.min(1, 1280 / Math.max(image.width, image.height));
+                const canvas = document.createElement("canvas");
+                canvas.width = Math.round(image.width * scale);
+                canvas.height = Math.round(image.height * scale);
+                canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+                resolve(canvas.toDataURL("image/jpeg", .78));
+            };
+            image.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+    });
+}
+
+function getTrainingCompletionDates(categoryName = null) {
+    const trainingTaskIds = new Set(allActiveTasks
+        .filter(task => isTrainingCategory(task.category) && (!categoryName || task.category === categoryName))
+        .map(task => String(task.id)));
+    return new Set((JSON.parse(localStorage.getItem("offline_completions")) || [])
+        .filter(item => item.completed === true && trainingTaskIds.has(String(item.task_id)))
+        .map(item => item.date));
+}
+
+function getCurrentTrainingStreak(dates) {
+    let streak = 0;
+    const cursor = new Date();
+    cursor.setHours(12, 0, 0, 0);
+    if (!dates.has(getLocalDateString(cursor))) cursor.setDate(cursor.getDate() - 1);
+    while (dates.has(getLocalDateString(cursor))) { streak++; cursor.setDate(cursor.getDate() - 1); }
+    return streak;
+}
+
+function getTrainingRecordOwner(record) {
+    if (record.creatorLabel) return { label: record.creatorLabel, avatar: record.creatorAvatar || "" };
+    const task = allActiveTasks.find(item => String(item.id) === String(record.taskId));
+    const email = task ? getTrainingTaskOwnerEmail(task) : "";
+    if (email) return { label: getIdentityLabel(email), avatar: getIdentityAvatar(email) };
+    if (currentUser && String(record.createdBy || "") === String(currentUser.id)) {
+        return { label: getIdentityLabel(currentUser.email), avatar: getIdentityAvatar(currentUser.email) };
+    }
+    return { label: "Participante", avatar: "" };
+}
+
+function renderTrainingDayGallery(dateStr) {
+    const heading = document.getElementById("training-day-gallery-heading");
+    const list = document.getElementById("training-report-list");
+    if (!heading || !list) return;
+    const records = currentTrainingCalendarRecords.filter(record => record.date === dateStr);
+    const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" });
+    heading.innerHTML = `<div><span>REGISTROS DO DIA</span><strong>${escapeHTML(dateLabel)}</strong></div><b>${records.length} ${records.length === 1 ? "foto" : "fotos"}</b>`;
+    list.innerHTML = records.length ? records.map(record => {
+        const owner = getTrainingRecordOwner(record);
+        const initials = owner.label.replace("@", "").substring(0, 2).toUpperCase() || "P";
+        return `<article class="training-day-photo-card"><img class="training-day-photo" src="${record.photo}" alt="Foto do treino de ${escapeHTML(owner.label)}"><div class="training-day-photo-caption"><span class="task-assignee-avatar ${owner.avatar ? 'has-photo' : ''}">${owner.avatar ? `<img src="${escapeHTML(owner.avatar)}" alt="">` : escapeHTML(initials)}</span><div><strong>${escapeHTML(owner.label)}</strong><small>${escapeHTML(record.taskTitle)}</small></div></div></article>`;
+    }).join("") : `<div class="training-report-empty compact"><i data-lucide="camera-off"></i><strong>Nenhuma foto neste dia</strong><span>O fogo indica que houve treino, mesmo sem registro fotográfico.</span></div>`;
+    document.querySelectorAll(".training-calendar-day").forEach(day => day.classList.toggle("selected", day.dataset.date === dateStr));
+    lucide.createIcons();
+}
+
+async function renderTrainingReport() {
+    const categoryName = currentFilter !== "all" && isTrainingCategory(currentFilter) ? currentFilter : null;
+    currentTrainingCalendarRecords = await getTrainingPhotoRecords(categoryName);
+    const dates = getTrainingCompletionDates(categoryName);
+    currentTrainingCalendarRecords.forEach(record => dates.add(record.date));
+    const summary = document.getElementById("training-report-summary");
+    const grid = document.getElementById("training-calendar-grid");
+    const monthYear = document.getElementById("training-calendar-month-year");
+    if (!summary || !grid || !monthYear) return;
+    const year = currentTrainingCalendarMonth.getFullYear();
+    const month = currentTrainingCalendarMonth.getMonth();
+    const monthNames = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+    monthYear.textContent = `${monthNames[month]} ${year}`;
+    grid.innerHTML = "";
+    const firstDayIndex = new Date(year, month, 1).getDay();
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    for (let i = 0; i < firstDayIndex; i++) grid.insertAdjacentHTML("beforeend", '<span class="training-calendar-day-spacer"></span>');
+    const todayStr = getLocalDateString(new Date());
+    let initialGalleryDate = "";
+    let firstTrainedDate = "";
+    for (let day = 1; day <= lastDay; day++) {
+        const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        const dayRecords = currentTrainingCalendarRecords.filter(record => record.date === dateStr);
+        const trained = dates.has(dateStr);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `training-calendar-day ${trained ? "trained" : ""} ${dayRecords.length ? "has-photos" : ""} ${dateStr === todayStr ? "today" : ""}`;
+        button.dataset.date = dateStr;
+        if (dayRecords[0]?.photo) button.style.setProperty("background-image", `linear-gradient(rgba(8,12,22,.18),rgba(8,12,22,.52)),url("${dayRecords[0].photo}")`, "important");
+        button.innerHTML = `<span>${day}</span>${trained ? '<b aria-label="Treino realizado">🔥</b>' : ''}${dayRecords.length > 1 ? `<em>+${dayRecords.length - 1}</em>` : ''}`;
+        button.addEventListener("click", () => renderTrainingDayGallery(dateStr));
+        grid.appendChild(button);
+        if (!initialGalleryDate && dayRecords.length) initialGalleryDate = dateStr;
+        if (!firstTrainedDate && trained) firstTrainedDate = dateStr;
+    }
+    summary.innerHTML = `<span>🔥</span><strong>${dates.size} ${dates.size === 1 ? "dia" : "dias"} de treino</strong><small>Intervalos também fazem parte de uma rotina saudável</small>`;
+    renderTrainingDayGallery(initialGalleryDate || firstTrainedDate || todayStr);
+    lucide.createIcons();
+}
+
 function saveCompletionOffline(taskId, date, completed) {
     let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
     localCompletions = localCompletions.filter(c => !(String(c.task_id) === String(taskId) && c.date === date));
@@ -4537,6 +4870,13 @@ function saveCompletionOffline(taskId, date, completed) {
 
 async function addTask(title, category, recurrenceMode, customDate, repeatDays, assignedTo, shifts, important = false, reminderTime = null, reminderOffsetDays = 0) {
     if (!title) return;
+    if (isTrainingCollaborativeCategory(category)) {
+        if (!canManageTrainingCollaborativeCategory(category)) {
+            showAppNotice("Participantes podem apenas visualizar esta categoria de treino.", "warning");
+            return;
+        }
+        assignedTo = null;
+    }
     const isRecurring = recurrenceMode !== "once";
     const tempId = Date.now();
     
@@ -4620,6 +4960,24 @@ async function insertTaskWithCategoryFallback(taskPayload) {
 function isCollaborativeCategory(categoryId) {
     if (!categoryId) return false;
     return (categoryShares || []).some(share => String(share.category_id) === String(categoryId) && share.accepted === true);
+}
+
+function isTrainingCollaborativeCategory(categoryName) {
+    const category = categories.find(cat => cat.name === categoryName);
+    return Boolean(category && isTrainingCategory(category.name) && isCollaborativeCategory(category.id));
+}
+
+function canManageTrainingCollaborativeCategory(categoryName) {
+    const category = categories.find(cat => cat.name === categoryName);
+    if (!category || !currentUser) return false;
+    if (String(category.user_id || "") === String(currentUser.id)) return true;
+    const myEmail = normalizeAccountEmail(currentUser.email);
+    const participantShare = (categoryShares || []).find(share =>
+        String(share.category_id) === String(category.id)
+        && normalizeAccountEmail(share.collaborator_email) === myEmail
+        && share.accepted === true
+    );
+    return !participantShare;
 }
 
 async function requestSharedTaskPush(taskId, silent = false) {
@@ -4734,6 +5092,13 @@ function renameTaskOffline(id, newTitle, context) {
 async function updateTask(id, updates) {
     localDataVersion++;
     const existingTask = tasks.find(t => String(t.id) === String(id));
+    if (existingTask && isTrainingCollaborativeCategory(existingTask.category)) {
+        if (!canManageTrainingCollaborativeCategory(existingTask.category)) {
+            showAppNotice("Participantes podem apenas visualizar esta categoria de treino.", "warning");
+            return;
+        }
+        updates.assigned_to = null;
+    }
     
     // Analyze new context if title is being updated
     if (updates.title !== undefined) {
@@ -4817,6 +5182,10 @@ function getRecurrenceLabel(task) {
 // Edit Task Modal
 function openEditTaskModal(task) {
     const modalEditTask = document.getElementById("modal-edit-task");
+    if (isTrainingCollaborativeCategory(task.category) && !canManageTrainingCollaborativeCategory(task.category)) {
+        showAppNotice("Participantes podem apenas visualizar esta categoria de treino.", "warning");
+        return;
+    }
     
     document.getElementById("edit-task-id").value = task.id;
     document.getElementById("edit-task-title").value = task.title;
@@ -4887,6 +5256,11 @@ function openEditTaskModal(task) {
 
 async function deleteTask(id) {
     localDataVersion++;
+    const existingTask = tasks.find(task => String(task.id) === String(id));
+    if (existingTask && isTrainingCollaborativeCategory(existingTask.category) && !canManageTrainingCollaborativeCategory(existingTask.category)) {
+        showAppNotice("Participantes podem apenas visualizar esta categoria de treino.", "warning");
+        return;
+    }
     if (pendingDeletes.has(id)) return;
     pendingDeletes.add(id);
 
@@ -4937,6 +5311,11 @@ function deleteTaskOffline(id) {
 }
 
 async function excludeTaskForToday(id) {
+    const existingTask = tasks.find(task => String(task.id) === String(id));
+    if (existingTask && isTrainingCollaborativeCategory(existingTask.category) && !canManageTrainingCollaborativeCategory(existingTask.category)) {
+        showAppNotice("Participantes podem apenas visualizar esta categoria de treino.", "warning");
+        return;
+    }
     localDataVersion++;
     if (pendingDeletes.has(id)) return;
     pendingDeletes.add(id);
@@ -5811,7 +6190,16 @@ function updateTaskAssigneeDropdown(categoryName, selectEl, groupEl) {
         return;
     }
 
-    const shares = categoryShares.filter(s => s.category_id === cat.id);
+    // Categorias colaborativas de treino nunca distribuem responsabilidade:
+    // o criador gerencia as tarefas e os participantes apenas acompanham.
+    if (isTrainingCategory(categoryName) && isCollaborativeCategory(cat.id)) {
+        groupEl.style.display = "none";
+        selectEl.innerHTML = '<option value="">Sem atribuição</option>';
+        selectEl.value = "";
+        return;
+    }
+
+    const shares = categoryShares.filter(s => String(s.category_id) === String(cat.id));
     if (shares.length === 0) {
         // Not a shared category
         groupEl.style.display = "none";
@@ -7393,7 +7781,7 @@ function clearCompletedManualItems() {
     renderManualChecklist(items);
 }
 
-function renderCalendarGrid() {
+async function renderCalendarGrid() {
     calendarDaysGrid.innerHTML = "";
 
     const year = currentCalendarMonth.getFullYear();
@@ -7427,6 +7815,8 @@ function renderCalendarGrid() {
 
     // Days of the current month
     const todayStr = getLocalDateString(new Date());
+    const calendarBody = calendarDaysGrid.closest(".calendar-body");
+    calendarBody?.querySelector(".calendar-streak-summary")?.remove();
     for (let i = 1; i <= lastDay; i++) {
         const btn = document.createElement("button");
         btn.className = "calendar-day";

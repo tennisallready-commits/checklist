@@ -41,7 +41,7 @@
             }
         });
     </script>
-    <link rel="stylesheet" href="style.css?v=8.02">
+    <link rel="stylesheet" href="style.css?v=8.09">
     
     <!-- iOS / PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -182,6 +182,12 @@
                 </div>
 
                 <span id="progress-tasks-count" class="square-count">0 de 0<br>concluídos</span>
+                <div class="training-report-shortcut" aria-hidden="true">
+                    <button id="btn-open-training-calendar" type="button" class="training-calendar-main-button">
+                        <i data-lucide="calendar-heart"></i>
+                        <span>Calendário de treinos</span>
+                    </button>
+                </div>
             </div>
 
             <!-- Right Square: Date & Navigation -->
@@ -518,9 +524,46 @@
 
                 <div class="settings-version">
                     <span>Checklist</span>
-                        <strong>Versão 9.37</strong>
+                        <strong>Versão 9.44</strong>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- Modal: Gestures Tutorial -->
+    <div id="modal-training-photo" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content training-photo-modal" role="dialog" aria-modal="true" aria-labelledby="training-photo-title">
+            <button class="modal-close training-photo-close" id="btn-skip-training-photo" aria-label="Concluir sem foto"><i data-lucide="x"></i></button>
+            <span class="training-photo-hero"><i data-lucide="camera"></i></span>
+            <span class="training-photo-kicker">TREINO CONCLUÍDO</span>
+            <h2 id="training-photo-title">Registrar esse momento?</h2>
+            <p>Sua foto ficará salva apenas no relatório de treinos.</p>
+            <label class="btn btn-primary training-photo-action" for="input-training-photo"><i data-lucide="camera"></i> Tirar uma foto</label>
+            <input id="input-training-photo" type="file" accept="image/*" capture="environment" hidden>
+            <button id="btn-complete-without-photo" class="training-photo-skip" type="button">Concluir sem foto</button>
+        </div>
+    </div>
+
+    <div id="modal-training-report" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content training-report-modal" role="dialog" aria-modal="true" aria-labelledby="training-report-title">
+            <div class="modal-header">
+                <div><span class="training-report-kicker">HISTÓRICO VISUAL</span><h2 id="training-report-title">Calendário de treinos</h2></div>
+                <button class="modal-close" id="btn-close-training-report"><i data-lucide="x"></i></button>
+            </div>
+            <div class="training-calendar-nav">
+                <button id="btn-training-calendar-prev" type="button" aria-label="Mês anterior"><i data-lucide="chevron-left"></i></button>
+                <strong id="training-calendar-month-year">Mês</strong>
+                <button id="btn-training-calendar-next" type="button" aria-label="Próximo mês"><i data-lucide="chevron-right"></i></button>
+            </div>
+            <div class="training-calendar-weekdays"><span>Dom</span><span>Seg</span><span>Ter</span><span>Qua</span><span>Qui</span><span>Sex</span><span>Sáb</span></div>
+            <div id="training-calendar-grid" class="training-calendar-grid"></div>
+            <div id="training-report-summary" class="training-calendar-days-summary"></div>
+            <section class="training-day-gallery" aria-live="polite">
+                <div id="training-day-gallery-heading" class="training-day-gallery-heading"></div>
+                <div id="training-report-list" class="training-report-list"></div>
+            </section>
         </div>
     </div>
 
@@ -1005,6 +1048,7 @@
                                 <option value="Projeto">Projeto</option>
                                 <option value="Pessoal">Pessoal</option>
                                 <option value="Saúde">Saúde</option>
+                                <option value="Treino">Treino</option>
                                 <option value="Finanças">Finanças</option>
                                 <option value="Casa">Casa</option>
                                 <option value="Lazer">Lazer</option>
@@ -1060,6 +1104,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=9.37"></script>
+    <script src="app.js?v=9.44"></script>
 </body>
 </html>
