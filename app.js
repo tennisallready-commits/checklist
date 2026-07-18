@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=9.78";
+const SERVICE_WORKER_URL = "./sw.js?v=9.80";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -218,6 +218,8 @@ let currentUser = null;
 let currentUsername = "";
 const collaborationIdentityByEmail = new Map();
 const collaborationAvatarByEmail = new Map();
+const collaborationIdentityByUserId = new Map();
+const collaborationAvatarByUserId = new Map();
 let identifierSetupResolver = null;
 function getCurrentReminderTime() {
     const now = new Date();
@@ -2388,6 +2390,15 @@ function getIdentityAvatar(email) {
     return collaborationAvatarByEmail.get(normalizeAccountEmail(email)) || "";
 }
 
+function getIdentityLabelByUserId(userId) {
+    const username = collaborationIdentityByUserId.get(String(userId || ""));
+    return username ? `@${username}` : "";
+}
+
+function getIdentityAvatarByUserId(userId) {
+    return collaborationAvatarByUserId.get(String(userId || "")) || "";
+}
+
 function renderSettingsProfileAvatar() {
     if (!settingsProfileAvatar) return;
     const avatarUrl = currentUser ? getIdentityAvatar(currentUser.email) : "";
@@ -2407,6 +2418,7 @@ async function uploadProfileAvatar(file) {
     const { error: profileError } = await supabaseClient.from("profiles").upsert({ id: currentUser.id, email: normalizeAccountEmail(currentUser.email), avatar_url: avatarUrl, updated_at: new Date().toISOString() });
     if (profileError) throw profileError;
     collaborationAvatarByEmail.set(normalizeAccountEmail(currentUser.email), avatarUrl);
+    collaborationAvatarByUserId.set(String(currentUser.id), avatarUrl);
     renderSettingsProfileAvatar();
     renderChecklist();
 }
@@ -2427,6 +2439,24 @@ async function loadCollaborationIdentityLabels() {
         collaborationIdentityByEmail.set(normalizeAccountEmail(item.email), item.username);
         if (item.avatar_url) collaborationAvatarByEmail.set(normalizeAccountEmail(item.email), item.avatar_url);
     });
+    const userIds = new Set([currentUser.id]);
+    (categories || []).forEach(category => { if (category.user_id) userIds.add(category.user_id); });
+    (allActiveTasks || []).forEach(task => { if (task.user_id) userIds.add(task.user_id); });
+    const { data: profiles, error: profilesError } = await supabaseClient.rpc("resolve_collaboration_profiles", { lookup_user_ids: [...userIds] });
+    if (profilesError) console.warn("Não foi possível carregar perfis pelo usuário:", profilesError.message);
+    else {
+        collaborationIdentityByUserId.clear();
+        collaborationAvatarByUserId.clear();
+        (profiles || []).forEach(profile => {
+            const userId = String(profile.user_id);
+            if (profile.username) collaborationIdentityByUserId.set(userId, profile.username);
+            if (profile.avatar_url) collaborationAvatarByUserId.set(userId, profile.avatar_url);
+            if (profile.email) {
+                collaborationIdentityByEmail.set(normalizeAccountEmail(profile.email), profile.username);
+                if (profile.avatar_url) collaborationAvatarByEmail.set(normalizeAccountEmail(profile.email), profile.avatar_url);
+            }
+        });
+    }
     renderSettingsProfileAvatar();
 }
 
@@ -2782,9 +2812,10 @@ function updateCollaborationInviteAttention() {
     btnNotifications.classList.toggle("invite-attention", needsAttention);
     if (collabInviteReadyLabel) {
         const unreadTrainingOnly = unreadTasks.length > 0 && unreadTasks.every(notification => isTrainingCategory(notification.category_name));
+        const latestTrainingActor = unreadTrainingOnly ? (getIdentityLabelByUserId(unreadTasks[0]?.actor_id) || "Participante").replace(/^@/, "") : "";
         collabInviteReadyLabel.textContent = unseenInvites.length > 0
             ? "Você recebeu um convite"
-            : unreadTrainingOnly ? "Há um novo treino para acompanhar" : "Você recebeu uma nova tarefa";
+            : unreadTrainingOnly ? `${latestTrainingActor} adicionou um novo treino` : "Você recebeu uma nova tarefa";
         collabInviteReadyLabel.setAttribute("aria-hidden", needsAttention ? "false" : "true");
     }
 }
@@ -2815,6 +2846,8 @@ function subscribeToCollaborationUpdates() {
         clearTimeout(refreshTimer);
         refreshTimer = setTimeout(async () => {
             await loadChecklistAndProgress();
+            await loadCollaborationIdentityLabels();
+            renderChecklist();
             if (modalTrainingReport?.classList.contains("active")) await renderTrainingReport();
         }, 220);
     };
@@ -2854,7 +2887,8 @@ function subscribeToCollaborationUpdates() {
 
 function showSharedTaskAlert(notification) {
     const trainingNotification = isTrainingCategory(notification.category_name);
-    const title = trainingNotification ? "Novo treino para acompanhar" : "Nova tarefa compartilhada";
+    const actorLabel = (getIdentityLabelByUserId(notification.actor_id) || "Participante").replace(/^@/, "");
+    const title = trainingNotification ? `${actorLabel} adicionou um novo treino` : "Nova tarefa compartilhada";
     const categoryText = notification.category_name ? ` em ${notification.category_name}` : "";
     const body = trainingNotification
         ? `“${notification.task_title || "Treino"}” foi adicionado${categoryText}. Disponível somente para visualização.`
@@ -4202,8 +4236,8 @@ function createTaskDOMElement(task) {
     const trainingCollaborative = isTrainingCategory(task.category);
     const trainingViewOnly = trainingCollaborative && !isTrainingTaskOwnedByCurrentUser(task);
     const trainingOwnerEmail = trainingCollaborative ? getTrainingTaskOwnerEmail(task) : "";
-    const trainingOwnerLabel = trainingOwnerEmail ? getIdentityLabel(trainingOwnerEmail) : "Dono da tarefa";
-    const trainingOwnerAvatar = trainingOwnerEmail ? getIdentityAvatar(trainingOwnerEmail) : "";
+    const trainingOwnerLabel = getIdentityLabelByUserId(task.user_id) || (trainingOwnerEmail ? getIdentityLabel(trainingOwnerEmail) : "Dono da tarefa");
+    const trainingOwnerAvatar = getIdentityAvatarByUserId(task.user_id) || (trainingOwnerEmail ? getIdentityAvatar(trainingOwnerEmail) : "");
     const trainingOwnerInitials = trainingOwnerLabel.replace("@", "").substring(0, 2).toUpperCase() || "DT";
     const reminderAt = getTaskReminderDateTime(task);
     const showReminderIndicator = hasPendingTaskReminder(task);
@@ -4759,6 +4793,9 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
                 let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
                 delete queue[`${id}_${selectedDate}`];
                 localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
+                if (task.completed && isTrainingCategory(task.category) && isCollaborativeCategory(task.category_id)) {
+                    requestSharedTaskPush(id, true, "training_completed");
+                }
             }
             pendingToggles.delete(id);
         }).catch(err => {
@@ -5233,10 +5270,10 @@ function canManageTrainingCollaborativeCategory(categoryName) {
     return !participantShare;
 }
 
-async function requestSharedTaskPush(taskId, silent = false) {
+async function requestSharedTaskPush(taskId, silent = false, eventType = "training_created") {
     if (!supabaseClient || !taskId) return false;
     try {
-        const { data, error } = await supabaseClient.functions.invoke("send-task-push", { body: { task_id: taskId } });
+        const { data, error } = await supabaseClient.functions.invoke("send-task-push", { body: { task_id: taskId, event_type: eventType } });
         if (error) throw error;
         const sent = Number(data && data.sent || 0);
         const recipients = Number(data && data.recipients || 0);
@@ -6111,7 +6148,7 @@ function renderNotifications() {
         item.innerHTML = `
             <div class="shared-task-notification-icon"><i data-lucide="list-checks"></i></div>
             <div class="shared-task-notification-copy">
-                <strong>${trainingNotification ? "Novo treino para acompanhar" : "Nova tarefa compartilhada"}</strong>
+                <strong>${trainingNotification ? `${escapeHTML((getIdentityLabelByUserId(notification.actor_id) || "Participante").replace(/^@/, ""))} adicionou um novo treino` : "Nova tarefa compartilhada"}</strong>
                 <span>“${escapeHTML(notification.task_title || (trainingNotification ? "Treino" : "Nova tarefa"))}” foi adicionad${trainingNotification ? "o" : "a"}${notification.category_name ? ` em <b>${escapeHTML(notification.category_name)}</b>` : ""}.${trainingNotification ? " Somente para visualização." : ""}</span>
                 ${notification.assigned_to ? `<small>Atribuída a ${escapeHTML(getIdentityLabel(notification.assigned_to))}${timeLabel ? ` • ${escapeHTML(timeLabel)}` : ""}</small>` : (timeLabel ? `<small>${escapeHTML(timeLabel)}</small>` : "")}
             </div>
