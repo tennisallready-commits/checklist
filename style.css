@@ -1766,6 +1766,14 @@ body.theme-girly .task-reminder-indicator {
     background: linear-gradient(135deg, #10b981 0%, #06b6d4 100%);
 }
 
+/* Nas tarefas, o avatar atribuído comum ocupa exatamente o mesmo espaço do
+   avatar de autoria usado nas tarefas colaborativas de treino. */
+.task-item .task-assignee-avatar:not(.owner) {
+    width: 23px;
+    height: 23px;
+    flex: 0 0 23px;
+}
+
 .modal-header-actions { display: flex; align-items: center; gap: 7px; }
 .ai-task-trigger { display: inline-flex; align-items: center; gap: 5px; padding: 7px 9px; border: 1px solid rgba(139,92,246,.4); border-radius: 9px; color: var(--primary); background: rgba(139,92,246,.1); font-size: .68rem; font-weight: 800; cursor: pointer; }
 .ai-task-trigger svg { width: 14px; height: 14px; }
@@ -3727,6 +3735,16 @@ body.theme-light .task-reminder-snooze-time, body.theme-girly .task-reminder-sno
 .shared-task-notification-copy strong { color: var(--text-primary); font-size: .82rem; }
 .shared-task-notification-copy span { color: var(--text-secondary); font-size: .74rem; line-height: 1.4; }
 .shared-task-notification-copy small { color: var(--text-muted); font-size: .63rem; line-height: 1.35; }
+.notifications-list-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.notifications-list-toolbar > span { color: var(--text-muted); font-size: .63rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.notifications-list-toolbar button { display: inline-flex; align-items: center; gap: 5px; padding: 6px 8px; border: 0; border-radius: 8px; color: #f87171; background: rgba(239,68,68,.08); font: inherit; font-size: .63rem; font-weight: 800; cursor: pointer; }
+.notifications-list-toolbar button:hover { background: rgba(239,68,68,.14); }
+.notifications-list-toolbar button:disabled { opacity: .38; cursor: default; }
+.notifications-list-toolbar button svg { width: 13px; height: 13px; }
+.notifications-empty-state { display: grid; place-items: center; gap: 7px; min-height: 150px; padding: 24px; color: var(--text-muted); text-align: center; }
+.notifications-empty-state svg { width: 30px; height: 30px; opacity: .55; }
+.notifications-empty-state strong { color: var(--text-secondary); font-size: .8rem; }
+.notifications-empty-state span { max-width: 240px; font-size: .68rem; line-height: 1.45; }
 
 .task-item.shared-task-focus .task-item-foreground {
     z-index: 8;

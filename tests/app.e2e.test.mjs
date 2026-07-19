@@ -90,6 +90,24 @@ test("abertura sem alterações pendentes já aparece sincronizada", async () =>
   await context.close();
 });
 
+test("checklist manual fica nas configurações e não no sininho", async () => {
+  const { context, page } = await openApp();
+  assert.equal(await page.locator("#modal-notifications #btn-open-manual-checklist").count(), 0);
+  await page.click("#btn-manage-tasks");
+  await page.waitForSelector("#modal-manage-tasks.active #btn-open-manual-checklist");
+  await page.click("#btn-open-manual-checklist");
+  await page.waitForSelector("#modal-manual-checklist.active");
+  await context.close();
+});
+
+test("sininho vazio mostra limpeza desativada e estado limpo", async () => {
+  const { context, page } = await openApp();
+  await page.click("#btn-notifications");
+  await page.waitForSelector("#modal-notifications.active .notifications-empty-state");
+  assert.equal(await page.locator("#btn-clear-notifications").isDisabled(), true);
+  await context.close();
+});
+
 test("aparelho conhecido sem dados exibe diagnóstico fixo do cache", async () => {
   const { context, page } = await openApp({ categories: [], tasks: [], waitForCache: false, knownDevice: true });
   await page.waitForSelector("#cache-diagnostic-notice");
@@ -117,6 +135,22 @@ test("avatar atribuído colaborativo aparece no primeiro desenho pelo cache", as
   const image = page.locator(`.task-item[data-id="${id}"] .task-assignee-avatar img`);
   await image.waitFor();
   assert.match(await image.getAttribute("src"), /^data:image\/svg\+xml/);
+  await context.close();
+});
+
+test("avatar atribuído comum tem o mesmo tamanho do avatar da tarefa de treino", async () => {
+  const ordinaryId = "25600000-0000-4000-8000-000000000001";
+  const trainingId = "25700000-0000-4000-8000-000000000001";
+  const ordinaryTask = task(ordinaryId, "Colaborativa comum", "Pessoal");
+  ordinaryTask.assigned_to = "parceira@checklist.local";
+  const { context, page } = await openApp({ categories: [normalCategory, trainingCategory], tasks: [ordinaryTask, task(trainingId, "Treino colaborativo", "Treino")] });
+  const ordinaryAvatar = page.locator(`.task-item[data-id="${ordinaryId}"] .task-assignee-avatar:not(.owner)`);
+  const trainingAvatar = page.locator(`.task-item[data-id="${trainingId}"] .task-assignee-avatar.owner`);
+  await ordinaryAvatar.waitFor();
+  await trainingAvatar.waitFor();
+  const ordinarySize = await ordinaryAvatar.evaluate(element => ({ width: getComputedStyle(element).width, height: getComputedStyle(element).height }));
+  const trainingSize = await trainingAvatar.evaluate(element => ({ width: getComputedStyle(element).width, height: getComputedStyle(element).height }));
+  assert.deepEqual(ordinarySize, trainingSize);
   await context.close();
 });
 

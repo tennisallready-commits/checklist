@@ -41,7 +41,7 @@
             }
         });
     </script>
-    <link rel="stylesheet" href="style.css?v=8.39">
+    <link rel="stylesheet" href="style.css?v=8.41">
     
     <!-- iOS / PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -479,6 +479,18 @@
 
                 <section class="settings-section">
                     <div class="settings-section-heading">
+                        <div class="settings-section-icon"><i data-lucide="notebook-pen"></i></div>
+                        <div><strong>Ferramentas pessoais</strong><span>Anotações rápidas que ficam separadas das tarefas.</span></div>
+                    </div>
+                    <button id="btn-open-manual-checklist" class="settings-action-row">
+                        <span class="settings-action-icon primary"><i data-lucide="clipboard-list"></i></span>
+                        <span><strong>Checklist manual e notas</strong><small>Abra seu checklist livre e bloco de notas</small></span>
+                        <i data-lucide="chevron-right" class="settings-action-chevron"></i>
+                    </button>
+                </section>
+
+                <section class="settings-section">
+                    <div class="settings-section-heading">
                         <div class="settings-section-icon"><i data-lucide="circle-help"></i></div>
                         <div><strong>Ajuda</strong><span>Conheça os atalhos disponíveis no aplicativo.</span></div>
                     </div>
@@ -509,7 +521,7 @@
 
                 <div class="settings-version">
                     <span>Checklist</span>
-                        <strong>Versão 10.18</strong>
+                        <strong>Versão 10.20</strong>
                 </div>
             </div>
         </div>
@@ -805,45 +817,12 @@
             </div>
             
             <div class="modal-body" style="padding-top: 16px; display: flex; flex-direction: column; gap: 12px;">
-                <!-- Botão de Checklist Manual -->
-                <button id="btn-open-manual-checklist" class="btn btn-primary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; font-weight: 700; background: linear-gradient(135deg, var(--primary), #8b5cf6); border: none; padding: 12px; border-radius: 8px; cursor: pointer; color: white;">
-                    <i data-lucide="clipboard-list" style="width: 18px; height: 18px;"></i>
-                    Checklist Manual / Notas
-                </button>
+                <div class="notifications-list-toolbar">
+                    <span>Histórico recente</span>
+                    <button id="btn-clear-notifications" type="button"><i data-lucide="trash-2"></i> Limpar notificações</button>
+                </div>
 
                 <div id="notifications-list-container" style="max-height: 40vh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-top: 4px;">
-                    <!-- Notification Item 1 -->
-                    <div style="display: flex; gap: 12px; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px;">
-                        <div style="background: rgba(16, 185, 129, 0.1); color: #10b981; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
-                            <i data-lucide="check-circle" style="width: 18px; height: 18px; color: #10b981;"></i>
-                        </div>
-                        <div>
-                            <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">Sincronização Ativa</h4>
-                            <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">Seu checklist está sincronizado com segurança na nuvem do Supabase.</p>
-                        </div>
-                    </div>
-
-                    <!-- Notification Item 2 -->
-                    <div style="display: flex; gap: 12px; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px;">
-                        <div style="background: rgba(139, 92, 246, 0.1); color: var(--primary); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
-                            <i data-lucide="brain-circuit" style="width: 18px; height: 18px; color: var(--primary);"></i>
-                        </div>
-                        <div>
-                            <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">Dica de Produtividade</h4>
-                            <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">Tente completar primeiro as tarefas mais pesadas da manhã para ativar o efeito Momentum.</p>
-                        </div>
-                    </div>
-
-                    <!-- Notification Item 3 -->
-                    <div style="display: flex; gap: 12px; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px;">
-                        <div style="background: rgba(59, 130, 246, 0.1); color: #3b82f6; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
-                            <i data-lucide="sparkles" style="width: 18px; height: 18px; color: #3b82f6;"></i>
-                        </div>
-                        <div>
-                            <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">Gestos de Deslizar</h4>
-                            <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">Agora você pode fechar qualquer janela do app deslizando-a para baixo! Experimente!</p>
-                        </div>
-                    </div>
                 </div>
             </div>
         </div>
@@ -1097,6 +1076,6 @@
     </div>
 
     <script src="storage.js?v=1.02"></script>
-    <script src="app.js?v=10.18"></script>
+    <script src="app.js?v=10.20"></script>
 </body>
 </html>

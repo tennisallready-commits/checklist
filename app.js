@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.37";
+const SERVICE_WORKER_URL = "./sw.js?v=10.39";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -479,6 +479,7 @@ const btnNotifications = document.getElementById("btn-notifications");
 const modalNotifications = document.getElementById("modal-notifications");
 const btnCloseNotificationsModal = document.getElementById("btn-close-notifications-modal");
 const notificationsListContainer = document.getElementById("notifications-list-container");
+const btnClearNotifications = document.getElementById("btn-clear-notifications");
 const notificationsBadge = document.getElementById("notifications-badge");
 const collabInviteReadyLabel = document.getElementById("collab-invite-ready-label");
 const notificationsEnabledToggle = document.getElementById("notifications-enabled-toggle");
@@ -1949,12 +1950,14 @@ function setupEventListeners() {
     // Manual Checklist / Notepad Events
     if (btnOpenManualChecklist) {
         btnOpenManualChecklist.addEventListener("click", () => {
-            closeModal(modalNotifications);
+            closeModal(modalManageTasks);
             openModal(modalManualChecklist);
             loadManualChecklist();
             loadManualNotes();
         });
     }
+
+    btnClearNotifications?.addEventListener("click", clearNotificationHistory);
 
     if (btnCloseManualChecklistModal) {
         btnCloseManualChecklistModal.addEventListener("click", () => {
@@ -6838,47 +6841,41 @@ function renderNotifications() {
         notificationsListContainer.appendChild(item);
     });
 
-    // 3. Renderizar notificações estáticas do sistema
-    const staticNotifications = [
-        {
-            icon: "cloud-lightning",
-            iconBg: "rgba(16, 185, 129, 0.1)",
-            iconColor: "#10b981",
-            title: "Sincronização Ativa",
-            body: "Seu checklist está sincronizado com segurança na nuvem do Supabase."
-        },
-        {
-            icon: "brain-circuit",
-            iconBg: "rgba(139, 92, 246, 0.1)",
-            iconColor: "var(--primary)",
-            title: "Dica de Produtividade",
-            body: "Tente completar primeiro as tarefas mais pesadas da manhã para ativar o efeito Momentum."
-        },
-        {
-            icon: "sparkles",
-            iconBg: "rgba(59, 130, 246, 0.1)",
-            iconColor: "#3b82f6",
-            title: "Gestos de Deslizar",
-            body: "Agora você pode fechar qualquer janela do app deslizando-a para baixo! Experimente!"
-        }
-    ];
-
-    staticNotifications.forEach(notif => {
-        const item = document.createElement("div");
-        item.style.cssText = "display: flex; gap: 12px; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px;";
-        item.innerHTML = `
-            <div style="background: ${notif.iconBg}; color: ${notif.iconColor}; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
-                <i data-lucide="${notif.icon}" style="width: 18px; height: 18px; color: ${notif.iconColor};"></i>
-            </div>
-            <div>
-                <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">${escapeHTML(notif.title)}</h4>
-                <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">${escapeHTML(notif.body)}</p>
-            </div>
-        `;
-        notificationsListContainer.appendChild(item);
-    });
+    const hasClearableNotifications = (sharedTaskNotifications || []).length > 0;
+    if (btnClearNotifications) btnClearNotifications.disabled = !hasClearableNotifications;
+    if (!notificationsListContainer.children.length) {
+        notificationsListContainer.innerHTML = `<div class="notifications-empty-state"><i data-lucide="bell-off"></i><strong>Nenhuma notificação</strong><span>Novos convites e atividades compartilhadas aparecerão aqui.</span></div>`;
+    }
 
     lucide.createIcons();
+}
+
+async function clearNotificationHistory() {
+    if (!(sharedTaskNotifications || []).length) return;
+    const confirmed = await showAppConfirm("Apagar o histórico de notificações? Convites pendentes continuarão disponíveis.", {
+        title: "Limpar notificações",
+        confirmText: "Limpar",
+        danger: true
+    });
+    if (!confirmed) return;
+    const previousNotifications = [...sharedTaskNotifications];
+    sharedTaskNotifications = [];
+    renderNotifications();
+    updateCollaborationInviteAttention();
+    if (!supabaseClient || !currentUser) {
+        showAppNotice("Notificações limpas.", "success");
+        return;
+    }
+    btnClearNotifications.disabled = true;
+    const { error } = await supabaseClient.from("shared_task_notifications").delete().eq("recipient_id", currentUser.id);
+    if (error) {
+        sharedTaskNotifications = previousNotifications;
+        renderNotifications();
+        updateCollaborationInviteAttention();
+        showAppNotice(`Não foi possível limpar: ${error.message}`, "warning");
+        return;
+    }
+    showAppNotice("Notificações limpas.", "success");
 }
 
 function findRenderedTaskElement(taskId) {
