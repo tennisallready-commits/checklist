@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.17";
+const SERVICE_WORKER_URL = "./sw.js?v=10.19";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -129,6 +129,7 @@ const idb = {
 };
 
 const localPrefs = window.localStorage;
+const CLOUD_SYNC_QUEUE_KEYS = new Set(["offline_tasks", "offline_categories", "offline_completions_queue", "offline_task_updates_queue"]);
 const localStorage = {
     getItem(key) {
         if (dbCache.hasOwnProperty(key)) {
@@ -143,10 +144,12 @@ const localStorage = {
                 dbCache[key] = parsed;
                 idb.put(key, parsed);
                 scheduleSyncStatusRefresh();
+                if (CLOUD_SYNC_QUEUE_KEYS.has(key)) scheduleCloudSync("fila-local", 450);
             } catch (e) {
                 dbCache[key] = value;
                 idb.put(key, value);
                 scheduleSyncStatusRefresh();
+                if (CLOUD_SYNC_QUEUE_KEYS.has(key)) scheduleCloudSync("fila-local", 450);
             }
             return;
         }
@@ -421,27 +424,79 @@ function hasPendingSyncData() {
     const pendingCompletions = Object.keys(dbCache.offline_completions_queue || {}).length > 0;
     const pendingUpdates = Object.keys(dbCache.offline_task_updates_queue || {}).length > 0;
     const pendingInvites = (JSON.parse(localStorage.getItem("offline_collaboration_invites_queue")) || []).length > 0;
-    return pendingCategories || pendingTasks || pendingCompletions || pendingUpdates || pendingInvites;
+    const pendingTrainingPhotos = Number(localPrefs.getItem("pending_training_photo_uploads") || 0) > 0;
+    return pendingCategories || pendingTasks || pendingCompletions || pendingUpdates || pendingInvites || pendingTrainingPhotos;
 }
 
 function refreshSyncStatusFromQueues() {
     if (!syncStatusEl) return;
     const hasPending = hasPendingSyncData();
+    const pendingCount = getPendingSyncCount();
 
     if (!navigator.onLine) {
-        setSyncStatus("offline", hasPending ? "Offline — pendente" : "Offline", hasPending ? "Sem internet; alterações aguardando sincronização" : "Sem conexão com a internet");
+        setSyncStatus("offline", hasPending ? `Offline — ${pendingCount} pendente${pendingCount === 1 ? "" : "s"}` : "Offline", hasPending ? "Sem internet; toque para tentar quando a conexão voltar" : "Sem conexão com a internet");
     } else if (isSyncing) {
-        setSyncStatus("syncing", "Salvando…", "Enviando alterações para a nuvem");
+        setSyncStatus("syncing", pendingCount ? `Salvando ${pendingCount}…` : "Confirmando…", "Enviando alterações para a nuvem");
     } else if (hasPending) {
-        setSyncStatus("pending", "Pendente", "Alterações aguardando sincronização");
+        setSyncStatus("pending", `${pendingCount} pendente${pendingCount === 1 ? "" : "s"}`, cloudSyncLastError ? `Última tentativa: ${cloudSyncLastError}. Toque para tentar novamente.` : "Toque para sincronizar agora");
     } else {
-        setSyncStatus("synced", "Sincronizado", "Todos os dados estão sincronizados");
+        const lastSuccess = cloudSyncLastSuccessAt ? new Date(cloudSyncLastSuccessAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
+        setSyncStatus("synced", "Sincronizado", lastSuccess ? `Última confirmação às ${lastSuccess}` : "Todos os dados estão sincronizados");
     }
 }
 
 function scheduleSyncStatusRefresh(delay = 0) {
     clearTimeout(syncStatusRefreshTimer);
     syncStatusRefreshTimer = setTimeout(refreshSyncStatusFromQueues, delay);
+}
+
+let cloudSyncTimer = null;
+let cloudSyncRerunRequested = false;
+let cloudSyncRetryCount = 0;
+let cloudSyncLastError = "";
+let cloudSyncLastSuccessAt = 0;
+
+function getPendingSyncCount() {
+    const pendingCategories = (dbCache.offline_categories || []).filter(item => isTemporaryId(item.id) && item.is_active !== false).length;
+    const pendingTasks = (dbCache.offline_tasks || []).filter(item => isTemporaryId(item.id) && item.is_active !== false).length;
+    const pendingCompletions = Object.keys(dbCache.offline_completions_queue || {}).length;
+    const pendingUpdates = Object.keys(dbCache.offline_task_updates_queue || {}).length;
+    const pendingInvites = (JSON.parse(localPrefs.getItem("offline_collaboration_invites_queue") || "[]") || []).length;
+    const pendingTrainingPhotos = Number(localPrefs.getItem("pending_training_photo_uploads") || 0);
+    return pendingCategories + pendingTasks + pendingCompletions + pendingUpdates + pendingInvites + pendingTrainingPhotos;
+}
+
+function scheduleCloudSync(reason = "alteração-local", delay = 350) {
+    if (!supabaseClient || !currentUser || !navigator.onLine) return;
+    if (isSyncing) {
+        cloudSyncRerunRequested = true;
+        return;
+    }
+    clearTimeout(cloudSyncTimer);
+    cloudSyncTimer = setTimeout(() => {
+        cloudSyncTimer = null;
+        if (!hasPendingSyncData()) {
+            refreshSyncStatusFromQueues();
+            return;
+        }
+        syncOfflineDataToCloud(reason);
+    }, Math.max(0, delay));
+}
+
+function scheduleCloudSyncRetry() {
+    if (!navigator.onLine || !hasPendingSyncData()) return;
+    cloudSyncRetryCount = Math.min(cloudSyncRetryCount + 1, 6);
+    const delay = Math.min(30000, 1200 * (2 ** (cloudSyncRetryCount - 1)));
+    scheduleCloudSync("tentativa-automática", delay);
+}
+
+function clearQueuedEntryIfCurrent(queueName, entryKey, expectedValue) {
+    const queue = JSON.parse(localStorage.getItem(queueName)) || {};
+    if (!Object.prototype.hasOwnProperty.call(queue, entryKey)) return true;
+    if (JSON.stringify(queue[entryKey]) !== JSON.stringify(expectedValue)) return false;
+    delete queue[entryKey];
+    localStorage.setItem(queueName, JSON.stringify(queue));
+    return true;
 }
 
 // Modals
@@ -569,6 +624,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
         navigator.serviceWorker.addEventListener('controllerchange', () => {
             if (reloadingForServiceWorkerUpdate) return;
+            // Não interrompe um destino aberto por push. A nova versão do
+            // worker já está ativa e pode ser usada sem recarregar esta tela.
+            if (modalTrainingReport?.classList.contains("active")) return;
             reloadingForServiceWorkerUpdate = true;
             window.location.reload();
         });
@@ -2058,12 +2116,41 @@ function setupEventListeners() {
     window.addEventListener("online", () => {
         console.log("Internet restaurada! Sincronizando dados offline...");
         setSyncStatus("syncing", "Salvando…", "Conexão restaurada; sincronizando alterações");
-        syncOfflineDataToCloud();
+        cloudSyncRetryCount = 0;
+        scheduleCloudSync("conexão-restaurada", 50);
     });
 
     window.addEventListener("offline", () => {
         refreshSyncStatusFromQueues();
     });
+
+    syncStatusEl?.addEventListener("click", () => {
+        if (!navigator.onLine) {
+            showAppNotice("Sem conexão. Suas alterações permanecem guardadas neste aparelho.", "warning");
+            return;
+        }
+        if (!hasPendingSyncData() && !cloudSyncLastError) {
+            loadChecklistAndProgress().then(() => refreshSyncStatusFromQueues());
+            return;
+        }
+        cloudSyncRetryCount = 0;
+        scheduleCloudSync("toque-do-usuário", 0);
+    });
+    syncStatusEl?.addEventListener("keydown", event => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        syncStatusEl.click();
+    });
+
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible" && hasPendingSyncData()) scheduleCloudSync("app-retomado", 120);
+    });
+    window.addEventListener("focus", () => {
+        if (hasPendingSyncData()) scheduleCloudSync("janela-em-foco", 180);
+    });
+    setInterval(() => {
+        if (document.visibilityState === "visible" && navigator.onLine && hasPendingSyncData()) scheduleCloudSync("verificação-periódica", 0);
+    }, 30000);
 
     // Auth Listeners & Forms
     const formAuth = document.getElementById("form-auth");
@@ -4799,6 +4886,7 @@ function saveNewTasksOrder(container) {
                     
                     let updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
                     updatesQueue[realId] = { ...(updatesQueue[realId] || {}), ...dbUpdates };
+                    const queuedUpdate = updatesQueue[realId];
                     localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
 
                     supabaseClient.from('tasks').update(dbUpdates).eq('id', realId)
@@ -4806,9 +4894,7 @@ function saveNewTasksOrder(container) {
                             if (error) {
                                 console.warn("Erro ao reordenar tarefa " + realId, error);
                             } else {
-                                let queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
-                                delete queue[realId];
-                                localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
+                                clearQueuedEntryIfCurrent("offline_task_updates_queue", realId, queuedUpdate);
                             }
                         })
                         .catch(err => console.error("Erro assíncrono ao salvar ordenação:", err));
@@ -4938,12 +5024,11 @@ async function moveFutureTaskToCurrentMoment(id) {
     if (supabaseClient && currentUser && !isTemporaryId(id)) {
         const queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
         queue[id] = { ...(queue[id] || {}), ...updates };
+        const queuedUpdate = queue[id];
         localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
         supabaseClient.from("tasks").update(updates).eq("id", id).then(({ error }) => {
             if (error) return console.warn("A tarefa foi movida para hoje apenas neste aparelho por enquanto:", error.message);
-            const pending = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
-            delete pending[id];
-            localStorage.setItem("offline_task_updates_queue", JSON.stringify(pending));
+            clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdate);
         }).catch(error => console.warn("Não foi possível sincronizar a nova data da tarefa:", error.message));
     }
     selectedDate = todayStr;
@@ -5032,6 +5117,8 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
 
     // Salva sempre no LocalStorage primeiro para resiliência e velocidade
     saveCompletionOffline(id, selectedDate, task.completed);
+    const completionQueueKey = `${id}_${selectedDate}`;
+    const queuedCompletion = (JSON.parse(localStorage.getItem("offline_completions_queue")) || {})[completionQueueKey];
 
     // Se estiver conectado, envia para a nuvem em segundo plano sem bloquear a interface
     if (supabaseClient && currentUser && !isTemporaryId(id)) {
@@ -5043,9 +5130,7 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
             if (error) {
                 console.warn("Erro ao salvar conclusão no Supabase. Mantido offline.", error.message);
             } else {
-                let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
-                delete queue[`${id}_${selectedDate}`];
-                localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
+                clearQueuedEntryIfCurrent("offline_completions_queue", completionQueueKey, queuedCompletion);
             }
             pendingToggles.delete(id);
         }).catch(err => {
@@ -5089,10 +5174,21 @@ async function finishPendingTrainingCompletion(photoDataUrl) {
     const record = { id: `${id}_${trainingDate}_${Date.now()}`, taskId: id, taskTitle: pendingTask?.title || "Treino", category: pendingTask?.category || currentFilter || "Treino", date: trainingDate, photo: photoDataUrl, createdBy: currentUser?.id || null, createdAt: new Date().toISOString() };
     records.unshift(record);
     await idb.put("training_photo_records", records.slice(0, 120));
+    updatePendingTrainingPhotoFlag(records.slice(0, 120));
     scheduleTrainingThumbnailCache([record]);
     const uploadResult = await uploadTrainingPhotoRecord(record);
     showAppNotice(uploadResult.ok ? "Foto compartilhada no relatório de treinos." : `Foto salva neste aparelho. Falha na nuvem: ${uploadResult.error}`, uploadResult.ok ? "success" : "warning");
     if (uploadResult.ok) notifyCompletion(record.taskId);
+    else scheduleCloudSync("foto-de-treino-pendente", 1200);
+}
+
+function updatePendingTrainingPhotoFlag(records) {
+    const pendingCount = currentUser
+        ? (records || []).filter(record => record.photo && !record.photoPath && String(record.createdBy || "") === String(currentUser.id)).length
+        : 0;
+    if (pendingCount) localPrefs.setItem("pending_training_photo_uploads", String(pendingCount));
+    else localPrefs.removeItem("pending_training_photo_uploads");
+    scheduleSyncStatusRefresh();
 }
 
 async function uploadTrainingPhotoRecord(record) {
@@ -5122,9 +5218,9 @@ async function uploadTrainingPhotoRecord(record) {
         const blob = await (await fetch(record.photo)).blob();
         const safeRecordId = String(record.id).replace(/[^a-zA-Z0-9_-]/g, "-");
         const path = `${category.id}/${currentUser.id}/${safeRecordId}.jpg`;
-        const { error: uploadError } = await supabaseClient.storage.from("training-photos").upload(path, blob, { contentType: "image/jpeg", upsert: false });
+        const { error: uploadError } = await supabaseClient.storage.from("training-photos").upload(path, blob, { contentType: "image/jpeg", upsert: true });
         if (uploadError) throw new Error(`envio do arquivo: ${uploadError.message}`);
-        const { error: metadataError } = await supabaseClient.from("training_photos").insert({
+        const { error: metadataError } = await supabaseClient.from("training_photos").upsert({
             id: record.id,
             category_id: category.id,
             task_id: String(record.taskId),
@@ -5134,13 +5230,12 @@ async function uploadTrainingPhotoRecord(record) {
             created_by: currentUser.id,
             creator_label: getIdentityLabel(currentUser.email),
             creator_avatar_url: getIdentityAvatar(currentUser.email) || null
-        });
-        if (metadataError) {
-            await supabaseClient.storage.from("training-photos").remove([path]);
-            throw new Error(`registro da foto: ${metadataError.message}`);
-        }
+        }, { onConflict: "id" });
+        if (metadataError) throw new Error(`registro da foto: ${metadataError.message}`);
         const cachedRecords = await idb.get("training_photo_records") || [];
-        await idb.put("training_photo_records", cachedRecords.map(item => String(item.id) === String(record.id) ? { ...item, taskId: record.taskId, photoPath: path } : item));
+        const updatedRecords = cachedRecords.map(item => String(item.id) === String(record.id) ? { ...item, taskId: record.taskId, photoPath: path } : item);
+        await idb.put("training_photo_records", updatedRecords);
+        updatePendingTrainingPhotoFlag(updatedRecords);
         return { ok: true };
     } catch (error) {
         console.warn("A foto do treino ficou apenas no aparelho:", error.message);
@@ -5148,11 +5243,33 @@ async function uploadTrainingPhotoRecord(record) {
     }
 }
 
+async function syncPendingTrainingPhotoUploads() {
+    const records = await idb.get("training_photo_records") || [];
+    const pending = records.filter(record => record.photo && !record.photoPath && String(record.createdBy || "") === String(currentUser?.id || ""));
+    updatePendingTrainingPhotoFlag(records);
+    if (!pending.length) return;
+    const failures = [];
+    for (const record of pending) {
+        const result = await uploadTrainingPhotoRecord(record);
+        if (result.ok) {
+            const task = getTaskById(record.taskId) || allActiveTasks.find(item => item.title === record.taskTitle && item.category === record.category);
+            if (task && (isCollaborativeCategory(task.category_id) || isTrainingCollaborativeCategory(task.category))) {
+                await requestSharedTaskPush(task.id, true, "training_completed", record.date);
+            }
+        } else {
+            failures.push(result.error);
+        }
+    }
+    if (failures.length) throw new Error(`Fotos pendentes: ${failures[0]}`);
+}
+
 async function deleteTrainingPhotosForTask(task) {
     if (!task || !isTrainingCategory(task.category)) return { ok: true };
     const localRecords = await idb.get("training_photo_records") || [];
     const recordsToRemove = localRecords.filter(record => String(record.taskId) === String(task.id));
-    await idb.put("training_photo_records", localRecords.filter(record => String(record.taskId) !== String(task.id)));
+    const retainedRecords = localRecords.filter(record => String(record.taskId) !== String(task.id));
+    await idb.put("training_photo_records", retainedRecords);
+    updatePendingTrainingPhotoFlag(retainedRecords);
     await removeTrainingThumbnailCache(recordsToRemove.map(record => record.id));
     if (!supabaseClient || !currentUser || isTemporaryId(task.id) || !navigator.onLine) {
         return { ok: true, localOnly: true };
@@ -5246,7 +5363,8 @@ async function cleanupOrphanedTrainingPhotos() {
 
 async function getTrainingPhotoRecords(categoryName = null) {
     cleanupOrphanedTrainingPhotos();
-    const localRecords = await idb.get("training_photo_records") || [];
+    const allLocalRecords = await idb.get("training_photo_records") || [];
+    const localRecords = currentUser ? allLocalRecords.filter(record => String(record.createdBy || "") === String(currentUser.id)) : [];
     const filteredLocal = categoryName ? localRecords.filter(record => record.category === categoryName) : localRecords;
     if (!supabaseClient || !currentUser || !navigator.onLine) return filteredLocal;
     const visibleCategories = categories.filter(category => isTrainingCategory(category.name) && (!categoryName || normalizeCategoryName(category.name) === normalizeCategoryName(categoryName)));
@@ -5678,6 +5796,9 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
     const createdAt = createdAtDate.toISOString();
 
     const context = analyzeTaskContext(title, category, tasks) || {};
+    // Identificador estável permite recuperar a mesma criação se a internet
+    // cair depois do insert, mas antes de o aparelho receber a resposta.
+    context.sync_token = context.sync_token || `task-${currentUser?.id || "local"}-${tempId}`;
     if (shifts && shifts.length > 0) {
         context.turnos = shifts;
     }
@@ -5719,38 +5840,9 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
     renderChecklist();
     updateProgress();
 
-    // 2. ENVIA PARA A NUVEM EM SEGUNDO PLANO (Sem bloquear a interface do usuário!)
-    if (supabaseClient && currentUser) {
-        insertTaskWithCategoryFallback(newTask)
-            .then(({ data, error }) => {
-                if (error) {
-                    console.warn("Falha ao salvar tarefa na nuvem. Mantendo localmente.", error.message);
-                    return;
-                }
-                if (data && data.length > 0) {
-                    const realTask = data[0];
-                    // Atualiza ID na memória
-                    tasks = tasks.map(t => String(t.id) === String(tempId) ? { ...t, id: realTask.id } : t);
-                    allActiveTasks = allActiveTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
-                    // Mantém o card já renderizado alinhado com o ID definitivo.
-                    // Sem isso, o primeiro check logo após a criação ainda usava
-                    // o ID temporário e não encontrava mais a tarefa na memória.
-                    document.querySelectorAll(".task-item[data-id]").forEach(taskElement => {
-                        if (String(taskElement.dataset.id) === String(tempId)) {
-                            taskElement.dataset.id = realTask.id;
-                        }
-                    });
-                    // Atualiza local storage removendo o temporário e salvando o real
-                    let currentLocalTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
-                    currentLocalTasks = currentLocalTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
-                    localStorage.setItem("offline_tasks", JSON.stringify(currentLocalTasks));
-                    if (isCollaborativeCategory(realTask.category_id)) requestSharedTaskPush(realTask.id);
-                }
-            })
-            .catch(err => {
-                console.error("Erro assíncrono ao adicionar tarefa:", err);
-            });
-    }
+    // Toda criação usa o mesmo coordenador. Isso elimina a corrida entre o
+    // insert direto e a fila offline quando a conexão oscila.
+    scheduleCloudSync("nova-tarefa", 80);
 }
 
 async function insertTaskWithCategoryFallback(taskPayload) {
@@ -5868,6 +5960,7 @@ async function renameTask(id, newTitle, context) {
 
         let updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
         updatesQueue[id] = { ...(updatesQueue[id] || {}), ...updates };
+        const queuedUpdate = updatesQueue[id];
         localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
 
         supabaseClient.from('tasks').update(updates).eq('id', id)
@@ -5875,9 +5968,7 @@ async function renameTask(id, newTitle, context) {
                 if (error) {
                     console.warn("Erro ao renomear no Supabase. Mantido localmente.", error.message);
                 } else {
-                    let queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
-                    delete queue[id];
-                    localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
+                    clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdate);
                 }
             })
             .catch(err => {
@@ -5962,6 +6053,7 @@ async function updateTask(id, updates) {
 
         let updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
         updatesQueue[id] = { ...(updatesQueue[id] || {}), ...dbUpdates };
+        const queuedUpdate = updatesQueue[id];
         localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
 
         supabaseClient.from('tasks').update(dbUpdates).eq('id', id)
@@ -5969,9 +6061,7 @@ async function updateTask(id, updates) {
                 if (error) {
                     console.warn("Erro ao atualizar tarefa no Supabase. Mantido localmente.", error.message);
                 } else {
-                    let queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
-                    delete queue[id];
-                    localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
+                    clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdate);
                 }
             })
             .catch(err => {
@@ -6097,6 +6187,7 @@ async function deleteTask(id) {
 
     let updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
     updatesQueue[taskId] = { ...(updatesQueue[taskId] || {}), is_active: false };
+    const queuedDeletion = updatesQueue[taskId];
     localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
 
     renderChecklist();
@@ -6121,9 +6212,7 @@ async function deleteTask(id) {
                 if (error) {
                     console.warn("Erro ao deletar no Supabase. Mantido localmente.", error.message);
                 } else {
-                    let queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
-                    delete queue[taskId];
-                    localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
+                    clearQueuedEntryIfCurrent("offline_task_updates_queue", taskId, queuedDeletion);
                 }
                 pendingDeletes.delete(taskId);
             })
@@ -6178,9 +6267,7 @@ async function excludeTaskForToday(id) {
                 if (error) {
                     console.warn("Erro ao excluir do dia no Supabase. Mantido localmente.", error.message);
                 } else {
-                    let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
-                    delete queue[`${taskId}_${actionDate}`];
-                    localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
+                    clearQueuedEntryIfCurrent("offline_completions_queue", `${taskId}_${actionDate}`, "excluded");
                 }
                 pendingDeletes.delete(taskId);
             })
@@ -7222,30 +7309,9 @@ async function addCategory(name, type) {
 
     renderCategories();
 
-    // 2. ENVIAR PARA O SUPABASE. O user_id explícito é necessário para a
-    // política RLS reconhecer a conta atual como proprietária da categoria.
-    if (supabaseClient && currentUser) {
-        try {
-            const realCat = await insertOwnedCategoryInCloud({ name: normalizedName, type });
-            updateLocalCatId(tempId, realCat);
-            refreshSyncStatusFromQueues();
-        } catch (error) {
-            if (error.code === "CATEGORY_ALREADY_EXISTS") {
-                categories = categories.filter(category => String(category.id) !== String(tempId));
-                const cachedCategories = (JSON.parse(localStorage.getItem("offline_categories")) || [])
-                    .filter(category => String(category.id) !== String(tempId));
-                localStorage.setItem("offline_categories", JSON.stringify(cachedCategories));
-                renderCategories();
-                showAppNotice(error.message, "warning");
-                return false;
-            }
-            // Mantém o registro temporário para uma nova tentativa automática.
-            console.error("Erro ao sincronizar nova categoria:", error);
-            setSyncStatus("error", "Erro ao sincronizar", `A categoria ficou salva neste aparelho e será reenviada: ${error.message}`);
-            showAppNotice(`Erro ao sincronizar categoria: ${error.message}`, "error");
-            return false;
-        }
-    }
+    // A mesma fila atende criações online e offline. Assim não existem dois
+    // inserts concorrentes para a categoria quando a conexão oscila.
+    scheduleCloudSync("nova-categoria", 80);
     return true;
 }
 
@@ -7277,11 +7343,7 @@ async function insertOwnedCategoryInCloud({ name, type }) {
             .maybeSingle();
         if (existingResult.error) throw existingResult.error;
         if (!existingResult.data) throw result.error;
-        if (existingResult.data.is_active !== false) {
-            const duplicateError = new Error(`A categoria “${existingResult.data.name}” já existe.`);
-            duplicateError.code = "CATEGORY_ALREADY_EXISTS";
-            throw duplicateError;
-        }
+        if (existingResult.data.is_active !== false) return existingResult.data;
         const reactivated = await supabaseClient
             .from("categories")
             .update({ is_active: true })
@@ -8293,6 +8355,7 @@ function setupSupabaseAuth() {
             currentUser = session.user;
             learningCloudState = "idle";
             reportsCloudState = "idle";
+            updatePendingTrainingPhotoFlag(await idb.get("training_photo_records") || []);
             document.getElementById("auth-container").style.display = "none";
             if (!restoredFromCache) setAppContainerVisible(false);
 
@@ -8416,6 +8479,7 @@ function setupSupabaseAuth() {
             localStorage.removeItem("offline_task_updates_queue");
             localStorage.removeItem("offline_collaboration_invites_queue");
             localPrefs.removeItem("checklist_device_cache_ready");
+            localPrefs.removeItem("pending_training_photo_uploads");
             document.documentElement.classList.remove("checklist-device-ready");
             
             tasks = [];
@@ -8428,18 +8492,38 @@ function setupSupabaseAuth() {
 
 let isSyncing = false;
 
-async function syncOfflineDataToCloud() {
+async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
     if (!supabaseClient || !currentUser) {
         refreshSyncStatusFromQueues();
         return;
     }
-    if (isSyncing) return;
+    if (!navigator.onLine) {
+        refreshSyncStatusFromQueues();
+        return;
+    }
+    if (!lockAcquired && navigator.locks?.request) {
+        const lockName = `checklist-cloud-sync-${currentUser.id}`;
+        return navigator.locks.request(lockName, { ifAvailable: true }, lock => {
+            if (!lock) {
+                scheduleCloudSync("aguardando-outra-aba", 900);
+                return;
+            }
+            return syncOfflineDataToCloud(reason, true);
+        });
+    }
+    if (isSyncing) {
+        cloudSyncRerunRequested = true;
+        return;
+    }
+    clearTimeout(cloudSyncTimer);
+    cloudSyncTimer = null;
     isSyncing = true;
+    cloudSyncRerunRequested = false;
     let syncSucceeded = false;
     setSyncStatus("syncing", "Salvando…", "Enviando alterações para a nuvem");
 
     try {
-        console.log("[Sync] Iniciando sincronização sequencial...");
+        console.log(`[Sync] Iniciando sincronização sequencial (${reason})...`);
 
         // 1. Sincronizar novas categorias criadas offline
         let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
@@ -8448,7 +8532,8 @@ async function syncOfflineDataToCloud() {
             const realCat = await insertOwnedCategoryInCloud({ name: pending.name, type: pending.type });
             const tempId = pending.id;
             categories = categories.map(c => String(c.id) === String(tempId) ? realCat : c);
-            localCats = localCats.map(c => String(c.id) === String(tempId) ? realCat : c);
+            localCats = (JSON.parse(localStorage.getItem("offline_categories")) || [])
+                .map(c => String(c.id) === String(tempId) ? realCat : c);
             localStorage.setItem("offline_categories", JSON.stringify(localCats));
         }
 
@@ -8456,15 +8541,23 @@ async function syncOfflineDataToCloud() {
         let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
         const pendingInsertTasks = localTasks.filter(t => isTemporaryId(t.id) && t.is_active !== false);
         for (const pending of pendingInsertTasks) {
+            let pendingContext = typeof pending.context === "string" ? (() => { try { return JSON.parse(pending.context); } catch (_) { return {}; } })() : { ...(pending.context || {}) };
+            pendingContext.sync_token = pendingContext.sync_token || `task-${currentUser.id}-${pending.id}`;
+            if (JSON.stringify(pending.context || {}) !== JSON.stringify(pendingContext)) {
+                pending.context = pendingContext;
+                localTasks = (JSON.parse(localStorage.getItem("offline_tasks")) || [])
+                    .map(task => String(task.id) === String(pending.id) ? { ...task, context: pendingContext } : task);
+                localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+            }
             const newTaskPayload = {
                 title: pending.title,
                 category: pending.category,
                 is_recurring: pending.is_recurring,
                 is_active: true,
-                created_at: pending.created_at || new Date().toISOString()
+                created_at: pending.created_at || new Date().toISOString(),
+                context: pendingContext
             };
             if (pending.repeat_days) newTaskPayload.repeat_days = pending.repeat_days;
-            if (pending.context) newTaskPayload.context = pending.context;
             if (pending.assigned_to) newTaskPayload.assigned_to = pending.assigned_to;
             if (pending.category_id) newTaskPayload.category_id = pending.category_id;
             const matchingCategory = categories.find(cat => cat.name === pending.category && !isTemporaryId(cat.id));
@@ -8474,17 +8567,35 @@ async function syncOfflineDataToCloud() {
             else delete newTaskPayload.category_id;
             newTaskPayload.user_id = currentUser.id;
 
-            const { data, error } = await insertTaskWithCategoryFallback(newTaskPayload);
-            if (error) throw error;
-            if (data && data.length > 0) {
-                const realTask = data[0];
+            // Recupera um insert cuja resposta possa ter se perdido. O token
+            // torna a criação idempotente sem depender do título da tarefa.
+            const recovered = await supabaseClient.from("tasks")
+                .select("*")
+                .eq("user_id", currentUser.id)
+                .contains("context", { sync_token: pendingContext.sync_token })
+                .limit(1)
+                .maybeSingle();
+            if (recovered.error) throw recovered.error;
+            let realTask = recovered.data || null;
+            let createdNow = false;
+            if (!realTask) {
+                const { data, error } = await insertTaskWithCategoryFallback(newTaskPayload);
+                if (error) throw error;
+                realTask = data?.[0] || null;
+                createdNow = Boolean(realTask);
+            }
+            if (realTask) {
                 const tempId = pending.id;
                 
                 tasks = tasks.map(t => String(t.id) === String(tempId) ? { ...t, id: realTask.id } : t);
                 allActiveTasks = allActiveTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
-                localTasks = localTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
+                localTasks = (JSON.parse(localStorage.getItem("offline_tasks")) || [])
+                    .map(t => String(t.id) === String(tempId) ? realTask : t);
                 localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
-                if (isCollaborativeCategory(realTask.category_id)) await requestSharedTaskPush(realTask.id);
+                document.querySelectorAll(".task-item[data-id]").forEach(taskElement => {
+                    if (String(taskElement.dataset.id) === String(tempId)) taskElement.dataset.id = realTask.id;
+                });
+                if (createdNow && isCollaborativeCategory(realTask.category_id)) await requestSharedTaskPush(realTask.id);
                 
                 let compQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
                 let updatedCompQueue = {};
@@ -8545,6 +8656,7 @@ async function syncOfflineDataToCloud() {
         for (const key of queueKeys) {
             const [taskId, date] = key.split('_');
             if (isTemporaryId(taskId)) continue;
+            const queuedValue = queue[key];
 
             // Descarta conclusões órfãs deixadas no cache quando uma categoria
             // e todas as suas tarefas foram removidas em cascata.
@@ -8555,15 +8667,14 @@ async function syncOfflineDataToCloud() {
                 .maybeSingle();
             if (queuedTaskCheckError) throw queuedTaskCheckError;
             if (!queuedTaskExists) {
-                delete queue[key];
-                localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
+                clearQueuedEntryIfCurrent("offline_completions_queue", key, queuedValue);
                 let cachedCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
                 cachedCompletions = cachedCompletions.filter(item => String(item.task_id) !== String(taskId));
                 localStorage.setItem("offline_completions", JSON.stringify(cachedCompletions));
                 continue;
             }
 
-            const completed = queue[key];
+            const completed = queuedValue;
             const query = completed === "excluded"
                 ? supabaseClient.from('completions').upsert({ task_id: taskId, date: date, completed: false }, { onConflict: 'task_id,date' })
                 : completed
@@ -8573,8 +8684,7 @@ async function syncOfflineDataToCloud() {
             const { error } = await query;
             if (error) throw error;
 
-            delete queue[key];
-            localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
+            clearQueuedEntryIfCurrent("offline_completions_queue", key, queuedValue);
         }
 
         // 4. Sincronizar atualizações e exclusões de tarefas
@@ -8582,7 +8692,8 @@ async function syncOfflineDataToCloud() {
         let updateKeys = Object.keys(taskUpdatesQueue);
         for (const id of updateKeys) {
             if (isTemporaryId(id)) continue;
-            const dbUpdates = { ...taskUpdatesQueue[id] };
+            const queuedUpdates = taskUpdatesQueue[id];
+            const dbUpdates = { ...queuedUpdates };
             if (dbUpdates.category_id) {
                 const queuedTask = localTasks.find(task => String(task.id) === String(id));
                 const matchingCategory = queuedTask && categories.find(cat => cat.name === queuedTask.category && !isTemporaryId(cat.id));
@@ -8593,20 +8704,26 @@ async function syncOfflineDataToCloud() {
             const { error } = await supabaseClient.from('tasks').update(dbUpdates).eq('id', id);
             if (error) throw error;
 
-            delete taskUpdatesQueue[id];
-            localStorage.setItem("offline_task_updates_queue", JSON.stringify(taskUpdatesQueue));
+            clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdates);
         }
+
+        // 5. Reenvia fotos que ficaram somente no aparelho. As tarefas já
+        // receberam seus IDs definitivos nas etapas anteriores.
+        await syncPendingTrainingPhotoUploads();
 
         console.log("[Sync] Sincronização concluída com sucesso. Baixando dados mais recentes...");
         
-        isSyncing = false; // Libera o lock
         await loadChecklistAndProgress(false); // Busca dados e revalida
         syncSucceeded = true;
+        cloudSyncRetryCount = 0;
+        cloudSyncLastError = "";
+        cloudSyncLastSuccessAt = Date.now();
         
     } catch (e) {
         console.warn("[Sync] Falha durante a sincronização. Alterações pendentes mantidas no IndexedDB:", e);
         if (navigator.onLine) {
             const errorDetail = e && e.message ? e.message : "Falha desconhecida";
+            cloudSyncLastError = errorDetail;
             setSyncStatus("error", "Erro ao sincronizar", `Não foi possível sincronizar: ${errorDetail}`);
         } else {
             refreshSyncStatusFromQueues();
@@ -8615,8 +8732,9 @@ async function syncOfflineDataToCloud() {
         isSyncing = false;
         if (syncSucceeded) {
             refreshSyncStatusFromQueues();
+            if ((cloudSyncRerunRequested || hasPendingSyncData()) && navigator.onLine) scheduleCloudSync("alterações-durante-sync", 180);
         } else if (navigator.onLine) {
-            scheduleSyncStatusRefresh(4000);
+            scheduleCloudSyncRetry();
         }
     }
 }
