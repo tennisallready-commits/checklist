@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.33";
+const SERVICE_WORKER_URL = "./sw.js?v=10.34";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -170,6 +170,7 @@ let reportsCloudState = "idle";
 let currentReportCorrectionTasks = {};
 let pendingAutocompleteDetailsTask = null;
 let collaborationRealtimeChannel = null;
+let pendingInitialSessionTimer = null;
 let categoryOnboardingTimer = null;
 let categoryOnboardingSlide = 0;
 let lastStartupInteractionAt = 0;
@@ -580,6 +581,7 @@ async function initApp() {
         || cachedTasks.some(task => task.is_active !== false);
     const isWarmDevice = isKnownDevice;
     document.body.dataset.hasChecklistCache = hasUsefulCache ? "true" : "false";
+    document.body.dataset.awaitingCloud = hasUsefulCache ? "false" : "true";
     refreshSyncStatusFromQueues();
     if (hasUsefulCache || isWarmDevice) {
         loadDataOffline();
@@ -4145,7 +4147,7 @@ function renderChecklist() {
         tasksListEl.classList.remove("edit-mode");
     }
 
-    const needsCategoryOnboarding = categories.length === 0;
+    const needsCategoryOnboarding = categories.length === 0 && document.body.dataset.awaitingCloud !== "true";
     emptyStateEl.classList.toggle("category-onboarding-active", needsCategoryOnboarding);
     updateCategoryOnboardingPlayback(needsCategoryOnboarding);
     updateTaskCreationOnboarding();
@@ -8221,6 +8223,7 @@ function setupSupabaseAuth() {
     if (!supabaseClient) {
         document.getElementById("auth-container").style.display = "none";
         setAppContainerVisible(true);
+        document.body.dataset.awaitingCloud = "false";
         loadChecklistAndProgress();
         requestAnimationFrame(() => {
             document.documentElement.classList.add("checklist-ui-ready");
@@ -8243,6 +8246,8 @@ function setupSupabaseAuth() {
         }
 
         if (session) {
+            clearTimeout(pendingInitialSessionTimer);
+            pendingInitialSessionTimer = null;
             const restoredFromCache = document.body.dataset.hasChecklistCache === "true";
             currentUser = session.user;
             localPrefs.setItem("checklist_last_user_id", currentUser.id);
@@ -8295,6 +8300,7 @@ function setupSupabaseAuth() {
                 // única vez. A estrutura do app continua visível durante a rede.
                 await loadData();
                 await loadCollaborationIdentityLabels();
+                document.body.dataset.awaitingCloud = "false";
                 renderCategories();
                 renderChecklist();
                 updateProgress();
@@ -8351,7 +8357,21 @@ function setupSupabaseAuth() {
             }
             lucide.createIcons();
             if (restoredFromCache && appSessionLoader) appSessionLoader.classList.add("hidden");
-        } else {
+    } else {
+            // INITIAL_SESSION pode chegar vazio enquanto o armazenamento seguro
+            // da sessão ainda está sendo restaurado no PWA. Isso não é logout e
+            // nunca deve apagar o checklist que já existe no aparelho.
+            if (event !== "SIGNED_OUT") {
+                clearTimeout(pendingInitialSessionTimer);
+                pendingInitialSessionTimer = setTimeout(() => {
+                    if (currentUser) return;
+                    document.getElementById("auth-container").style.display = "flex";
+                    setAppContainerVisible(false);
+                }, 650);
+                return;
+            }
+            clearTimeout(pendingInitialSessionTimer);
+            pendingInitialSessionTimer = null;
             if (collaborationRealtimeChannel && supabaseClient) {
                 supabaseClient.removeChannel(collaborationRealtimeChannel);
                 collaborationRealtimeChannel = null;
