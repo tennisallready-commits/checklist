@@ -25,6 +25,11 @@
         "offline_completions_queue",
         "offline_task_updates_queue"
     ]);
+    const EMERGENCY_SNAPSHOT_KEYS = new Map([
+        ["offline_categories", "checklist_snapshot_categories"],
+        ["offline_tasks", "checklist_snapshot_tasks"],
+        ["offline_completions", "checklist_snapshot_completions"]
+    ]);
 
     function defaultValue(key) {
         return OBJECT_STORES.has(key) ? {} : [];
@@ -33,6 +38,26 @@
     function create({ onStorageChange = () => {}, onCloudQueueChange = () => {} } = {}) {
         const dbCache = Object.fromEntries(STORES.map(key => [key, defaultValue(key)]));
         const localPrefs = window.localStorage;
+
+        // A cópia write-through permite montar a primeira tela sem aguardar a
+        // abertura assíncrona do IndexedDB. A reconciliação acontece depois.
+        STORES.forEach(key => {
+            const shadowValue = localPrefs.getItem(key);
+            let parsedValue = null;
+            if (shadowValue !== null) {
+                try { parsedValue = JSON.parse(shadowValue); }
+                catch (_) { parsedValue = shadowValue; }
+            }
+            const snapshotKey = EMERGENCY_SNAPSHOT_KEYS.get(key);
+            const snapshotValue = snapshotKey ? localPrefs.getItem(snapshotKey) : null;
+            if ((!Array.isArray(parsedValue) || parsedValue.length === 0) && snapshotValue !== null) {
+                try {
+                    const parsedSnapshot = JSON.parse(snapshotValue);
+                    if (Array.isArray(parsedSnapshot) && parsedSnapshot.length) parsedValue = parsedSnapshot;
+                } catch (_) {}
+            }
+            if (parsedValue !== null) dbCache[key] = parsedValue;
+        });
 
         const idb = {
             _db: null,
@@ -118,6 +143,19 @@
                             value = defaultValue(store);
                         }
                     }
+                    const snapshotKey = EMERGENCY_SNAPSHOT_KEYS.get(store);
+                    const snapshotValue = snapshotKey ? localPrefs.getItem(snapshotKey) : null;
+                    if (Array.isArray(value) && value.length === 0 && snapshotValue !== null) {
+                        try {
+                            const parsedSnapshot = JSON.parse(snapshotValue);
+                            if (Array.isArray(parsedSnapshot) && parsedSnapshot.length) {
+                                value = parsedSnapshot;
+                                localPrefs.setItem(store, snapshotValue);
+                                localPrefs.setItem(`${store}__shadow_version`, String(Date.now()));
+                                await this.put(store, value);
+                            }
+                        } catch (_) {}
+                    }
                     dbCache[store] = value;
                 }
             }
@@ -138,6 +176,8 @@
                 dbCache[key] = parsed;
                 localPrefs.setItem(key, String(value));
                 localPrefs.setItem(`${key}__shadow_version`, String(Date.now()));
+                const snapshotKey = EMERGENCY_SNAPSHOT_KEYS.get(key);
+                if (snapshotKey) localPrefs.setItem(snapshotKey, String(value));
                 void idb.put(key, parsed);
                 onStorageChange(key);
                 if (CLOUD_SYNC_QUEUE_KEYS.has(key)) onCloudQueueChange(key);
