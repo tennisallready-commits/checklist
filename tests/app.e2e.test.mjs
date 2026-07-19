@@ -29,14 +29,14 @@ after(async () => {
   await server?.close();
 });
 
-async function openApp({ categories = [normalCategory], tasks = [], completions = [], waitForCache = true, knownDevice = true, primaryCategories = categories, primaryTasks = tasks } = {}) {
+async function openApp({ categories = [normalCategory], tasks = [], completions = [], waitForCache = true, knownDevice = true, primaryCategories = categories, primaryTasks = tasks, identityCache = null } = {}) {
   const context = await browser.newContext({ serviceWorkers: "block", locale: "pt-BR", timezoneId: "America/Sao_Paulo" });
   const page = await context.newPage();
   const consoleErrors = [];
   page.on("pageerror", error => consoleErrors.push(error.message));
   await page.route("https://cdn.jsdelivr.net/**", route => route.abort());
   await page.route("https://fonts.googleapis.com/**", route => route.abort());
-  await page.addInitScript(({ categories, tasks, completions, primaryCategories, primaryTasks, testUser, today, knownDevice }) => {
+  await page.addInitScript(({ categories, tasks, completions, primaryCategories, primaryTasks, testUser, today, knownDevice, identityCache }) => {
     window.__CHECKLIST_E2E_USER__ = testUser;
     if (sessionStorage.getItem("checklist_e2e_seeded") === "true") return;
     sessionStorage.setItem("checklist_e2e_seeded", "true");
@@ -53,10 +53,11 @@ async function openApp({ categories = [normalCategory], tasks = [], completions 
     else localStorage.removeItem("checklist_device_cache_ready");
     localStorage.setItem("checklist_last_user_id", testUser.id);
     localStorage.setItem("checklist_last_user_email", testUser.email);
+    if (identityCache) localStorage.setItem(`checklist_identity_cache_${testUser.id}`, JSON.stringify(identityCache));
     localStorage.setItem("cleanup_done_v1", "true");
     localStorage.setItem("last_weekly_summary_shown", today);
     localStorage.setItem(`saturday_anim_shown_${today}`, "true");
-  }, { categories, tasks, completions, primaryCategories, primaryTasks, testUser, today, knownDevice });
+  }, { categories, tasks, completions, primaryCategories, primaryTasks, testUser, today, knownDevice, identityCache });
   await page.goto(server.url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector(".app-container", { state: "visible" });
   await page.waitForFunction(() => document.documentElement.classList.contains("checklist-ui-ready"));
@@ -103,6 +104,19 @@ test("treino próprio aparece imediatamente na abertura pela aba Todos", async (
   const { context, page } = await openApp({ categories: [trainingCategory], tasks: [task(id, "Treino em cache", "Treino")] });
   await page.waitForSelector(`.task-item[data-id="${id}"]`);
   assert.equal(await page.locator(`.task-item[data-id="${id}"]`).count(), 1);
+  await context.close();
+});
+
+test("avatar atribuído colaborativo aparece no primeiro desenho pelo cache", async () => {
+  const id = "25500000-0000-4000-8000-000000000001";
+  const assignedTask = task(id, "Tarefa colaborativa", "Pessoal");
+  assignedTask.assigned_to = "parceira@checklist.local";
+  const avatar = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'%3E%3Crect width='20' height='20' fill='pink'/%3E%3C/svg%3E";
+  const identityCache = { byEmail: { "parceira@checklist.local": { username: "parceira", avatar } }, byUserId: {} };
+  const { context, page } = await openApp({ tasks: [assignedTask], identityCache });
+  const image = page.locator(`.task-item[data-id="${id}"] .task-assignee-avatar img`);
+  await image.waitFor();
+  assert.match(await image.getAttribute("src"), /^data:image\/svg\+xml/);
   await context.close();
 });
 

@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.36";
+const SERVICE_WORKER_URL = "./sw.js?v=10.37";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -105,6 +105,52 @@ const collaborationAvatarByUserId = new Map();
 const persistentAvatarByUrl = new Map();
 const pendingAvatarCacheUrls = new Set();
 let identifierSetupResolver = null;
+
+function getCollaborationIdentityCacheKey(userId = currentUser?.id || localPrefs.getItem("checklist_last_user_id")) {
+    return userId ? `checklist_identity_cache_${userId}` : "";
+}
+
+function loadCollaborationIdentityCache() {
+    const key = getCollaborationIdentityCacheKey();
+    if (!key) return;
+    try {
+        const cached = JSON.parse(localPrefs.getItem(key) || "{}");
+        Object.entries(cached.byEmail || {}).forEach(([email, profile]) => {
+            const normalizedEmail = normalizeAccountEmail(email);
+            if (profile?.username) collaborationIdentityByEmail.set(normalizedEmail, profile.username);
+            if (profile?.avatar) collaborationAvatarByEmail.set(normalizedEmail, profile.avatar);
+        });
+        Object.entries(cached.byUserId || {}).forEach(([userId, profile]) => {
+            const normalizedUserId = String(userId);
+            if (profile?.username) collaborationIdentityByUserId.set(normalizedUserId, profile.username);
+            if (profile?.avatar) collaborationAvatarByUserId.set(normalizedUserId, profile.avatar);
+        });
+    } catch (error) {
+        console.warn("Cache local de participantes inválido:", error);
+    }
+}
+
+function saveCollaborationIdentityCache() {
+    const key = getCollaborationIdentityCacheKey();
+    if (!key) return;
+    const emailKeys = new Set([...collaborationIdentityByEmail.keys(), ...collaborationAvatarByEmail.keys()]);
+    const userIdKeys = new Set([...collaborationIdentityByUserId.keys(), ...collaborationAvatarByUserId.keys()]);
+    const byEmail = {};
+    const byUserId = {};
+    emailKeys.forEach(email => {
+        byEmail[email] = {
+            username: collaborationIdentityByEmail.get(email) || "",
+            avatar: collaborationAvatarByEmail.get(email) || ""
+        };
+    });
+    userIdKeys.forEach(userId => {
+        byUserId[userId] = {
+            username: collaborationIdentityByUserId.get(userId) || "",
+            avatar: collaborationAvatarByUserId.get(userId) || ""
+        };
+    });
+    localPrefs.setItem(key, JSON.stringify({ byEmail, byUserId, updatedAt: Date.now() }));
+}
 function getCurrentReminderTime() {
     const now = new Date();
     return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
@@ -556,6 +602,9 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 async function initApp() {
+    // Identidades precisam estar disponíveis antes da primeira pintura das
+    // tarefas para que avatares colaborativos não dependam de trocar de aba.
+    loadCollaborationIdentityCache();
     const isKnownDevice = localPrefs.getItem("checklist_device_cache_ready") === "true";
     const countStoredArray = key => {
         try {
@@ -2297,6 +2346,7 @@ function setupEventListeners() {
 }
 
 function clearLocalUserCache() {
+    const identityCacheKey = getCollaborationIdentityCacheKey();
     [
         "offline_categories", "offline_tasks", "offline_completions",
         "offline_category_shares", "offline_completions_queue",
@@ -2308,6 +2358,7 @@ function clearLocalUserCache() {
         "checklist_snapshot_categories", "checklist_snapshot_tasks",
         "checklist_snapshot_completions"
     ].forEach(key => localPrefs.removeItem(key));
+    if (identityCacheKey) localPrefs.removeItem(identityCacheKey);
 }
 
 // ----------------------------------------------------
@@ -2587,6 +2638,30 @@ function renderSettingsProfileAvatar() {
     if (!avatarUrl && window.lucide) window.lucide.createIcons();
 }
 
+function refreshVisibleAssignedTaskAvatars() {
+    document.querySelectorAll(".task-item[data-id]").forEach(card => {
+        const task = tasks.find(item => String(item.id) === String(card.dataset.id));
+        if (!task?.assigned_to || isTrainingCollaborativeCategory(task.category)) return;
+        const avatar = card.querySelector(".task-assignee-avatar:not(.owner)");
+        if (!avatar) return;
+        const identityLabel = getIdentityLabel(task.assigned_to);
+        const avatarUrl = getIdentityAvatar(task.assigned_to);
+        avatar.title = `Atribuído a: ${identityLabel}`;
+        avatar.classList.toggle("has-photo", Boolean(avatarUrl));
+        if (avatarUrl) {
+            let image = avatar.querySelector("img");
+            if (!image) {
+                image = document.createElement("img");
+                image.alt = "";
+                avatar.replaceChildren(image);
+            }
+            if (image.getAttribute("src") !== avatarUrl) image.src = avatarUrl;
+        } else {
+            avatar.textContent = identityLabel.replace("@", "").substring(0, 2).toUpperCase();
+        }
+    });
+}
+
 async function uploadProfileAvatar(file) {
     if (!supabaseClient || !currentUser || !file) return;
     if (file.size > 5 * 1024 * 1024) throw new Error("Escolha uma imagem de até 5 MB.");
@@ -2641,7 +2716,9 @@ async function loadCollaborationIdentityLabels() {
             }
         });
     }
+    saveCollaborationIdentityCache();
     renderSettingsProfileAvatar();
+    refreshVisibleAssignedTaskAvatars();
     cachePriorityAvatars([
         ...collaborationAvatarByEmail.values(),
         ...collaborationAvatarByUserId.values(),
