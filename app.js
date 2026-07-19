@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.32";
+const SERVICE_WORKER_URL = "./sw.js?v=10.33";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -593,7 +593,10 @@ async function initApp() {
             if (appSessionLoader) appSessionLoader.classList.add("hidden");
         });
     } else {
-        appContainer.style.display = "none";
+        // Sem cache, abre imediatamente a estrutura do aplicativo. As tarefas
+        // entram uma única vez quando a nuvem responder, sem tela intermediária.
+        appContainer.style.display = "flex";
+        document.documentElement.classList.add("checklist-ui-ready");
     }
 
     // Connect to Supabase
@@ -8248,7 +8251,7 @@ function setupSupabaseAuth() {
             reportsCloudState = "idle";
             updatePendingTrainingPhotoFlag(await idb.get("training_photo_records") || []);
             document.getElementById("auth-container").style.display = "none";
-            if (!restoredFromCache) setAppContainerVisible(false);
+            setAppContainerVisible(true);
 
             const startupParams = new URLSearchParams(window.location.search);
             const earlyNotificationTaskId = startupParams.get("notification_task");
@@ -8284,21 +8287,22 @@ function setupSupabaseAuth() {
             // Carrega as configurações de perfil (como o tema do usuário)
             await loadUserProfile();
             
-            await loadChecklistAndProgress(restoredFromCache, restoredFromCache);
-            await loadCollaborationIdentityLabels();
-            if (!restoredFromCache) renderChecklist();
+            if (restoredFromCache) {
+                await loadChecklistAndProgress(true, true);
+                await loadCollaborationIdentityLabels();
+            } else {
+                // No primeiro acesso, espera os dados reais e pinta a lista uma
+                // única vez. A estrutura do app continua visível durante a rede.
+                await loadData();
+                await loadCollaborationIdentityLabels();
+                renderCategories();
+                renderChecklist();
+                updateProgress();
+                updateSmartReportButtonVisibility();
+            }
             renderNotifications();
             localPrefs.setItem("checklist_device_cache_ready", "true");
             document.documentElement.classList.add("checklist-device-ready");
-
-            // Sem cache, encerra completamente a tela curta antes de revelar
-            // o checklist ou o tutorial de primeira categoria.
-            if (!restoredFromCache) {
-                if (appSessionLoader) appSessionLoader.classList.add("hidden");
-                await new Promise(resolve => setTimeout(resolve, 280));
-                setAppContainerVisible(true);
-                requestAnimationFrame(() => document.documentElement.classList.add("checklist-ui-ready"));
-            }
 
             // Toda conta precisa definir um ID público antes de continuar.
             await ensureUserIdentifier();

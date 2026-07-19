@@ -29,14 +29,14 @@ after(async () => {
   await server?.close();
 });
 
-async function openApp({ categories = [normalCategory], tasks = [], completions = [], waitForCache = true } = {}) {
+async function openApp({ categories = [normalCategory], tasks = [], completions = [], waitForCache = true, knownDevice = true } = {}) {
   const context = await browser.newContext({ serviceWorkers: "block", locale: "pt-BR", timezoneId: "America/Sao_Paulo" });
   const page = await context.newPage();
   const consoleErrors = [];
   page.on("pageerror", error => consoleErrors.push(error.message));
   await page.route("https://cdn.jsdelivr.net/**", route => route.abort());
   await page.route("https://fonts.googleapis.com/**", route => route.abort());
-  await page.addInitScript(({ categories, tasks, completions, testUser, today }) => {
+  await page.addInitScript(({ categories, tasks, completions, testUser, today, knownDevice }) => {
     window.__CHECKLIST_E2E_USER__ = testUser;
     if (sessionStorage.getItem("checklist_e2e_seeded") === "true") return;
     sessionStorage.setItem("checklist_e2e_seeded", "true");
@@ -46,13 +46,14 @@ async function openApp({ categories = [normalCategory], tasks = [], completions 
     localStorage.setItem("offline_category_shares", "[]");
     localStorage.setItem("offline_completions_queue", "{}");
     localStorage.setItem("offline_task_updates_queue", "{}");
-    localStorage.setItem("checklist_device_cache_ready", "true");
+    if (knownDevice) localStorage.setItem("checklist_device_cache_ready", "true");
+    else localStorage.removeItem("checklist_device_cache_ready");
     localStorage.setItem("checklist_last_user_id", testUser.id);
     localStorage.setItem("checklist_last_user_email", testUser.email);
     localStorage.setItem("cleanup_done_v1", "true");
     localStorage.setItem("last_weekly_summary_shown", today);
     localStorage.setItem(`saturday_anim_shown_${today}`, "true");
-  }, { categories, tasks, completions, testUser, today });
+  }, { categories, tasks, completions, testUser, today, knownDevice });
   await page.goto(server.url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector(".app-container", { state: "visible" });
   await page.waitForFunction(() => document.documentElement.classList.contains("checklist-ui-ready"));
@@ -66,7 +67,8 @@ function task(id, title, category, userId = testUser.id) {
 }
 
 test("primeiro uso leva diretamente à criação da primeira categoria", async () => {
-  const { context, page } = await openApp({ categories: [], waitForCache: false });
+  const { context, page } = await openApp({ categories: [], waitForCache: false, knownDevice: false });
+  assert.equal(await page.locator("#app-session-loader").evaluate(element => getComputedStyle(element).display), "none");
   await page.waitForSelector("#empty-state.category-onboarding-active");
   assert.match(await page.locator("#category-onboarding-title").innerText(), /primeira área/i);
   await page.click("#btn-onboarding-create-category");
