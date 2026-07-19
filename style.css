@@ -1913,6 +1913,13 @@ body.theme-girly .task-reminder-indicator {
     letter-spacing: .13em;
 }
 
+.category-onboarding-icon { width: 54px; height: 54px; margin-bottom: 10px; display: grid; place-items: center; border-radius: 17px; color: #fff; background: var(--primary-gradient); box-shadow: 0 12px 28px rgba(139,92,246,.24); }
+.category-onboarding-icon svg { width: 25px; height: 25px; }
+.category-onboarding-benefits { width: 100%; display: grid; gap: 8px; margin: 4px 0 17px; text-align: left; }
+.category-onboarding-benefits span { min-height: 38px; display: grid; grid-template-columns: 22px 20px 1fr; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--border-color); border-radius: 11px; color: var(--text-secondary); background: rgba(255,255,255,.025); font-size: .74rem; }
+.category-onboarding-benefits svg { width: 17px; height: 17px; color: var(--primary); }
+.category-onboarding-benefits b { width: 19px; height: 19px; display: grid; place-items: center; border-radius: 50%; color: var(--primary); background: rgba(139,92,246,.12); font-size: .63rem; }
+
 .category-onboarding h3 {
     margin: 7px 0 6px;
     font-size: 1.15rem;
@@ -1925,6 +1932,11 @@ body.theme-girly .task-reminder-indicator {
     color: var(--text-secondary);
     font-size: .76rem;
 }
+
+.report-essential-stats { display: grid; grid-template-columns: .8fr .8fr 1.4fr; gap: 7px; margin-top: 10px; }
+.report-essential-stats > span { min-width: 0; padding: 9px 7px; display: grid; gap: 2px; justify-items: center; border: 1px solid var(--border-color); border-radius: 10px; background: rgba(255,255,255,.025); text-align: center; }
+.report-essential-stats strong { max-width: 100%; overflow: hidden; color: var(--text-primary); font-size: .78rem; text-overflow: ellipsis; white-space: nowrap; }
+.report-essential-stats small { color: var(--text-muted); font-size: .58rem; }
 
 .category-onboarding-carousel {
     position: relative;

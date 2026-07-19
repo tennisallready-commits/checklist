@@ -29,7 +29,7 @@ after(async () => {
   await server?.close();
 });
 
-async function openApp({ categories = [normalCategory], tasks = [], completions = [] } = {}) {
+async function openApp({ categories = [normalCategory], tasks = [], completions = [], waitForCache = true } = {}) {
   const context = await browser.newContext({ serviceWorkers: "block", locale: "pt-BR", timezoneId: "America/Sao_Paulo" });
   const page = await context.newPage();
   const consoleErrors = [];
@@ -53,7 +53,7 @@ async function openApp({ categories = [normalCategory], tasks = [], completions 
   }, { categories, tasks, completions, testUser, today });
   await page.goto(server.url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector(".app-container", { state: "visible" });
-  await page.waitForFunction(() => document.body.dataset.hasChecklistCache === "true");
+  if (waitForCache) await page.waitForFunction(() => document.body.dataset.hasChecklistCache === "true");
   return { context, page, consoleErrors };
 }
 
@@ -61,6 +61,24 @@ function task(id, title, category, userId = testUser.id) {
   const categoryId = category === "Treino" ? trainingCategory.id : normalCategory.id;
   return { id, title, category, category_id: categoryId, user_id: userId, is_recurring: false, is_active: true, created_at: `${today}T12:00:00-03:00`, context: { creator_user_id: userId, creator_label: userId === testUser.id ? "@teste" : "@participante" } };
 }
+
+test("primeiro uso leva diretamente à criação da primeira categoria", async () => {
+  const { context, page } = await openApp({ categories: [], waitForCache: false });
+  await page.waitForSelector("#empty-state.category-onboarding-active");
+  assert.match(await page.locator("#category-onboarding-title").innerText(), /primeira área/i);
+  await page.click("#btn-onboarding-create-category");
+  await page.waitForSelector("#modal-manage-categories.active");
+  await page.waitForSelector("#input-new-category:focus");
+  await context.close();
+});
+
+test("abertura sem alterações pendentes já aparece sincronizada", async () => {
+  const { context, page } = await openApp();
+  await page.waitForTimeout(250);
+  assert.equal(await page.locator("#sync-status").getAttribute("data-state"), "synced");
+  assert.equal((await page.locator("#sync-status-label").innerText()).trim(), "Sincronizado");
+  await context.close();
+});
 
 test("cria tarefa com descrição e mantém após recarregar", async () => {
   const { context, page, consoleErrors } = await openApp();

@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.22";
+const SERVICE_WORKER_URL = "./sw.js?v=10.24";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -466,7 +466,6 @@ let pendingTrainingPastNightException = false;
 document.addEventListener("DOMContentLoaded", () => {
     document.addEventListener("pointerdown", registerStartupInteraction, { passive: true, capture: true });
     document.addEventListener("touchstart", registerStartupInteraction, { passive: true, capture: true });
-    setSyncStatus(navigator.onLine ? "checking" : "offline", navigator.onLine ? "Verificando…" : "Offline");
     initApp();
     setupEventListeners();
     
@@ -575,6 +574,7 @@ async function initApp() {
         || cachedTasks.some(task => task.is_active !== false);
     const isWarmDevice = localPrefs.getItem("checklist_device_cache_ready") === "true";
     document.body.dataset.hasChecklistCache = hasUsefulCache ? "true" : "false";
+    refreshSyncStatusFromQueues();
     if (hasUsefulCache || isWarmDevice) {
         loadDataOffline();
         renderCategories();
@@ -2350,16 +2350,18 @@ function getCategoryRenderFingerprint(categoryList = categories) {
     ].join("|")));
 }
 
-async function loadChecklistAndProgress(skipOfflineReload = false) {
+async function loadChecklistAndProgress(skipOfflineReload = false, skipInitialRender = false) {
     // 1. Recarrega dados do localStorage, exceto quando chamado após uma mutação otimista local
     // (toggle, drag, delete) — nesses casos, tasks já está correto e recarregar causaria flash de 0%
     if (!skipOfflineReload) {
         loadDataOffline();
     }
 
-    renderCategories();
-    renderChecklist();
-    updateProgress();
+    if (!skipInitialRender) {
+        renderCategories();
+        renderChecklist();
+        updateProgress();
+    }
     checkAutomaticReports();
     if (typeof checkImportantTaskNotifications === "function") {
         checkImportantTaskNotifications();
@@ -2984,7 +2986,9 @@ function subscribeToCollaborationUpdates() {
     const refreshSharedTrainingData = () => {
         clearTimeout(refreshTimer);
         refreshTimer = setTimeout(async () => {
-            await loadChecklistAndProgress();
+            // Em aparelhos já aquecidos, o cache foi pintado no initApp.
+            // Evita reconstruí-lo de novo enquanto a nuvem revalida em silêncio.
+            await loadChecklistAndProgress(restoredFromCache, restoredFromCache);
             await loadCollaborationIdentityLabels();
             renderChecklist();
             if (modalTrainingReport?.classList.contains("active")) await renderTrainingReport();
@@ -8368,6 +8372,13 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
         refreshSyncStatusFromQueues();
         return;
     }
+    // Abrir o aplicativo não é uma alteração. Sem fila local, a leitura da
+    // nuvem feita por loadChecklistAndProgress é suficiente e não deve exibir
+    // um falso estado de sincronização nem reconstruir toda a lista.
+    if (!hasPendingSyncData()) {
+        refreshSyncStatusFromQueues();
+        return true;
+    }
     if (!lockAcquired && navigator.locks?.request) {
         const lockName = `checklist-cloud-sync-${currentUser.id}`;
         return navigator.locks.request(lockName, { ifAvailable: true }, lock => {
@@ -10217,62 +10228,15 @@ async function loadAndRenderReport(days, containerEl) {
         </div>
     `;
 
-    // 9. Construir o relatório final em 4 blocos curtos e diretos
+    // A leitura humana já reúne realizações, ritmo e pontos de atenção. Mantemos
+    // apenas os números essenciais para evitar repetir a análise em cinco blocos.
     let contentHtml = `
         ${warningHtml}
         ${humanAnalysisHtml}
-        
-        <div class="smart-report-container" style="display: flex; flex-direction: column; gap: 16px; text-align: left; line-height: 1.5; color: var(--text-primary); font-size: 0.88rem;">
-            
-            <!-- 1. RESUMO -->
-            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px;">
-                <h6 style="margin: 0 0 8px 0; color: var(--primary); font-size: 0.9rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <i data-lucide="activity" style="width: 14px; height: 14px;"></i> 1. Resumo do Período
-                </h6>
-                <p style="margin: 0; color: var(--text-secondary); font-size: 0.82rem;">
-                    Período analisado: **${periodRangeLabel}**. Você concluiu **${currentCompletedPlannedCount} de ${currentPlannedCount}** ocorrências planejadas (**${currentRate}%** de aproveitamento).
-                    ${previousPlannedCount > 0 ? ` No período anterior, o aproveitamento foi de ${previousRate}% (${previousCompletedPlannedCount} de ${previousPlannedCount}).` : ""}
-                </p>
-            </section>
-
-            <!-- 2. DESTAQUES -->
-            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px;">
-                <h6 style="margin: 0 0 8px 0; color: #10b981; font-size: 0.9rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <i data-lucide="trophy" style="width: 14px; height: 14px;"></i> 2. Principais Destaques
-                </h6>
-                <ul style="margin: 0; padding-left: 18px; color: var(--text-secondary); font-size: 0.82rem; display: flex; flex-direction: column; gap: 4px;">
-                    ${finalHighlights.map(h => `<li>${h}</li>`).join("")}
-                </ul>
-            </section>
-
-            <!-- 3. REALIZAÇÕES REGISTRADAS -->
-            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px;">
-                <h6 style="margin: 0 0 8px 0; color: #06b6d4; font-size: 0.9rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <i data-lucide="list-checks" style="width: 14px; height: 14px;"></i> 3. O que você realizou
-                </h6>
-                <div class="human-report-categories">${completedWorkHtml || "<p style=\"margin:0;color:var(--text-secondary);font-size:.82rem;\">Nenhuma tarefa concluída foi registrada no período.</p>"}</div>
-            </section>
-
-            <!-- 4. PONTOS DE ATENÇÃO -->
-            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px;">
-                <h6 style="margin: 0 0 8px 0; color: #ef4444; font-size: 0.9rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <i data-lucide="alert-triangle" style="width: 14px; height: 14px;"></i> 4. Pontos de Atenção
-                </h6>
-                <ul style="margin: 0; padding-left: 18px; color: var(--text-secondary); font-size: 0.82rem; display: flex; flex-direction: column; gap: 4px;">
-                    ${finalAttentions.map(a => `<li>${a}</li>`).join("")}
-                </ul>
-            </section>
-
-            <!-- 5. RECOMENDAÇÃO PRÁTICA -->
-            <section style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px;">
-                <h6 style="margin: 0 0 8px 0; color: #8b5cf6; font-size: 0.9rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
-                    <i data-lucide="lightbulb" style="width: 14px; height: 14px;"></i> 5. Recomendação Prática
-                </h6>
-                <p style="margin: 0; color: var(--text-secondary); font-size: 0.82rem;">
-                    ${recommendation}
-                </p>
-            </section>
-            
+        <div class="report-essential-stats" aria-label="Números do período">
+            <span><strong>${currentCompletedPlannedCount}/${currentPlannedCount}</strong><small>realizadas</small></span>
+            <span><strong>${currentRate}%</strong><small>conclusão</small></span>
+            <span><strong>${periodRangeLabel}</strong><small>período</small></span>
         </div>
     `;
 

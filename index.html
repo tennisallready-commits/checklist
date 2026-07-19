@@ -41,7 +41,7 @@
             }
         });
     </script>
-    <link rel="stylesheet" href="style.css?v=8.31">
+    <link rel="stylesheet" href="style.css?v=8.32">
     
     <!-- iOS / PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -122,9 +122,9 @@
             <div class="header-info">
                 <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                     <span class="organization-tag" id="org-tag">Checklist Organizacional</span>
-                    <span id="sync-status" class="sync-status" data-state="checking" role="button" tabindex="0" aria-live="polite" title="Verificando sincronização">
+                    <span id="sync-status" class="sync-status" data-state="synced" role="button" tabindex="0" aria-live="polite" title="Todos os dados estão sincronizados">
                         <span class="sync-status-dot" aria-hidden="true"></span>
-                        <span id="sync-status-label">Verificando…</span>
+                        <span id="sync-status-label">Sincronizado</span>
                     </span>
                 </div>
                 <h1 id="app-title" style="margin: 0;">Checklist Diário</h1>
@@ -248,38 +248,19 @@
                 </div>
 
                 <section class="category-onboarding" aria-labelledby="category-onboarding-title">
-                    <span class="category-onboarding-kicker">PRIMEIROS PASSOS</span>
-                    <h3 id="category-onboarding-title">Crie sua primeira categoria</h3>
-                    <p class="category-onboarding-intro">As categorias organizam suas tarefas por empresa, estudos, rotina ou qualquer área que você quiser.</p>
-
-                    <div class="category-onboarding-carousel">
-                        <article class="category-onboarding-slide active" data-onboarding-slide="0">
-                            <div class="category-onboarding-visual"><i data-lucide="settings"></i><span class="onboarding-tap"></span></div>
-                            <span>1 de 3</span>
-                            <strong>Abra as Configurações</strong>
-                            <small>Toque no ícone de engrenagem no canto superior.</small>
-                        </article>
-                        <article class="category-onboarding-slide" data-onboarding-slide="1">
-                            <div class="category-onboarding-visual"><i data-lucide="folder-cog"></i><span class="onboarding-route"></span></div>
-                            <span>2 de 3</span>
-                            <strong>Gerencie as categorias</strong>
-                            <small>Entre em “Gerenciar Categorias” para organizar suas áreas.</small>
-                        </article>
-                        <article class="category-onboarding-slide" data-onboarding-slide="2">
-                            <div class="category-onboarding-visual"><i data-lucide="folder-plus"></i><span class="onboarding-pulse"></span></div>
-                            <span>3 de 3</span>
-                            <strong>Adicione a primeira</strong>
-                            <small>Escolha um nome e um tipo. Depois, você já poderá criar tarefas.</small>
-                        </article>
-                    </div>
-
-                    <div class="category-onboarding-dots" aria-hidden="true">
-                        <span class="active"></span><span></span><span></span>
+                    <div class="category-onboarding-icon"><i data-lucide="sparkles"></i></div>
+                    <span class="category-onboarding-kicker">COMECE POR AQUI</span>
+                    <h3 id="category-onboarding-title">Organize sua primeira área</h3>
+                    <p class="category-onboarding-intro">Crie uma categoria como Trabalho, Estudos, Casa ou Treino. Leva menos de um minuto.</p>
+                    <div class="category-onboarding-benefits" aria-label="Como começar">
+                        <span><i data-lucide="folder-plus"></i><b>1</b> Dê um nome para a área</span>
+                        <span><i data-lucide="list-plus"></i><b>2</b> Adicione sua primeira tarefa</span>
+                        <span><i data-lucide="check-circle-2"></i><b>3</b> Marque conforme realizar</span>
                     </div>
                     <button type="button" id="btn-onboarding-create-category" class="btn btn-primary category-onboarding-action">
-                        <i data-lucide="plus"></i> Criar minha primeira categoria
+                        <i data-lucide="plus"></i> Criar primeira categoria
                     </button>
-                    <small class="category-onboarding-hint">Você poderá editar, compartilhar ou excluir categorias quando quiser.</small>
+                    <small class="category-onboarding-hint">Você poderá mudar tudo depois.</small>
                 </section>
             </div>
         </main>
@@ -528,7 +509,7 @@
 
                 <div class="settings-version">
                     <span>Checklist</span>
-                        <strong>Versão 10.03</strong>
+                        <strong>Versão 10.05</strong>
                 </div>
             </div>
         </div>
@@ -747,8 +728,8 @@
                         <i data-lucide="file-chart-column"></i>
                     </div>
                     <div>
-                        <h3 id="smart-report-modal-title" style="margin: 0; font-size: 1.15rem; font-weight: 800;">Relatório Inteligente</h3>
-                        <p style="margin: 0; font-size: 0.75rem; color: var(--text-secondary);">Uma retrospectiva fiel do que você realizou</p>
+                        <h3 id="smart-report-modal-title" style="margin: 0; font-size: 1.15rem; font-weight: 800;">Seu relatório</h3>
+                        <p style="margin: 0; font-size: 0.75rem; color: var(--text-secondary);">O essencial do que você realizou</p>
                     </div>
                 </div>
                 <button id="btn-close-smart-report-modal" class="icon-button" style="padding: 6px;"><i data-lucide="x"></i></button>
@@ -756,9 +737,9 @@
 
             <!-- Tabs selector for report periods -->
             <div class="report-tabs-bar" style="display: flex; gap: 8px; border-bottom: 1px solid var(--border-color); padding: 12px 0;">
-                <button id="tab-report-weekly" class="category-chip active" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 12px;">Semanal</button>
-                <button id="tab-report-monthly" class="category-chip" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 12px;">Mensal</button>
-                <button id="tab-report-yearly" class="category-chip" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 12px;">Anual</button>
+                <button id="tab-report-weekly" class="category-chip active" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 12px;">7 dias</button>
+                <button id="tab-report-monthly" class="category-chip" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 12px;">30 dias</button>
+                <button id="tab-report-yearly" class="category-chip" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 12px;">Ano</button>
                 <button id="tab-report-history" class="category-chip" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 10px;">Histórico</button>
             </div>
 
@@ -1116,6 +1097,6 @@
     </div>
 
     <script src="storage.js?v=1.00"></script>
-    <script src="app.js?v=10.03"></script>
+    <script src="app.js?v=10.05"></script>
 </body>
 </html>
