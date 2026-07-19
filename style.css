@@ -135,7 +135,8 @@ body {
 
 .app-session-loader { position: fixed; inset: 0; z-index: 30000; display: grid; place-items: center; padding: 20px; background: var(--bg-main); opacity: 1; visibility: visible; transition: opacity .28s ease, visibility .28s ease; }
 .app-session-loader.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
-.checklist-device-ready .app-session-loader { display: none; }
+.app-container { opacity: 0; }
+.checklist-ui-ready .app-container { opacity: 1; transition: opacity .16s ease-out; }
 .session-loader-card { display: flex; width: min(310px,100%); flex-direction: column; align-items: center; text-align: center; }
 .session-loader-icon { display: grid; place-items: center; width: 58px; height: 58px; margin-bottom: 14px; border-radius: 18px; color: #fff; background: var(--primary-gradient); box-shadow: 0 14px 34px rgba(139,92,246,.28); animation: session-loader-float 1.6s ease-in-out infinite; }
 .session-loader-icon svg { width: 27px; height: 27px; }
@@ -1955,9 +1956,11 @@ body.theme-girly .task-reminder-indicator {
     font-size: .76rem;
 }
 
-.report-essential-stats { display: grid; grid-template-columns: .8fr .8fr 1.4fr; gap: 7px; margin-top: 10px; }
-.report-essential-stats > span { min-width: 0; padding: 9px 7px; display: grid; gap: 2px; justify-items: center; border: 1px solid var(--border-color); border-radius: 10px; background: rgba(255,255,255,.025); text-align: center; }
-.report-essential-stats strong { max-width: 100%; overflow: hidden; color: var(--text-primary); font-size: .78rem; text-overflow: ellipsis; white-space: nowrap; }
+.report-essential-stats { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; margin-top: 10px; }
+.report-essential-stats > span { min-width: 0; padding: 10px 8px; display: grid; gap: 2px; justify-items: center; border: 1px solid var(--border-color); border-radius: 10px; background: rgba(255,255,255,.025); text-align: center; }
+.report-essential-stats > span:last-child { grid-column: 1 / -1; padding-inline: 12px; }
+.report-essential-stats strong { max-width: 100%; color: var(--text-primary); font-size: .78rem; }
+.report-essential-stats > span:last-child strong { overflow-wrap: anywhere; line-height: 1.35; white-space: normal; }
 .report-essential-stats small { color: var(--text-muted); font-size: .58rem; }
 
 .category-onboarding-carousel {

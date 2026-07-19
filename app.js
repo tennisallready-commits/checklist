@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.28";
+const SERVICE_WORKER_URL = "./sw.js?v=10.31";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -582,7 +582,10 @@ async function initApp() {
         updateProgress();
         updateSmartReportButtonVisibility();
         appContainer.style.display = "flex";
-        if (appSessionLoader) appSessionLoader.classList.add("hidden");
+        requestAnimationFrame(() => {
+            document.documentElement.classList.add("checklist-ui-ready");
+            if (appSessionLoader) appSessionLoader.classList.add("hidden");
+        });
     } else {
         appContainer.style.display = "none";
     }
@@ -8210,7 +8213,10 @@ function setupSupabaseAuth() {
         document.getElementById("auth-container").style.display = "none";
         setAppContainerVisible(true);
         loadChecklistAndProgress();
-        if (appSessionLoader) appSessionLoader.classList.add("hidden");
+        requestAnimationFrame(() => {
+            document.documentElement.classList.add("checklist-ui-ready");
+            if (appSessionLoader) appSessionLoader.classList.add("hidden");
+        });
         return;
     }
 
@@ -8285,6 +8291,7 @@ function setupSupabaseAuth() {
                 if (appSessionLoader) appSessionLoader.classList.add("hidden");
                 await new Promise(resolve => setTimeout(resolve, 280));
                 setAppContainerVisible(true);
+                requestAnimationFrame(() => document.documentElement.classList.add("checklist-ui-ready"));
             }
 
             // Toda conta precisa definir um ID público antes de continuar.
@@ -8362,6 +8369,7 @@ function setupSupabaseAuth() {
             localPrefs.removeItem("checklist_last_user_email");
             localPrefs.removeItem("pending_training_photo_uploads");
             document.documentElement.classList.remove("checklist-device-ready");
+            document.documentElement.classList.remove("checklist-ui-ready");
             
             tasks = [];
             categories = [];
@@ -10656,27 +10664,43 @@ async function saveCurrentSmartReport() {
         const aiStory = content.querySelector(".human-report-story");
         const blocks = aiStory ? [
             { type: "heading", text: aiStory.querySelector("h6")?.innerText.trim() || "Retrospectiva com IA" },
-            { type: "body", text: aiStory.querySelector(".human-report-overview")?.innerText.trim() || "" },
-            ...Array.from(aiStory.querySelectorAll(".human-report-achievements article")).map(element => ({ type: "list", text: element.innerText.trim() })),
-            ...Array.from(aiStory.querySelectorAll(".human-report-note")).map(element => ({ type: "body", text: element.innerText.trim() })),
-            { type: "body", text: aiStory.querySelector(".human-report-closing")?.innerText.trim() || "" },
-            { type: "body", text: aiStory.querySelector(".human-report-source")?.innerText.trim() || "" }
-        ].filter(block => block.text) : [];
+            { type: "overview", text: aiStory.querySelector(".human-report-overview")?.innerText.trim() || "" },
+            ...Array.from(aiStory.querySelectorAll(".human-report-achievements article")).map(element => ({
+                type: "achievement",
+                title: element.querySelector("strong")?.innerText.trim() || "Realização",
+                text: element.querySelector("p")?.innerText.trim() || ""
+            })),
+            ...Array.from(aiStory.querySelectorAll(".human-report-note")).map(element => ({
+                type: element.classList.contains("attention") ? "attention" : "rhythm",
+                title: element.querySelector("strong")?.innerText.trim() || "Análise",
+                text: element.querySelector("p")?.innerText.trim() || ""
+            })),
+            { type: "closing", text: aiStory.querySelector(".human-report-closing")?.innerText.trim() || "" },
+            { type: "source", text: aiStory.querySelector(".human-report-source")?.innerText.trim() || "" }
+        ].filter(block => block.text || block.title) : [];
         if (!blocks.length) throw new Error("A retrospectiva com IA ainda não terminou de carregar.");
 
         const canvas = document.createElement("canvas");
         const context = canvas.getContext("2d");
         const width = 1080;
         const contentWidth = 856;
-        context.font = "500 27px Arial, sans-serif";
-        let calculatedHeight = 390;
-        blocks.forEach(block => {
-            context.font = (block.type === "heading" || block.type === "divider") ? "700 30px Arial, sans-serif" : "500 27px Arial, sans-serif";
-            const prefixWidth = block.type === "list" ? 34 : 0;
-            const lines = wrapReportCanvasText(context, block.text, contentWidth - prefixWidth);
-            const headingLike = block.type === "heading" || block.type === "divider";
-            calculatedHeight += lines.length * (headingLike ? 42 : 40) + (headingLike ? 30 : 22);
-        });
+        const measureBlock = block => {
+            if (block.type === "heading") return 76;
+            if (block.type === "source") {
+                context.font = "500 20px Arial, sans-serif";
+                return wrapReportCanvasText(context, block.text, contentWidth).length * 30 + 24;
+            }
+            if (block.type === "achievement" || block.type === "rhythm" || block.type === "attention") {
+                context.font = "800 25px Arial, sans-serif";
+                const titleLines = wrapReportCanvasText(context, block.title, contentWidth - 78).length;
+                context.font = "500 24px Arial, sans-serif";
+                const textLines = wrapReportCanvasText(context, block.text, contentWidth - 78).length;
+                return 38 + titleLines * 34 + textLines * 35 + 24;
+            }
+            context.font = block.type === "overview" ? "600 28px Arial, sans-serif" : "500 25px Arial, sans-serif";
+            return wrapReportCanvasText(context, block.text, contentWidth - (block.type === "closing" ? 28 : 0)).length * (block.type === "overview" ? 41 : 36) + 30;
+        };
+        let calculatedHeight = 390 + blocks.reduce((sum, block) => sum + measureBlock(block), 0);
         calculatedHeight += 180;
         canvas.width = width;
         canvas.height = Math.max(1080, calculatedHeight);
@@ -10714,26 +10738,57 @@ async function saveCurrentSmartReport() {
         context.font = "800 26px Arial, sans-serif";
         context.fillText(title.innerText.trim().toUpperCase(), 112, 264);
 
+        const drawWrappedLines = (lines, x, startY, lineHeight) => {
+            let lineY = startY;
+            lines.forEach(line => {
+                if (line) context.fillText(line, x, lineY);
+                lineY += lineHeight;
+            });
+            return lineY;
+        };
+
         let y = 325;
         blocks.forEach(block => {
-            const isHeading = block.type === "heading" || block.type === "divider";
-            context.font = isHeading ? "800 30px Arial, sans-serif" : "500 27px Arial, sans-serif";
-            context.fillStyle = block.type === "divider" ? colors.primary : (isHeading ? colors.text : colors.secondary);
-            if (isHeading) y += 12;
-            const textX = block.type === "list" ? 146 : 112;
-            const lines = wrapReportCanvasText(context, block.text, contentWidth - (block.type === "list" ? 34 : 0));
-            if (block.type === "list") {
-                context.fillStyle = colors.primary;
-                context.beginPath();
-                context.arc(119, y - 8, 6, 0, Math.PI * 2);
-                context.fill();
-                context.fillStyle = colors.secondary;
+            if (block.type === "heading") {
+                context.fillStyle = colors.text;
+                context.font = "800 32px Arial, sans-serif";
+                y = drawWrappedLines(wrapReportCanvasText(context, block.text, contentWidth), 112, y, 43) + 22;
+                return;
             }
-            lines.forEach(line => {
-                if (line) context.fillText(line, textX, y);
-                y += isHeading ? 42 : 40;
-            });
-            y += isHeading ? 30 : 22;
+            if (block.type === "overview") {
+                context.fillStyle = colors.text;
+                context.font = "600 28px Arial, sans-serif";
+                y = drawWrappedLines(wrapReportCanvasText(context, block.text, contentWidth), 112, y, 41) + 24;
+                return;
+            }
+            if (["achievement", "rhythm", "attention"].includes(block.type)) {
+                const blockHeight = measureBlock(block) - 10;
+                const accent = block.type === "achievement" ? "#10b981" : (block.type === "attention" ? "#f59e0b" : "#06b6d4");
+                context.fillStyle = block.type === "attention" ? "rgba(245,158,11,.10)" : (block.type === "achievement" ? "rgba(16,185,129,.09)" : "rgba(6,182,212,.09)");
+                drawRoundedReportRect(context, 104, y - 24, 872, blockHeight, 18);
+                context.fill();
+                context.fillStyle = accent;
+                context.beginPath();
+                context.arc(132, y + 2, 8, 0, Math.PI * 2);
+                context.fill();
+                context.font = "800 25px Arial, sans-serif";
+                y = drawWrappedLines(wrapReportCanvasText(context, block.title, contentWidth - 78), 158, y + 10, 34);
+                context.fillStyle = colors.secondary;
+                context.font = "500 24px Arial, sans-serif";
+                y = drawWrappedLines(wrapReportCanvasText(context, block.text, contentWidth - 78), 158, y + 2, 35) + 30;
+                return;
+            }
+            if (block.type === "closing") {
+                context.fillStyle = colors.primary;
+                context.fillRect(112, y - 22, 5, Math.max(45, measureBlock(block) - 18));
+                context.fillStyle = colors.secondary;
+                context.font = "italic 500 25px Arial, sans-serif";
+                y = drawWrappedLines(wrapReportCanvasText(context, block.text, contentWidth - 28), 138, y, 36) + 28;
+                return;
+            }
+            context.fillStyle = colors.secondary;
+            context.font = "500 20px Arial, sans-serif";
+            y = drawWrappedLines(wrapReportCanvasText(context, block.text, contentWidth), 112, y, 30) + 20;
         });
 
         context.strokeStyle = colors.border;

@@ -55,6 +55,7 @@ async function openApp({ categories = [normalCategory], tasks = [], completions 
   }, { categories, tasks, completions, testUser, today });
   await page.goto(server.url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector(".app-container", { state: "visible" });
+  await page.waitForFunction(() => document.documentElement.classList.contains("checklist-ui-ready"));
   if (waitForCache) await page.waitForFunction(() => document.body.dataset.hasChecklistCache === "true");
   return { context, page, consoleErrors };
 }
