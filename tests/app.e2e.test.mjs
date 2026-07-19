@@ -29,20 +29,23 @@ after(async () => {
   await server?.close();
 });
 
-async function openApp({ categories = [normalCategory], tasks = [], completions = [], waitForCache = true, knownDevice = true } = {}) {
+async function openApp({ categories = [normalCategory], tasks = [], completions = [], waitForCache = true, knownDevice = true, primaryCategories = categories, primaryTasks = tasks } = {}) {
   const context = await browser.newContext({ serviceWorkers: "block", locale: "pt-BR", timezoneId: "America/Sao_Paulo" });
   const page = await context.newPage();
   const consoleErrors = [];
   page.on("pageerror", error => consoleErrors.push(error.message));
   await page.route("https://cdn.jsdelivr.net/**", route => route.abort());
   await page.route("https://fonts.googleapis.com/**", route => route.abort());
-  await page.addInitScript(({ categories, tasks, completions, testUser, today, knownDevice }) => {
+  await page.addInitScript(({ categories, tasks, completions, primaryCategories, primaryTasks, testUser, today, knownDevice }) => {
     window.__CHECKLIST_E2E_USER__ = testUser;
     if (sessionStorage.getItem("checklist_e2e_seeded") === "true") return;
     sessionStorage.setItem("checklist_e2e_seeded", "true");
-    localStorage.setItem("offline_categories", JSON.stringify(categories));
-    localStorage.setItem("offline_tasks", JSON.stringify(tasks));
+    localStorage.setItem("offline_categories", JSON.stringify(primaryCategories));
+    localStorage.setItem("offline_tasks", JSON.stringify(primaryTasks));
     localStorage.setItem("offline_completions", JSON.stringify(completions));
+    localStorage.setItem("checklist_snapshot_categories", JSON.stringify(categories));
+    localStorage.setItem("checklist_snapshot_tasks", JSON.stringify(tasks));
+    localStorage.setItem("checklist_snapshot_completions", JSON.stringify(completions));
     localStorage.setItem("offline_category_shares", "[]");
     localStorage.setItem("offline_completions_queue", "{}");
     localStorage.setItem("offline_task_updates_queue", "{}");
@@ -53,7 +56,7 @@ async function openApp({ categories = [normalCategory], tasks = [], completions 
     localStorage.setItem("cleanup_done_v1", "true");
     localStorage.setItem("last_weekly_summary_shown", today);
     localStorage.setItem(`saturday_anim_shown_${today}`, "true");
-  }, { categories, tasks, completions, testUser, today, knownDevice });
+  }, { categories, tasks, completions, primaryCategories, primaryTasks, testUser, today, knownDevice });
   await page.goto(server.url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector(".app-container", { state: "visible" });
   await page.waitForFunction(() => document.documentElement.classList.contains("checklist-ui-ready"));
@@ -89,6 +92,15 @@ test("abertura sem alterações pendentes já aparece sincronizada", async () =>
 test("treino próprio aparece imediatamente na abertura pela aba Todos", async () => {
   const id = "25000000-0000-4000-8000-000000000001";
   const { context, page } = await openApp({ categories: [trainingCategory], tasks: [task(id, "Treino em cache", "Treino")] });
+  await page.waitForSelector(`.task-item[data-id="${id}"]`);
+  assert.equal(await page.locator(`.task-item[data-id="${id}"]`).count(), 1);
+  await context.close();
+});
+
+test("cópia de emergência restaura tarefas quando o cache principal chega vazio", async () => {
+  const id = "26000000-0000-4000-8000-000000000001";
+  const cachedTask = task(id, "Tarefa recuperada", "Pessoal");
+  const { context, page } = await openApp({ categories: [normalCategory], tasks: [cachedTask], primaryCategories: [], primaryTasks: [] });
   await page.waitForSelector(`.task-item[data-id="${id}"]`);
   assert.equal(await page.locator(`.task-item[data-id="${id}"]`).count(), 1);
   await context.close();

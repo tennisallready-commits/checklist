@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.34";
+const SERVICE_WORKER_URL = "./sw.js?v=10.35";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -2153,11 +2153,7 @@ function setupEventListeners() {
         btnLogout.addEventListener("click", async () => {
             if (await showAppConfirm("Deseja sair da sua conta?", { title: "Encerrar sessão", confirmText: "Sair" })) {
                 if (supabaseClient) {
-                    // Limpa todo o cache local do usuário anterior para evitar contaminação
-                    localStorage.removeItem("offline_categories");
-                    localStorage.removeItem("offline_tasks");
-                    localStorage.removeItem("offline_completions");
-                    
+                    clearLocalUserCache();
                     await supabaseClient.auth.signOut();
                     closeModal(modalManageTasks);
                 }
@@ -2242,6 +2238,20 @@ function setupEventListeners() {
 
     // Habilita deslize para baixo (swipe-down-to-close) em todos os modais
     document.querySelectorAll(".modal:not(.identifier-modal)").forEach(setupModalSwipeToClose);
+}
+
+function clearLocalUserCache() {
+    [
+        "offline_categories", "offline_tasks", "offline_completions",
+        "offline_category_shares", "offline_completions_queue",
+        "offline_task_updates_queue", "offline_collaboration_invites_queue"
+    ].forEach(key => localStorage.removeItem(key));
+    [
+        "checklist_device_cache_ready", "checklist_last_user_id",
+        "checklist_last_user_email", "pending_training_photo_uploads",
+        "checklist_snapshot_categories", "checklist_snapshot_tasks",
+        "checklist_snapshot_completions"
+    ].forEach(key => localPrefs.removeItem(key));
 }
 
 // ----------------------------------------------------
@@ -4153,7 +4163,7 @@ function renderChecklist() {
     updateTaskCreationOnboarding();
 
     if (filteredTasks.length === 0) {
-        emptyStateEl.classList.remove("hidden");
+        emptyStateEl.classList.toggle("hidden", document.body.dataset.awaitingCloud === "true");
         tasksListEl.classList.add("hidden");
     } else {
         emptyStateEl.classList.add("hidden");
@@ -8248,7 +8258,14 @@ function setupSupabaseAuth() {
         if (session) {
             clearTimeout(pendingInitialSessionTimer);
             pendingInitialSessionTimer = null;
-            const restoredFromCache = document.body.dataset.hasChecklistCache === "true";
+            let restoredFromCache = document.body.dataset.hasChecklistCache === "true";
+            const cachedOwnerId = localPrefs.getItem("checklist_last_user_id");
+            if (cachedOwnerId && String(cachedOwnerId) !== String(session.user.id)) {
+                clearLocalUserCache();
+                restoredFromCache = false;
+                document.body.dataset.hasChecklistCache = "false";
+                document.body.dataset.awaitingCloud = "true";
+            }
             currentUser = session.user;
             localPrefs.setItem("checklist_last_user_id", currentUser.id);
             localPrefs.setItem("checklist_last_user_email", currentUser.email || "");
@@ -8386,18 +8403,8 @@ function setupSupabaseAuth() {
             setAppContainerVisible(false);
             if (appSessionLoader) appSessionLoader.classList.add("hidden");
             
-            // Limpa o cache local ao deslogar para evitar contaminação
-            localStorage.removeItem("offline_categories");
-            localStorage.removeItem("offline_tasks");
-            localStorage.removeItem("offline_completions");
-            localStorage.removeItem("offline_category_shares");
-            localStorage.removeItem("offline_completions_queue");
-            localStorage.removeItem("offline_task_updates_queue");
-            localStorage.removeItem("offline_collaboration_invites_queue");
-            localPrefs.removeItem("checklist_device_cache_ready");
-            localPrefs.removeItem("checklist_last_user_id");
-            localPrefs.removeItem("checklist_last_user_email");
-            localPrefs.removeItem("pending_training_photo_uploads");
+            // O cache só é apagado pelo botão Sair, que representa uma intenção
+            // explícita. Eventos automáticos de sessão nunca destroem tarefas.
             document.documentElement.classList.remove("checklist-device-ready");
             document.documentElement.classList.remove("checklist-ui-ready");
             
