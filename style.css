@@ -3614,6 +3614,8 @@ body.theme-girly .modal-content::before {
 .app-notice-icon svg { width: 19px; height: 19px; }
 .app-notice strong { display: block; color: var(--text-primary); font-size: .76rem; }
 .app-notice p { margin: 2px 0 0; color: var(--text-secondary); font-size: .7rem; line-height: 1.4; }
+.cache-diagnostic-notice p { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .64rem; overflow-wrap: anywhere; }
+.cache-diagnostic-notice small { display: block; margin-top: 5px; color: var(--text-muted); font-size: .59rem; line-height: 1.35; }
 .app-notice > button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-muted); cursor: pointer; }
 .app-notice > button svg { width: 15px; height: 15px; }
 .app-confirm-layer { position: fixed; inset: 0; z-index: 21000; display: grid; place-items: center; padding: 20px; opacity: 0; transition: opacity .25s ease; }

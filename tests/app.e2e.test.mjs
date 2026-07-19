@@ -89,6 +89,15 @@ test("abertura sem alterações pendentes já aparece sincronizada", async () =>
   await context.close();
 });
 
+test("aparelho conhecido sem dados exibe diagnóstico fixo do cache", async () => {
+  const { context, page } = await openApp({ categories: [], tasks: [], waitForCache: false, knownDevice: true });
+  await page.waitForSelector("#cache-diagnostic-notice");
+  assert.match(await page.locator("#cache-diagnostic-notice").innerText(), /CACHE-EMPTY-01|CACHE-IDB-02/);
+  await page.waitForTimeout(200);
+  assert.equal(await page.locator("#cache-diagnostic-notice").count(), 1);
+  await context.close();
+});
+
 test("treino próprio aparece imediatamente na abertura pela aba Todos", async () => {
   const id = "25000000-0000-4000-8000-000000000001";
   const { context, page } = await openApp({ categories: [trainingCategory], tasks: [task(id, "Treino em cache", "Treino")] });

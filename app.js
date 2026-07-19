@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.35";
+const SERVICE_WORKER_URL = "./sw.js?v=10.36";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -219,6 +219,25 @@ function showAppNotice(message, kind = getNoticeKind(message)) {
     notice.querySelector("button").addEventListener("click", close);
     requestAnimationFrame(() => notice.classList.add("visible"));
     setTimeout(close, kind === "error" ? 6000 : 4200);
+}
+
+function showCacheDiagnostic(message) {
+    document.getElementById("cache-diagnostic-notice")?.remove();
+    let stack = document.getElementById("app-notice-stack");
+    if (!stack) {
+        stack = document.createElement("div");
+        stack.id = "app-notice-stack";
+        stack.className = "app-notice-stack";
+        document.body.appendChild(stack);
+    }
+    const notice = document.createElement("div");
+    notice.id = "cache-diagnostic-notice";
+    notice.className = "app-notice error cache-diagnostic-notice visible";
+    notice.setAttribute("role", "alert");
+    notice.innerHTML = `<span class="app-notice-icon"><i data-lucide="database-zap"></i></span><div><strong>Diagnóstico do cache</strong><p>${escapeHTML(message)}</p><small>Faça uma captura deste aviso e envie para análise.</small></div><button type="button" aria-label="Fechar"><i data-lucide="x"></i></button>`;
+    stack.appendChild(notice);
+    notice.querySelector("button").addEventListener("click", () => notice.remove());
+    if (window.lucide) window.lucide.createIcons();
 }
 
 async function showAppConfirm(message, options = {}) {
@@ -538,6 +557,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
 async function initApp() {
     const isKnownDevice = localPrefs.getItem("checklist_device_cache_ready") === "true";
+    const countStoredArray = key => {
+        try {
+            const value = JSON.parse(localPrefs.getItem(key) || "[]");
+            return Array.isArray(value) ? value.length : -1;
+        } catch (_) { return -2; }
+    };
+    const startupCacheState = {
+        primaryCategories: countStoredArray("offline_categories"),
+        primaryTasks: countStoredArray("offline_tasks"),
+        snapshotCategories: countStoredArray("checklist_snapshot_categories"),
+        snapshotTasks: countStoredArray("checklist_snapshot_tasks")
+    };
     const initializePersistentStorage = async () => {
         try {
             await idb.init();
@@ -546,8 +577,10 @@ async function initApp() {
             Object.entries(savedAvatars).forEach(([url, dataUrl]) => {
                 if (url && dataUrl) persistentAvatarByUrl.set(url, dataUrl);
             });
+            return { ok: true };
         } catch (e) {
             console.error("Falha ao inicializar IndexedDB:", e);
+            return { ok: false, error: e?.message || "erro desconhecido" };
         }
     };
     const persistentStorageReady = initializePersistentStorage();
@@ -599,6 +632,29 @@ async function initApp() {
         // entram uma única vez quando a nuvem responder, sem tela intermediária.
         appContainer.style.display = "flex";
         document.documentElement.classList.add("checklist-ui-ready");
+    }
+
+    if (isKnownDevice && !hasUsefulCache) {
+        persistentStorageReady.then(async storageResult => {
+            const idbCategories = await idb.get("offline_categories").catch(() => null);
+            const idbTasks = await idb.get("offline_tasks").catch(() => null);
+            const memoryCategories = Array.isArray(dbCache.offline_categories) ? dbCache.offline_categories.length : -1;
+            const memoryTasks = Array.isArray(dbCache.offline_tasks) ? dbCache.offline_tasks.length : -1;
+            const idbCategoryCount = Array.isArray(idbCategories) ? idbCategories.length : -1;
+            const idbTaskCount = Array.isArray(idbTasks) ? idbTasks.length : -1;
+            const recoveredFromIdb = memoryCategories > 0 || memoryTasks > 0;
+            if (recoveredFromIdb) {
+                loadDataOffline();
+                renderCategories();
+                renderChecklist();
+                updateProgress();
+                document.body.dataset.hasChecklistCache = "true";
+                document.body.dataset.awaitingCloud = "false";
+            }
+            const persisted = navigator.storage?.persisted ? await navigator.storage.persisted().catch(() => false) : false;
+            const code = storageResult?.ok ? "CACHE-EMPTY-01" : "CACHE-IDB-02";
+            showCacheDiagnostic(`${code} | principal C:${startupCacheState.primaryCategories} T:${startupCacheState.primaryTasks} | emergência C:${startupCacheState.snapshotCategories} T:${startupCacheState.snapshotTasks} | memória C:${memoryCategories} T:${memoryTasks} | IndexedDB C:${idbCategoryCount} T:${idbTaskCount} | persistente:${persisted ? "sim" : "não"}${storageResult?.error ? ` | ${storageResult.error}` : ""}`);
+        });
     }
 
     // Connect to Supabase
