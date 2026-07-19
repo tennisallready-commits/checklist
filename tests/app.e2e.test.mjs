@@ -10,6 +10,9 @@ const { chromium } = require("playwright");
 const projectRoot = resolve(import.meta.dirname, "..");
 const chromeOnMac = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+const latestSaturdayDate = new Date(`${today}T12:00:00`);
+while (latestSaturdayDate.getDay() !== 6) latestSaturdayDate.setDate(latestSaturdayDate.getDate() - 1);
+const latestSaturday = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(latestSaturdayDate);
 const testUser = { id: "00000000-0000-4000-8000-000000000001", email: "teste@checklist.local" };
 const normalCategory = { id: "10000000-0000-4000-8000-000000000001", name: "Pessoal", type: "Pessoal", is_active: true, user_id: testUser.id };
 const trainingCategory = { id: "20000000-0000-4000-8000-000000000001", name: "Treino", type: "Treino", is_active: true, user_id: testUser.id };
@@ -36,7 +39,7 @@ async function openApp({ categories = [normalCategory], tasks = [], completions 
   page.on("pageerror", error => consoleErrors.push(error.message));
   await page.route("https://cdn.jsdelivr.net/**", route => route.abort());
   await page.route("https://fonts.googleapis.com/**", route => route.abort());
-  await page.addInitScript(({ categories, tasks, completions, primaryCategories, primaryTasks, testUser, today, knownDevice, identityCache }) => {
+  await page.addInitScript(({ categories, tasks, completions, primaryCategories, primaryTasks, testUser, today, latestSaturday, knownDevice, identityCache }) => {
     window.__CHECKLIST_E2E_USER__ = testUser;
     if (sessionStorage.getItem("checklist_e2e_seeded") === "true") return;
     sessionStorage.setItem("checklist_e2e_seeded", "true");
@@ -55,9 +58,9 @@ async function openApp({ categories = [normalCategory], tasks = [], completions 
     localStorage.setItem("checklist_last_user_email", testUser.email);
     if (identityCache) localStorage.setItem(`checklist_identity_cache_${testUser.id}`, JSON.stringify(identityCache));
     localStorage.setItem("cleanup_done_v1", "true");
-    localStorage.setItem("last_weekly_summary_shown", today);
+    localStorage.setItem("last_weekly_summary_shown", latestSaturday);
     localStorage.setItem(`saturday_anim_shown_${today}`, "true");
-  }, { categories, tasks, completions, primaryCategories, primaryTasks, testUser, today, knownDevice, identityCache });
+  }, { categories, tasks, completions, primaryCategories, primaryTasks, testUser, today, latestSaturday, knownDevice, identityCache });
   await page.goto(server.url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector(".app-container", { state: "visible" });
   await page.waitForFunction(() => document.documentElement.classList.contains("checklist-ui-ready"));
@@ -197,6 +200,45 @@ test("conclusão comum acontece com um clique e persiste", async () => {
   await page.waitForFunction(taskId => document.querySelector(`.task-item[data-id="${taskId}"]`)?.classList.contains("completed"), id);
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector(`.task-item[data-id="${id}"].completed`);
+  await context.close();
+});
+
+test("tarefa futura pede confirmação para ir a hoje e para voltar à origem", async () => {
+  const id = "35000000-0000-4000-8000-000000000001";
+  const tomorrowDate = new Date(`${today}T12:00:00`);
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrow = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(tomorrowDate);
+  const futureTask = task(id, "Preparar amanhã", "Pessoal");
+  futureTask.created_at = `${tomorrow}T12:00:00-03:00`;
+  futureTask.context.turnos = ["Tarde"];
+  const { context, page } = await openApp({ tasks: [futureTask] });
+  await page.click("#btn-next-day");
+  const futureCard = page.locator(`.task-item[data-id="${id}"]`);
+  await futureCard.waitFor();
+  await futureCard.locator(".task-checkbox-wrapper").click();
+  await page.waitForSelector(".app-confirm-layer.visible");
+  assert.match(await page.locator(".app-confirm-card").innerText(), /movida para hoje/i);
+  await page.click(".app-confirm-cancel");
+  await page.waitForSelector(".app-confirm-layer", { state: "detached" });
+  assert.equal(await futureCard.evaluate(element => element.classList.contains("completed")), false);
+
+  await futureCard.locator(".task-checkbox-wrapper").click();
+  await page.click(".app-confirm-ok");
+  await page.waitForSelector(`.task-item[data-id="${id}"].completed`);
+  await page.waitForSelector(".app-confirm-layer", { state: "detached" });
+  const todayCard = page.locator(`.task-item[data-id="${id}"]`);
+  await todayCard.locator(".task-checkbox-wrapper").click();
+  await page.waitForSelector(".app-confirm-layer.visible");
+  assert.match(await page.locator(".app-confirm-card").innerText(), /data original/i);
+  await page.click(".app-confirm-ok");
+  await page.waitForSelector(`.task-item[data-id="${id}"]`, { state: "detached" });
+  await page.waitForSelector(".app-confirm-layer", { state: "detached" });
+  await page.click("#btn-next-day");
+  await page.waitForSelector(`.task-item[data-id="${id}"]:not(.completed)`);
+  const restoredTask = JSON.parse(await page.evaluate(() => localStorage.getItem("offline_tasks"))).find(item => item.id === id);
+  assert.equal(restoredTask.created_at, futureTask.created_at);
+  assert.deepEqual(restoredTask.context.turnos, ["Tarde"]);
+  assert.equal(restoredTask.context.future_move_origin, undefined);
   await context.close();
 });
 

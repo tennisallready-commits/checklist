@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.40";
+const SERVICE_WORKER_URL = "./sw.js?v=10.41";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -1354,6 +1354,15 @@ function setupEventListeners() {
         }
 
         const isCompleting = !item.classList.contains("completed");
+        let futureMoveConfirmed = false;
+        if (isCompleting && isFutureDate && !isTrainingCategory(selectedTask?.category)) {
+            const scheduledLabel = new Date(`${selectedDate}T12:00:00`).toLocaleDateString("pt-BR", { day: "2-digit", month: "long" });
+            futureMoveConfirmed = await showAppConfirm(
+                `Esta tarefa está programada para ${scheduledLabel}. Ao marcar como feita, ela será movida para hoje, no turno da ${getCurrentShiftName(now)}.`,
+                { title: "Concluir tarefa futura?", confirmText: "Mover e concluir" }
+            );
+            if (!futureMoveConfirmed) return;
+        }
         if (isCompleting) {
             const checkbox = item.querySelector(".task-checkbox");
             if (checkbox) {
@@ -1364,7 +1373,7 @@ function setupEventListeners() {
             }
         }
         
-        await toggleTask(taskId, { completeAtCurrentMoment: isFutureDate });
+        await toggleTask(taskId, { completeAtCurrentMoment: isFutureDate, futureMoveConfirmed });
     });
 
     // Exit edit mode on click outside categories bar
@@ -5052,6 +5061,13 @@ async function moveFutureTaskToCurrentMoment(id) {
     if (typeof task.context === "string") {
         try { context = JSON.parse(task.context); } catch (_) { context = {}; }
     } else context = { ...(task.context || {}) };
+    if (!context.future_move_origin) {
+        context.future_move_origin = {
+            created_at: task.created_at,
+            scheduled_date: selectedDate,
+            turnos: Array.isArray(context.turnos) ? [...context.turnos] : null
+        };
+    }
     context.turnos = [getCurrentShiftName(now)];
     const updates = { created_at: now.toISOString(), context };
     const applyUpdates = item => String(item.id) === String(id) ? { ...item, ...updates, completed: false } : item;
@@ -5084,12 +5100,69 @@ async function moveFutureTaskToCurrentMoment(id) {
     return true;
 }
 
+function getFutureMoveOrigin(task) {
+    if (!task) return null;
+    let context = task.context || {};
+    if (typeof context === "string") {
+        try { context = JSON.parse(context); } catch (_) { return null; }
+    }
+    const origin = context.future_move_origin;
+    return origin?.created_at && /^\d{4}-\d{2}-\d{2}$/.test(String(origin.scheduled_date || "")) ? origin : null;
+}
+
+async function restoreMovedFutureTask(id, task) {
+    const origin = getFutureMoveOrigin(task);
+    if (!origin) return false;
+    // Primeiro desfaz a conclusão de hoje usando a mesma fila offline segura.
+    await commitTaskToggle(id, false);
+
+    let context = task.context || {};
+    if (typeof context === "string") {
+        try { context = JSON.parse(context); } catch (_) { context = {}; }
+    } else context = { ...context };
+    delete context.future_move_origin;
+    if (Array.isArray(origin.turnos)) context.turnos = [...origin.turnos];
+    else delete context.turnos;
+    const updates = { created_at: origin.created_at, context };
+    const restore = item => String(item.id) === String(id) ? { ...item, ...updates, completed: false } : item;
+    tasks = tasks.map(restore);
+    allActiveTasks = allActiveTasks.map(restore);
+    const localTasks = (JSON.parse(localStorage.getItem("offline_tasks")) || []).map(restore);
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+
+    if (supabaseClient && currentUser && !isTemporaryId(id)) {
+        const queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+        queue[id] = { ...(queue[id] || {}), ...updates };
+        const queuedUpdate = queue[id];
+        localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
+        supabaseClient.from("tasks").update(updates).eq("id", id).then(({ error }) => {
+            if (error) return console.warn("A data original foi restaurada apenas neste aparelho por enquanto:", error.message);
+            clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdate);
+        }).catch(error => console.warn("Não foi possível sincronizar a restauração da tarefa:", error.message));
+    }
+
+    loadDataOffline();
+    renderChecklist();
+    updateProgress();
+    const dateLabel = new Date(`${origin.scheduled_date}T12:00:00`).toLocaleDateString("pt-BR", { day: "2-digit", month: "long" });
+    showAppNotice(`Check desmarcado. A tarefa voltou para ${dateLabel}.`, "success");
+    return true;
+}
+
 async function toggleTask(id, options = {}) {
     if (options.completeAtCurrentMoment && selectedDate > getLocalDateString(new Date())) {
         const futureTask = tasks.find(item => String(item.id) === String(id)) || allActiveTasks.find(item => String(item.id) === String(id));
         if (futureTask && isTrainingCategory(futureTask.category)) {
             showAppNotice("Tarefas de treino só podem ser finalizadas no dia programado.", "warning");
             return;
+        }
+        if (!options.futureMoveConfirmed) {
+            const scheduledLabel = new Date(`${selectedDate}T12:00:00`).toLocaleDateString("pt-BR", { day: "2-digit", month: "long" });
+            const confirmed = await showAppConfirm(
+                `Esta tarefa está programada para ${scheduledLabel}. Ao marcar como feita, ela será movida para hoje, no turno da ${getCurrentShiftName(new Date())}.`,
+                { title: "Concluir tarefa futura?", confirmText: "Mover e concluir" }
+            );
+            if (!confirmed) return;
         }
         const moved = await moveFutureTaskToCurrentMoment(id);
         if (!moved) return;
@@ -5109,6 +5182,17 @@ async function toggleTask(id, options = {}) {
     }
     if (!canCurrentUserCheckTask(task)) {
         showTaskCheckPermissionNotice(task);
+        return;
+    }
+    const futureMoveOrigin = task?.completed ? getFutureMoveOrigin(task) : null;
+    if (futureMoveOrigin) {
+        const dateLabel = new Date(`${futureMoveOrigin.scheduled_date}T12:00:00`).toLocaleDateString("pt-BR", { day: "2-digit", month: "long" });
+        const confirmed = await showAppConfirm(
+            `Ao desmarcar este check, a tarefa voltará para sua data original: ${dateLabel}.`,
+            { title: "Devolver tarefa à data original?", confirmText: "Desmarcar e devolver" }
+        );
+        if (!confirmed) return;
+        await restoreMovedFutureTask(id, task);
         return;
     }
     const turnos = (task && task.context && task.context.turnos) ? task.context.turnos : [];
