@@ -48,6 +48,7 @@ async function openApp({ categories = [normalCategory], tasks = [], completions 
     localStorage.setItem("offline_task_updates_queue", "{}");
     localStorage.setItem("checklist_device_cache_ready", "true");
     localStorage.setItem("checklist_last_user_id", testUser.id);
+    localStorage.setItem("checklist_last_user_email", testUser.email);
     localStorage.setItem("cleanup_done_v1", "true");
     localStorage.setItem("last_weekly_summary_shown", today);
     localStorage.setItem(`saturday_anim_shown_${today}`, "true");

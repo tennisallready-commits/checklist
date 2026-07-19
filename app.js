@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.26";
+const SERVICE_WORKER_URL = "./sw.js?v=10.27";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -2494,7 +2494,8 @@ function cachePriorityAvatars(urls) {
     })).then(async () => {
         const compactCache = Object.fromEntries([...persistentAvatarByUrl.entries()].slice(-40));
         await idb.put("priority_profile_avatars", compactCache);
-        renderChecklist();
+        // A imagem original já está visível. A miniatura persistente entra na
+        // próxima abertura sem reconstruir toda a lista nesta sessão.
         if (modalTrainingReport?.classList.contains("active")) paintTrainingReport(currentFilter !== "all" ? currentFilter : null);
     }).catch(() => {});
 }
@@ -2880,10 +2881,11 @@ async function repairAndTestPushNotifications() {
     }
 }
 
-function canCurrentUserCheckTask(task) {
-    if (task && isTrainingCategory(task.category)) return isTrainingTaskOwnedByCurrentUser(task);
+function canCurrentUserCheckTask(task, allowCachedViewer = false) {
+    if (task && isTrainingCategory(task.category)) return isTrainingTaskOwnedByCurrentUser(task, allowCachedViewer);
     if (!task || !normalizeAccountEmail(task.assigned_to)) return true;
-    return Boolean(currentUser) && normalizeAccountEmail(task.assigned_to) === normalizeAccountEmail(currentUser.email);
+    const viewerEmail = currentUser?.email || (allowCachedViewer ? localPrefs.getItem("checklist_last_user_email") : "");
+    return Boolean(viewerEmail) && normalizeAccountEmail(task.assigned_to) === normalizeAccountEmail(viewerEmail);
 }
 
 function isTrainingTaskOwnedByCurrentUser(task, allowCachedViewer = false) {
@@ -2991,9 +2993,7 @@ function subscribeToCollaborationUpdates() {
     const refreshSharedTrainingData = () => {
         clearTimeout(refreshTimer);
         refreshTimer = setTimeout(async () => {
-            // Em aparelhos já aquecidos, o cache foi pintado no initApp.
-            // Evita reconstruí-lo de novo enquanto a nuvem revalida em silêncio.
-            await loadChecklistAndProgress(restoredFromCache, restoredFromCache);
+            await loadChecklistAndProgress();
             await loadCollaborationIdentityLabels();
             renderChecklist();
             if (modalTrainingReport?.classList.contains("active")) await renderTrainingReport();
@@ -4416,9 +4416,10 @@ function refreshExpiredReminderIndicators() {
 // Cria e configura o elemento DOM de um card de tarefa reutilizável
 function createTaskDOMElement(task) {
     const taskEl = document.createElement("div");
-    const canCheckTask = canCurrentUserCheckTask(task);
+    // O cache antecipa apenas a aparência; o clique revalida a sessão atual.
+    const canCheckTask = canCurrentUserCheckTask(task, true);
     const trainingCollaborative = isTrainingCategory(task.category);
-    const trainingViewOnly = trainingCollaborative && !isTrainingTaskOwnedByCurrentUser(task);
+    const trainingViewOnly = trainingCollaborative && !isTrainingTaskOwnedByCurrentUser(task, true);
     const trainingOwnerEmail = trainingCollaborative ? getTrainingTaskOwnerEmail(task) : "";
     const trainingOwnerLabel = task.context?.creator_label || getIdentityLabelByUserId(task.user_id) || (trainingOwnerEmail ? getIdentityLabel(trainingOwnerEmail) : "Dono da tarefa");
     const trainingOwnerAvatar = getIdentityAvatarByUserId(task.user_id) || getCachedAvatarUrl(task.context?.creator_avatar_url || "") || (trainingOwnerEmail ? getIdentityAvatar(trainingOwnerEmail) : "");
@@ -8169,7 +8170,7 @@ async function loadUserProfile() {
             .eq('id', currentUser.id)
             .maybeSingle();
             
-        if (!error && data && data.theme) {
+        if (!error && data && data.theme && data.theme !== currentTheme) {
             // Aplica o tema sem chamar o saveUserThemeCloud para evitar requisição em loop
             currentTheme = data.theme;
             localStorage.setItem("checklist_theme", data.theme);
@@ -8230,6 +8231,7 @@ function setupSupabaseAuth() {
             const restoredFromCache = document.body.dataset.hasChecklistCache === "true";
             currentUser = session.user;
             localPrefs.setItem("checklist_last_user_id", currentUser.id);
+            localPrefs.setItem("checklist_last_user_email", currentUser.email || "");
             learningCloudState = "idle";
             reportsCloudState = "idle";
             updatePendingTrainingPhotoFlag(await idb.get("training_photo_records") || []);
@@ -8270,9 +8272,9 @@ function setupSupabaseAuth() {
             // Carrega as configurações de perfil (como o tema do usuário)
             await loadUserProfile();
             
-            await loadChecklistAndProgress();
+            await loadChecklistAndProgress(restoredFromCache, restoredFromCache);
             await loadCollaborationIdentityLabels();
-            renderChecklist();
+            if (!restoredFromCache) renderChecklist();
             renderNotifications();
             localPrefs.setItem("checklist_device_cache_ready", "true");
             document.documentElement.classList.add("checklist-device-ready");
@@ -8357,6 +8359,7 @@ function setupSupabaseAuth() {
             localStorage.removeItem("offline_collaboration_invites_queue");
             localPrefs.removeItem("checklist_device_cache_ready");
             localPrefs.removeItem("checklist_last_user_id");
+            localPrefs.removeItem("checklist_last_user_email");
             localPrefs.removeItem("pending_training_photo_uploads");
             document.documentElement.classList.remove("checklist-device-ready");
             
