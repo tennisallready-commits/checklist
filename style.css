@@ -3828,7 +3828,7 @@ body.theme-girly .task-item.shared-task-focus .task-item-foreground {
     100% { transform: scale(1); }
 }
 
-.task-item.completed .task-checkbox svg {
+.task-item.completed.just-completed .task-checkbox svg {
     animation: pop-check 0.25s ease forwards;
 }
 
@@ -4307,7 +4307,7 @@ body.theme-girly .app-container.tomorrow-mode .history-badge {
     }
 }
 
-.task-item.completed .task-checkbox {
+.task-item.completed.just-completed .task-checkbox {
     animation: checkbox-pop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 

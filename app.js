@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.21";
+const SERVICE_WORKER_URL = "./sw.js?v=10.22";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -155,6 +155,8 @@ function chooseTaskReminderTime(currentValue = "08:00", currentOffsetDays = 0) {
 let isAuthModeLogin = true;
 let localDataVersion = 0; // Previne race conditions de sync
 let dataLoadRequestVersion = 0; // Impede respostas antigas de outra data de sobrescreverem a tela
+let pendingCompletionAnimationTaskId = null;
+let renderCompletionAnimationTaskId = null;
 
 function beginOptimisticMutation() {
     localDataVersion += 1;
@@ -4093,6 +4095,11 @@ function renderChecklist() {
         return;
     }
 
+    // A animação do check é consumida somente pelo primeiro render após a ação.
+    // Renderizações posteriores de sincronização não devem pulsar checks antigos.
+    renderCompletionAnimationTaskId = pendingCompletionAnimationTaskId;
+    pendingCompletionAnimationTaskId = null;
+
     // Preserva as ações abertas caso uma atualização em segundo plano realmente
     // precise reconstruir a lista logo após o gesto.
     const openSwipeTask = tasksListEl.querySelector(".task-item.swiped");
@@ -4324,6 +4331,7 @@ function renderChecklist() {
 
         lucide.createIcons();
     }
+    renderCompletionAnimationTaskId = null;
 }
 
 function updateTrainingProgressMode() {
@@ -4422,7 +4430,8 @@ function createTaskDOMElement(task) {
         isPastNightShiftException = true;
     }
     
-    taskEl.className = `task-item ${task.completed ? 'completed' : ''} ${isPastNightShiftException ? 'editable-past-night' : ''} ${canCheckTask ? '' : 'check-locked'} ${taskDescription ? 'has-description' : ''}`;
+    const animateCompletion = task.completed && String(task.id) === String(renderCompletionAnimationTaskId);
+    taskEl.className = `task-item ${task.completed ? 'completed' : ''} ${animateCompletion ? 'just-completed' : ''} ${isPastNightShiftException ? 'editable-past-night' : ''} ${canCheckTask ? '' : 'check-locked'} ${taskDescription ? 'has-description' : ''}`;
     taskEl.dataset.id = task.id;
 
     // Estilo dinâmico da categoria
@@ -4954,6 +4963,8 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
     pendingToggles.add(id);
 
     // Toggle local state immediately for visual response
+    const wasCompleted = tasks.find(t => String(t.id) === String(id))?.completed === true;
+    if (!wasCompleted) pendingCompletionAnimationTaskId = id;
     tasks = tasks.map(t => {
         if (String(t.id) === String(id)) return { ...t, completed: !t.completed };
         return t;
