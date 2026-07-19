@@ -47,6 +47,7 @@ async function openApp({ categories = [normalCategory], tasks = [], completions 
     localStorage.setItem("offline_completions_queue", "{}");
     localStorage.setItem("offline_task_updates_queue", "{}");
     localStorage.setItem("checklist_device_cache_ready", "true");
+    localStorage.setItem("checklist_last_user_id", testUser.id);
     localStorage.setItem("cleanup_done_v1", "true");
     localStorage.setItem("last_weekly_summary_shown", today);
     localStorage.setItem(`saturday_anim_shown_${today}`, "true");
@@ -77,6 +78,14 @@ test("abertura sem alterações pendentes já aparece sincronizada", async () =>
   await page.waitForTimeout(250);
   assert.equal(await page.locator("#sync-status").getAttribute("data-state"), "synced");
   assert.equal((await page.locator("#sync-status-label").innerText()).trim(), "Sincronizado");
+  await context.close();
+});
+
+test("treino próprio aparece imediatamente na abertura pela aba Todos", async () => {
+  const id = "25000000-0000-4000-8000-000000000001";
+  const { context, page } = await openApp({ categories: [trainingCategory], tasks: [task(id, "Treino em cache", "Treino")] });
+  await page.waitForSelector(`.task-item[data-id="${id}"]`);
+  assert.equal(await page.locator(`.task-item[data-id="${id}"]`).count(), 1);
   await context.close();
 });
 

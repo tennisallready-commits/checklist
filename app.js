@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.24";
+const SERVICE_WORKER_URL = "./sw.js?v=10.25";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -2886,9 +2886,14 @@ function canCurrentUserCheckTask(task) {
     return Boolean(currentUser) && normalizeAccountEmail(task.assigned_to) === normalizeAccountEmail(currentUser.email);
 }
 
-function isTrainingTaskOwnedByCurrentUser(task) {
-    if (!task || !currentUser) return false;
-    if (task.user_id) return String(task.user_id) === String(currentUser.id);
+function isTrainingTaskOwnedByCurrentUser(task, allowCachedViewer = false) {
+    if (!task) return false;
+    const viewerId = currentUser?.id || (allowCachedViewer ? localPrefs.getItem("checklist_last_user_id") : null);
+    if (!viewerId) return false;
+    if (task.user_id) return String(task.user_id) === String(viewerId);
+    // A regra alternativa depende da sessão ativa e nunca usa a identidade em
+    // cache para conceder permissão de check ou gerenciamento.
+    if (!currentUser) return false;
     return canManageTrainingCollaborativeCategory(task.category);
 }
 
@@ -4117,7 +4122,7 @@ function renderChecklist() {
         if (currentFilter === "all") {
             // Treinos de outros participantes ficam disponíveis somente dentro
             // da categoria Treino; não ocupam a rotina pessoal da aba Todos.
-            return !isTrainingCategory(task.category) || isTrainingTaskOwnedByCurrentUser(task);
+            return !isTrainingCategory(task.category) || isTrainingTaskOwnedByCurrentUser(task, true);
         }
         return task.category === currentFilter;
     });
@@ -8224,6 +8229,7 @@ function setupSupabaseAuth() {
         if (session) {
             const restoredFromCache = document.body.dataset.hasChecklistCache === "true";
             currentUser = session.user;
+            localPrefs.setItem("checklist_last_user_id", currentUser.id);
             learningCloudState = "idle";
             reportsCloudState = "idle";
             updatePendingTrainingPhotoFlag(await idb.get("training_photo_records") || []);
@@ -8350,6 +8356,7 @@ function setupSupabaseAuth() {
             localStorage.removeItem("offline_task_updates_queue");
             localStorage.removeItem("offline_collaboration_invites_queue");
             localPrefs.removeItem("checklist_device_cache_ready");
+            localPrefs.removeItem("checklist_last_user_id");
             localPrefs.removeItem("pending_training_photo_uploads");
             document.documentElement.classList.remove("checklist-device-ready");
             
