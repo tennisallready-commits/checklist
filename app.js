@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.31";
+const SERVICE_WORKER_URL = "./sw.js?v=10.32";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -536,17 +536,23 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 async function initApp() {
-    // Inicializa o IndexedDB e carrega o cache
-    try {
-        await idb.init();
-        await idb.loadAllToCache();
-        const savedAvatars = await idb.get("priority_profile_avatars") || {};
-        Object.entries(savedAvatars).forEach(([url, dataUrl]) => {
-            if (url && dataUrl) persistentAvatarByUrl.set(url, dataUrl);
-        });
-    } catch (e) {
-        console.error("Falha ao inicializar IndexedDB:", e);
-    }
+    const isKnownDevice = localPrefs.getItem("checklist_device_cache_ready") === "true";
+    const initializePersistentStorage = async () => {
+        try {
+            await idb.init();
+            await idb.loadAllToCache();
+            const savedAvatars = await idb.get("priority_profile_avatars") || {};
+            Object.entries(savedAvatars).forEach(([url, dataUrl]) => {
+                if (url && dataUrl) persistentAvatarByUrl.set(url, dataUrl);
+            });
+        } catch (e) {
+            console.error("Falha ao inicializar IndexedDB:", e);
+        }
+    };
+    const persistentStorageReady = initializePersistentStorage();
+    // Na primeira abertura ainda não há cópia síncrona; aguarda o banco local.
+    // Em aparelhos conhecidos, a interface usa o shadow cache imediatamente.
+    if (!isKnownDevice) await persistentStorageReady;
 
     // Load theme
     const storedTheme = localStorage.getItem("checklist_theme") || "default";
@@ -572,7 +578,7 @@ async function initApp() {
     const cachedTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
     const hasUsefulCache = cachedCategories.some(category => category.is_active !== false)
         || cachedTasks.some(task => task.is_active !== false);
-    const isWarmDevice = localPrefs.getItem("checklist_device_cache_ready") === "true";
+    const isWarmDevice = isKnownDevice;
     document.body.dataset.hasChecklistCache = hasUsefulCache ? "true" : "false";
     refreshSyncStatusFromQueues();
     if (hasUsefulCache || isWarmDevice) {

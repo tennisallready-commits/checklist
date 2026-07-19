@@ -78,6 +78,7 @@ test("primeiro uso leva diretamente à criação da primeira categoria", async (
 test("abertura sem alterações pendentes já aparece sincronizada", async () => {
   const { context, page } = await openApp();
   await page.waitForTimeout(250);
+  assert.equal(await page.locator("#app-session-loader").evaluate(element => getComputedStyle(element).display), "none");
   assert.equal(await page.locator("#sync-status").getAttribute("data-state"), "synced");
   assert.equal((await page.locator("#sync-status-label").innerText()).trim(), "Sincronizado");
   await context.close();
