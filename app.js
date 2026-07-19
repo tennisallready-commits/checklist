@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.39";
+const SERVICE_WORKER_URL = "./sw.js?v=10.40";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -3132,6 +3132,9 @@ function markCurrentInvitesAsSeen() {
     if (collabInviteReadyLabel) collabInviteReadyLabel.setAttribute("aria-hidden", "true");
     clearTimeout(notificationPreviewTimer);
     notificationPreviewTimer = null;
+    // Recalcula imediatamente. Antes, um convite já visto podia manter a
+    // bolinha acesa até a próxima sincronização ou troca de tela.
+    updateCollaborationInviteAttention();
 }
 
 async function markSharedTaskNotificationsAsRead() {

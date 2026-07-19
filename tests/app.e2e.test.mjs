@@ -102,9 +102,11 @@ test("checklist manual fica nas configurações e não no sininho", async () => 
 
 test("sininho vazio mostra limpeza desativada e estado limpo", async () => {
   const { context, page } = await openApp();
+  assert.equal(await page.locator("#notifications-badge").evaluate(element => getComputedStyle(element).display), "none");
   await page.click("#btn-notifications");
   await page.waitForSelector("#modal-notifications.active .notifications-empty-state");
   assert.equal(await page.locator("#btn-clear-notifications").isDisabled(), true);
+  assert.equal(await page.locator("#notifications-badge").evaluate(element => getComputedStyle(element).display), "none");
   await context.close();
 });
 
