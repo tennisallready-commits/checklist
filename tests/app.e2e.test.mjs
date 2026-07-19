@@ -148,6 +148,9 @@ test("treino de outro participante aparece só dentro da categoria Treino", asyn
   assert.equal(await page.locator(`.task-item[data-id="${ownId}"]`).count(), 1);
   assert.equal(await page.locator(`.task-item[data-id="${otherId}"]`).count(), 0);
   await page.click('.category-chip[data-category="Treino"]');
+  const selectedChip = page.locator('.category-chip[data-category="Treino"]');
+  assert.equal(await selectedChip.evaluate(element => document.activeElement === element), true);
+  assert.notEqual(await selectedChip.evaluate(element => getComputedStyle(element).boxShadow), "none");
   assert.equal(await page.locator(`.task-item[data-id="${otherId}"]`).count(), 1);
   assert.equal(await page.locator(`.task-item[data-id="${otherId}"] .task-checkbox-wrapper`).getAttribute("aria-disabled"), "true");
   await context.close();

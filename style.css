@@ -1480,7 +1480,7 @@ body {
 }
 
 .category-chip.active {
-    background: var(--primary-gradient);
+    background: var(--primary-gradient) !important;
     color: var(--text-primary);
     border-color: transparent;
     box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
@@ -4463,11 +4463,18 @@ body.theme-girly select:focus {
     cursor: grabbing !important;
 }
 
-/* Remove qualquer borda/outline residual de foco iOS após soltar o chip */
-.category-chip:focus,
-.category-chip:focus-visible {
+/* Remove somente o contorno residual de guias inativas no iOS. A guia ativa
+   mantém seu sombreado assim que é tocada, mesmo enquanto conserva o foco. */
+.category-chip:not(.active):focus,
+.category-chip:not(.active):focus-visible {
     outline: none !important;
     box-shadow: none !important;
+}
+
+.category-chip.active:focus,
+.category-chip.active:focus-visible {
+    outline: none !important;
+    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3) !important;
 }
 
 .category-chip.dragging {
