@@ -485,6 +485,14 @@ const collabInviteReadyLabel = document.getElementById("collab-invite-ready-labe
 const notificationsEnabledToggle = document.getElementById("notifications-enabled-toggle");
 const notificationsPermissionStatus = document.getElementById("notifications-permission-status");
 const btnRepairTestPush = document.getElementById("btn-repair-test-push");
+const siriShortcutStatus = document.getElementById("siri-shortcut-status");
+const siriShortcutCredentials = document.getElementById("siri-shortcut-credentials");
+const siriShortcutUrl = document.getElementById("siri-shortcut-url");
+const siriShortcutToken = document.getElementById("siri-shortcut-token");
+const btnGenerateSiriToken = document.getElementById("btn-generate-siri-token");
+const btnRevokeSiriToken = document.getElementById("btn-revoke-siri-token");
+const btnCopySiriUrl = document.getElementById("btn-copy-siri-url");
+const btnCopySiriToken = document.getElementById("btn-copy-siri-token");
 const modalCreateIdentifier = document.getElementById("modal-create-identifier");
 const formCreateIdentifier = document.getElementById("form-create-identifier");
 const inputUserIdentifier = document.getElementById("input-user-identifier");
@@ -1404,6 +1412,7 @@ function setupEventListeners() {
     // Settings Modal
     btnManageTasks.addEventListener("click", () => {
         updateNotificationsSettingUI();
+        refreshSiriShortcutStatus();
         openModal(modalManageTasks);
     });
     btnCloseManageModal.addEventListener("click", () => closeModal(modalManageTasks));
@@ -2935,6 +2944,63 @@ function updateNotificationsSettingUI() {
         notificationsPermissionStatus.textContent = "Toque no botão para autorizar as notificações.";
     }
 }
+
+function renderSiriShortcutStatus(configured, token = "") {
+    if (!siriShortcutStatus) return;
+    const endpoint = `${SUPABASE_URL}/functions/v1/create-siri-task`;
+    siriShortcutUrl.value = endpoint;
+    siriShortcutToken.value = token;
+    siriShortcutCredentials.hidden = !configured && !token;
+    btnRevokeSiriToken.hidden = !configured;
+    btnGenerateSiriToken.innerHTML = configured
+        ? '<i data-lucide="refresh-cw"></i> Gerar nova chave'
+        : '<i data-lucide="key-round"></i> Gerar chave';
+    siriShortcutStatus.textContent = configured
+        ? (token ? "Chave criada. Copie-a agora e use no app Atalhos." : "A Siri esta autorizada. Gere uma nova chave se precisar configura-la em outro aparelho.")
+        : "Ainda nao ha uma chave para a Siri.";
+    lucide.createIcons();
+}
+
+async function refreshSiriShortcutStatus() {
+    if (!siriShortcutStatus || !supabaseClient || !currentUser) return;
+    siriShortcutStatus.textContent = "Verificando configuracao…";
+    const { data, error } = await supabaseClient.functions.invoke("create-siri-task", { body: { action: "status" } });
+    if (error || data?.error) {
+        siriShortcutStatus.textContent = "A integracao ainda precisa ser publicada no Supabase.";
+        return;
+    }
+    renderSiriShortcutStatus(Boolean(data.configured));
+}
+
+async function copySiriValue(value, label) {
+    if (!value) return showAppNotice(`Gere a ${label.toLowerCase()} primeiro.`, "warning");
+    await navigator.clipboard.writeText(value);
+    showAppNotice(`${label} copiada.`, "success");
+}
+
+async function generateSiriShortcutToken() {
+    if (!supabaseClient || !currentUser) return;
+    btnGenerateSiriToken.disabled = true;
+    const { data, error } = await supabaseClient.functions.invoke("create-siri-task", { body: { action: "issue_token" } });
+    btnGenerateSiriToken.disabled = false;
+    if (error || data?.error || !data?.token) return showAppNotice(`Nao foi possivel gerar a chave: ${data?.error || error?.message || "erro desconhecido"}`, "error");
+    renderSiriShortcutStatus(true, data.token);
+}
+
+async function revokeSiriShortcutToken() {
+    if (!await showAppConfirm("O Atalho deixara de criar tarefas ate uma nova chave ser configurada.", { title: "Revogar chave da Siri?", confirmText: "Revogar" })) return;
+    btnRevokeSiriToken.disabled = true;
+    const { data, error } = await supabaseClient.functions.invoke("create-siri-task", { body: { action: "revoke_token" } });
+    btnRevokeSiriToken.disabled = false;
+    if (error || data?.error) return showAppNotice(`Nao foi possivel revogar: ${data?.error || error?.message}`, "error");
+    renderSiriShortcutStatus(false);
+    showAppNotice("Chave da Siri revogada.", "success");
+}
+
+btnGenerateSiriToken?.addEventListener("click", generateSiriShortcutToken);
+btnRevokeSiriToken?.addEventListener("click", revokeSiriShortcutToken);
+btnCopySiriUrl?.addEventListener("click", () => copySiriValue(siriShortcutUrl.value, "URL"));
+btnCopySiriToken?.addEventListener("click", () => copySiriValue(siriShortcutToken.value, "Chave"));
 
 let notificationsPreferenceRequestId = 0;
 async function toggleNotificationsPreference() {

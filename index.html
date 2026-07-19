@@ -491,6 +491,27 @@
 
                 <section class="settings-section">
                     <div class="settings-section-heading">
+                        <div class="settings-section-icon"><i data-lucide="audio-lines"></i></div>
+                        <div><strong>Siri e Atalhos</strong><span>Crie tarefas falando com a Siri no iPhone.</span></div>
+                    </div>
+                    <div class="siri-settings-card">
+                        <p id="siri-shortcut-status">Verificando configuracao…</p>
+                        <div id="siri-shortcut-credentials" hidden>
+                            <label>URL da automacao</label>
+                            <div class="siri-copy-row"><input id="siri-shortcut-url" readonly><button id="btn-copy-siri-url" type="button" class="btn">Copiar</button></div>
+                            <label>Chave pessoal</label>
+                            <div class="siri-copy-row"><input id="siri-shortcut-token" type="password" readonly placeholder="Gere uma nova chave"><button id="btn-copy-siri-token" type="button" class="btn">Copiar</button></div>
+                            <small>A chave aparece apenas quando e gerada. Nao compartilhe.</small>
+                        </div>
+                        <div class="siri-settings-actions">
+                            <button id="btn-generate-siri-token" type="button" class="btn btn-primary"><i data-lucide="key-round"></i> Gerar chave</button>
+                            <button id="btn-revoke-siri-token" type="button" class="btn" hidden><i data-lucide="shield-x"></i> Revogar</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="settings-section">
+                    <div class="settings-section-heading">
                         <div class="settings-section-icon"><i data-lucide="circle-help"></i></div>
                         <div><strong>Ajuda</strong><span>Conheça os atalhos disponíveis no aplicativo.</span></div>
                     </div>
@@ -521,7 +542,7 @@
 
                 <div class="settings-version">
                     <span>Checklist</span>
-                        <strong>Versão 10.22</strong>
+                        <strong>Versão 10.23</strong>
                 </div>
             </div>
         </div>

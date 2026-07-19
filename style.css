@@ -3599,6 +3599,16 @@ body.theme-girly .modal-content::before {
 .settings-notification-test-btn span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .settings-notification-test-btn strong { color: var(--text-primary); font-size: .74rem; }
 .settings-notification-test-btn small { color: var(--text-muted); font-size: .62rem; }
+.siri-settings-card { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(255,255,255,.02); }
+.siri-settings-card p { margin: 0; color: var(--text-secondary); font-size: .7rem; line-height: 1.45; }
+.siri-settings-card label { display: block; margin: 8px 0 4px; color: var(--text-muted); font-size: .62rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.siri-settings-card small { color: var(--text-muted); font-size: .6rem; line-height: 1.4; }
+.siri-copy-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 7px; }
+.siri-copy-row input { min-width: 0; height: 38px; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 9px; background: rgba(0,0,0,.14); color: var(--text-primary); font-size: .66rem; }
+.siri-copy-row .btn { min-width: 64px; padding: 7px 10px; border: 1px solid var(--border-color); color: var(--text-secondary); background: rgba(255,255,255,.035); font-size: .66rem; }
+.siri-settings-actions { display: flex; gap: 8px; }
+.siri-settings-actions .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 39px; font-size: .69rem; font-weight: 800; }
+.siri-settings-actions svg { width: 15px; height: 15px; }
 
 .task-notification-setting { display: grid; grid-template-columns: minmax(0,1fr) 24px 46px; align-items: center; gap: 8px; margin: 16px 0 24px; padding: 12px; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(255,255,255,.02); }
 .task-notification-copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
