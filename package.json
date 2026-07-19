@@ -1,0 +1,12 @@
+{
+  "name": "checklist-organizacional",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 tests/*.test.mjs",
+    "test:e2e": "node --test --test-concurrency=1 tests/app.e2e.test.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.1"
+  }
+}

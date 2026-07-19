@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.19";
+const SERVICE_WORKER_URL = "./sw.js?v=10.20";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -108,9 +108,15 @@ const idb = {
         const stores = ["offline_tasks", "offline_categories", "offline_completions", "offline_category_shares", "offline_completions_queue", "offline_task_updates_queue", "user_term_associations", "user_function_associations"];
         for (const store of stores) {
             let val = await this.get(store);
-            if (val === null) {
+            const legacyVal = window.localStorage.getItem(store);
+            const hasWriteThroughVersion = window.localStorage.getItem(`${store}__shadow_version`) !== null;
+            // Depois da primeira gravação write-through, a cópia síncrona é a
+            // mais recente mesmo que a página tenha recarregado antes do IDB.
+            if (hasWriteThroughVersion && legacyVal !== null) {
+                try { val = JSON.parse(legacyVal); } catch (_) { val = legacyVal; }
+                await this.put(store, val);
+            } else if (val === null) {
                 // Tenta migrar do window.localStorage existente para IndexedDB
-                const legacyVal = window.localStorage.getItem(store);
                 if (legacyVal !== null) {
                     try {
                         val = JSON.parse(legacyVal);
@@ -142,11 +148,15 @@ const localStorage = {
             try {
                 const parsed = JSON.parse(value);
                 dbCache[key] = parsed;
+                localPrefs.setItem(key, value);
+                localPrefs.setItem(`${key}__shadow_version`, String(Date.now()));
                 idb.put(key, parsed);
                 scheduleSyncStatusRefresh();
                 if (CLOUD_SYNC_QUEUE_KEYS.has(key)) scheduleCloudSync("fila-local", 450);
             } catch (e) {
                 dbCache[key] = value;
+                localPrefs.setItem(key, String(value));
+                localPrefs.setItem(`${key}__shadow_version`, String(Date.now()));
                 idb.put(key, value);
                 scheduleSyncStatusRefresh();
                 if (CLOUD_SYNC_QUEUE_KEYS.has(key)) scheduleCloudSync("fila-local", 450);
@@ -158,6 +168,8 @@ const localStorage = {
     removeItem(key) {
         if (dbCache.hasOwnProperty(key)) {
             dbCache[key] = (key === "offline_completions_queue" || key === "offline_task_updates_queue" || key === "user_term_associations" || key === "user_function_associations") ? {} : [];
+            localPrefs.removeItem(key);
+            localPrefs.removeItem(`${key}__shadow_version`);
             idb.delete(key);
             scheduleSyncStatusRefresh();
             return;
@@ -2397,6 +2409,12 @@ function connectSupabase() {
         }
     } else {
         supabaseClient = null;
+    }
+    // Identidade isolada para testes locais de interface. Não cria sessão nem
+    // concede acesso à nuvem e é ignorada fora de localhost.
+    if (!supabaseClient && /^(localhost|127\.0\.0\.1)$/.test(location.hostname) && window.__CHECKLIST_E2E_USER__) {
+        currentUser = { ...window.__CHECKLIST_E2E_USER__ };
+        currentUsername = String(currentUser.email || "teste").split("@")[0];
     }
 }
 
