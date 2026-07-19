@@ -152,6 +152,13 @@ test("treino de outro participante aparece só dentro da categoria Treino", asyn
   const selectedChip = page.locator('.category-chip[data-category="Treino"]');
   assert.equal(await selectedChip.evaluate(element => document.activeElement === element), true);
   assert.notEqual(await selectedChip.evaluate(element => getComputedStyle(element).boxShadow), "none");
+  for (const theme of ["theme-light", "theme-girly"]) {
+    await page.evaluate(activeTheme => {
+      document.body.classList.remove("theme-light", "theme-girly");
+      document.body.classList.add(activeTheme);
+    }, theme);
+    assert.equal(await selectedChip.evaluate(element => getComputedStyle(element).color), "rgb(255, 255, 255)");
+  }
   assert.equal(await page.locator(`.task-item[data-id="${otherId}"]`).count(), 1);
   assert.equal(await page.locator(`.task-item[data-id="${otherId}"] .task-checkbox-wrapper`).getAttribute("aria-disabled"), "true");
   await context.close();
