@@ -5948,9 +5948,12 @@ function paintTrainingReport(categoryName) {
     }
     const participantCount = new Set(currentTrainingCalendarRecords.map(record => record.createdBy || getTrainingRecordOwner(record).label)).size;
     const recordCount = currentTrainingCalendarRecords.length;
-    summary.classList.toggle("no-own-training", dates.size === 0);
-    summary.innerHTML = `${dates.size ? '<span aria-label="Seus dias de treino">🔥</span>' : ''}<strong>${dates.size} ${dates.size === 1 ? "dia" : "dias"} de treino • ${participantCount} ${participantCount === 1 ? "participante" : "participantes"} • ${recordCount} ${recordCount === 1 ? "registro" : "registros"}</strong>`;
-    renderTrainingDayGallery(initialGalleryDate || firstTrainedDate || todayStr);
+    const activeDateStr = selectedDate || todayStr;
+    const monthPrefix = `${year}-${String(month + 1).padStart(2, "0")}`;
+    const defaultSelectedDay = activeDateStr.startsWith(monthPrefix)
+        ? activeDateStr
+        : (todayStr.startsWith(monthPrefix) ? todayStr : (initialGalleryDate || firstTrainedDate || `${monthPrefix}-01`));
+    renderTrainingDayGallery(defaultSelectedDay);
     lucide.createIcons();
 }
 
