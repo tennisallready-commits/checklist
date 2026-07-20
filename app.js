@@ -1744,14 +1744,22 @@ function setupEventListeners() {
         });
     }
 
+    const autoResizeTextarea = (input) => {
+        if (!input) return;
+        input.style.height = "auto";
+        input.style.height = Math.max(100, input.scrollHeight + 4) + "px";
+    };
+
     const setupDescriptionField = (buttonId, groupId, inputId) => {
         const button = document.getElementById(buttonId);
         const group = document.getElementById(groupId);
         const input = document.getElementById(inputId);
         if (!button || !group || !input) return;
+        input.addEventListener("input", () => autoResizeTextarea(input));
         button.addEventListener("click", () => {
             group.hidden = false;
             button.hidden = true;
+            autoResizeTextarea(input);
             input.focus();
         });
     };
@@ -6288,12 +6296,23 @@ function openEditTaskModal(task) {
     const descriptionGroup = document.getElementById("edit-task-description-group");
     const descriptionButton = document.getElementById("btn-edit-task-description");
     const taskDescription = String(task.context?.description || "");
-    if (descriptionInput) descriptionInput.value = taskDescription;
-    if (descriptionGroup) descriptionGroup.hidden = true;
-    if (descriptionButton) {
-        descriptionButton.hidden = false;
-        const label = descriptionButton.querySelector("span");
-        if (label) label.textContent = taskDescription ? "Ver descrição" : "Adicionar descrição";
+    if (descriptionInput) {
+        descriptionInput.value = taskDescription;
+    }
+    if (taskDescription) {
+        if (descriptionGroup) descriptionGroup.hidden = false;
+        if (descriptionButton) descriptionButton.hidden = true;
+        if (descriptionInput) {
+            descriptionInput.style.height = "auto";
+            descriptionInput.style.height = Math.max(100, descriptionInput.scrollHeight + 4) + "px";
+        }
+    } else {
+        if (descriptionGroup) descriptionGroup.hidden = true;
+        if (descriptionButton) {
+            descriptionButton.hidden = false;
+            const label = descriptionButton.querySelector("span");
+            if (label) label.textContent = "Adicionar descrição";
+        }
     }
     
     // Determine recurrence mode
