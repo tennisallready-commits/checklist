@@ -503,8 +503,9 @@
                             <div class="siri-copy-row"><input id="siri-shortcut-token" type="password" readonly placeholder="Gere uma nova chave"><button id="btn-copy-siri-token" type="button" class="btn">Copiar</button></div>
                             <small>A chave aparece apenas quando e gerada. Nao compartilhe.</small>
                         </div>
-                        <div class="siri-settings-actions">
+                        <div class="siri-settings-actions" style="display: flex; flex-wrap: wrap; gap: 8px;">
                             <button id="btn-generate-siri-token" type="button" class="btn btn-primary"><i data-lucide="key-round"></i> Gerar chave</button>
+                            <button id="btn-download-siri-shortcut" type="button" class="btn" style="background: rgba(59, 130, 246, 0.12); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.25); font-weight: 700;" hidden><i data-lucide="download"></i> Baixar Atalho (.shortcut)</button>
                             <button id="btn-revoke-siri-token" type="button" class="btn" hidden><i data-lucide="shield-x"></i> Revogar</button>
                         </div>
                     </div>
@@ -1097,6 +1098,6 @@
     </div>
 
     <script src="storage.js?v=1.02"></script>
-    <script src="app.js?v=10.26"></script>
+    <script src="app.js?v=10.28"></script>
 </body>
 </html>

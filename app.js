@@ -491,6 +491,7 @@ const siriShortcutUrl = document.getElementById("siri-shortcut-url");
 const siriShortcutToken = document.getElementById("siri-shortcut-token");
 const btnGenerateSiriToken = document.getElementById("btn-generate-siri-token");
 const btnRevokeSiriToken = document.getElementById("btn-revoke-siri-token");
+const btnDownloadSiriShortcut = document.getElementById("btn-download-siri-shortcut");
 const btnCopySiriUrl = document.getElementById("btn-copy-siri-url");
 const btnCopySiriToken = document.getElementById("btn-copy-siri-token");
 const modalCreateIdentifier = document.getElementById("modal-create-identifier");
@@ -2960,11 +2961,12 @@ function renderSiriShortcutStatus(configured, token = "") {
     siriShortcutToken.value = token;
     siriShortcutCredentials.hidden = !configured && !token;
     btnRevokeSiriToken.hidden = !configured;
+    if (btnDownloadSiriShortcut) btnDownloadSiriShortcut.hidden = !configured && !token;
     btnGenerateSiriToken.innerHTML = configured
         ? '<i data-lucide="refresh-cw"></i> Gerar nova chave'
         : '<i data-lucide="key-round"></i> Gerar chave';
     siriShortcutStatus.textContent = configured
-        ? (token ? "Chave criada. Copie-a agora e use no app Atalhos." : "A Siri esta autorizada. Gere uma nova chave se precisar configura-la em outro aparelho.")
+        ? (token ? "Chave criada. Baixe o atalho pré-configurado abaixo ou copie a chave." : "A Siri esta autorizada. Gere uma nova chave se precisar configura-la em outro aparelho.")
         : "Ainda nao ha uma chave para a Siri.";
     lucide.createIcons();
 }
@@ -3005,8 +3007,164 @@ async function revokeSiriShortcutToken() {
     showAppNotice("Chave da Siri revogada.", "success");
 }
 
+function downloadSiriShortcutFile() {
+    const url = siriShortcutUrl.value || `${SUPABASE_URL}/functions/v1/create-siri-task`;
+    const token = siriShortcutToken.value;
+    if (!token) {
+        showAppNotice("Gere uma nova chave primeiro. A chave pessoal só aparece quando é gerada.", "warning");
+        return;
+    }
+    const askUUID = "B278F66D-55BE-4C98-A12B-0B86C45E3B8D";
+    const shortcutPlistXml = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>WFWorkflowClientVersion</key>
+	<string>1200</string>
+	<key>WFWorkflowMinimumClientVersion</key>
+	<integer>900</integer>
+	<key>WFWorkflowIcon</key>
+	<dict>
+		<key>WFWorkflowIconStartColor</key>
+		<integer>4282601983</integer>
+		<key>WFWorkflowIconGlyphNumber</key>
+		<integer>59723</integer>
+	</dict>
+	<key>WFWorkflowActions</key>
+	<array>
+		<dict>
+			<key>WFWorkflowActionIdentifier</key>
+			<string>is.workflow.actions.ask</string>
+			<key>WFWorkflowActionParameters</key>
+			<dict>
+				<key>UUID</key>
+				<string>${askUUID}</string>
+				<key>WFAskActionPrompt</key>
+				<string>Qual tarefa você quer adicionar?</string>
+				<key>WFInputType</key>
+				<string>Text</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>WFWorkflowActionIdentifier</key>
+			<string>is.workflow.actions.downloadurl</string>
+			<key>WFWorkflowActionParameters</key>
+			<dict>
+				<key>WFURL</key>
+				<string>${escapeHTML(url)}</string>
+				<key>WFHTTPMethod</key>
+				<string>POST</string>
+				<key>WFHTTPBodyType</key>
+				<string>Json</string>
+				<key>WFJSONValues</key>
+				<dict>
+					<key>Value</key>
+					<dict>
+						<key>WFDictionaryFieldValueItems</key>
+						<array>
+							<dict>
+								<key>WFItemType</key>
+								<integer>0</integer>
+								<key>WFKey</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>string</key>
+										<string>title</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+								<key>WFValue</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>attachmentsByRange</key>
+										<dict>
+											<key>{0, 1}</key>
+											<dict>
+												<key>Type</key>
+												<string>ActionOutput</string>
+												<key>OutputName</key>
+												<string>Ask for Input</string>
+												<key>OutputUUID</key>
+												<string>${askUUID}</string>
+											</dict>
+										</dict>
+										<key>string</key>
+										<string>￼</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+							</dict>
+							<dict>
+								<key>WFItemType</key>
+								<integer>0</integer>
+								<key>WFKey</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>string</key>
+										<string>token</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+								<key>WFValue</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>string</key>
+										<string>${escapeHTML(token)}</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+							</dict>
+						</array>
+					</dict>
+					<key>WFSerializationType</key>
+					<string>WFDictionaryFieldValue</string>
+				</dict>
+			</dict>
+		</dict>
+		<dict>
+			<key>WFWorkflowActionIdentifier</key>
+			<string>is.workflow.actions.getvalueforkey</string>
+			<key>WFWorkflowActionParameters</key>
+			<dict>
+				<key>WFGetDictionaryValueKey</key>
+				<string>message</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>WFWorkflowActionIdentifier</key>
+			<string>is.workflow.actions.speaktext</string>
+			<key>WFWorkflowActionParameters</key>
+			<dict/>
+		</dict>
+	</array>
+</dict>
+</plist>`;
+
+    const blob = new Blob([shortcutPlistXml], { type: "application/x-apple-shortcut" });
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = "Criar Tarefa no Checklist.shortcut";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(blobUrl);
+    }, 1500);
+    showAppNotice("Arquivo de Atalho gerado! Abra o arquivo baixado no iPhone para importar.", "success");
+}
+
 btnGenerateSiriToken?.addEventListener("click", generateSiriShortcutToken);
 btnRevokeSiriToken?.addEventListener("click", revokeSiriShortcutToken);
+btnDownloadSiriShortcut?.addEventListener("click", downloadSiriShortcutFile);
 btnCopySiriUrl?.addEventListener("click", () => copySiriValue(siriShortcutUrl.value, "URL"));
 btnCopySiriToken?.addEventListener("click", () => copySiriValue(siriShortcutToken.value, "Chave"));
 
@@ -5954,12 +6112,15 @@ function paintTrainingReport(categoryName) {
         if (!initialGalleryDate && dayRecords.length) initialGalleryDate = dateStr;
         if (!firstTrainedDate && trained) firstTrainedDate = dateStr;
     }
-    const participantCount = new Set(currentTrainingCalendarRecords.map(record => record.createdBy || getTrainingRecordOwner(record).label)).size;
-    const recordCount = currentTrainingCalendarRecords.length;
-    summary.classList.toggle("no-own-training", dates.size === 0);
-    summary.innerHTML = `${dates.size ? '<span aria-label="Seus dias de treino">🔥</span>' : ''}<strong>${dates.size} ${dates.size === 1 ? "dia" : "dias"} de treino • ${participantCount} ${participantCount === 1 ? "participante" : "participantes"} • ${recordCount} ${recordCount === 1 ? "registro" : "registros"}</strong>`;
-    const activeDateStr = selectedDate || todayStr;
     const monthPrefix = `${year}-${String(month + 1).padStart(2, "0")}`;
+    const monthRecords = currentTrainingCalendarRecords.filter(record => String(record.date || "").startsWith(monthPrefix));
+    const monthTrainedDates = new Set([...dates].filter(d => String(d).startsWith(monthPrefix)));
+    const monthParticipantCount = new Set(monthRecords.map(record => record.createdBy || getTrainingRecordOwner(record).label)).size;
+    const monthRecordCount = monthRecords.length;
+
+    summary.classList.toggle("no-own-training", monthTrainedDates.size === 0);
+    summary.innerHTML = `${monthTrainedDates.size ? '<span aria-label="Seus dias de treino">🔥</span>' : ''}<strong>${monthTrainedDates.size} ${monthTrainedDates.size === 1 ? "dia" : "dias"} de treino • ${monthParticipantCount} ${monthParticipantCount === 1 ? "participante" : "participantes"} • ${monthRecordCount} ${monthRecordCount === 1 ? "registro" : "registros"}</strong>`;
+    const activeDateStr = selectedDate || todayStr;
     const defaultSelectedDay = activeDateStr.startsWith(monthPrefix)
         ? activeDateStr
         : (todayStr.startsWith(monthPrefix) ? todayStr : (initialGalleryDate || firstTrainedDate || `${monthPrefix}-01`));
