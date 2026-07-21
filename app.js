@@ -9000,13 +9000,6 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
             refreshSyncStatusFromQueues();
         }
     } finally {
-        // 5. Reenvia fotos que ficaram somente no aparelho.
-        // Roda no finally para garantir execução mesmo se etapas anteriores falharem.
-        try {
-            await syncPendingTrainingPhotoUploads();
-        } catch (photoErr) {
-            console.warn("[Sync] Fotos pendentes não puderam ser reenviadas:", photoErr.message);
-        }
         isSyncing = false;
         if (syncSucceeded) {
             refreshSyncStatusFromQueues();
@@ -9014,6 +9007,12 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
         } else if (navigator.onLine) {
             scheduleCloudSyncRetry();
         }
+        // 5. Reenvia fotos que ficaram somente no aparelho.
+        // Roda de forma assíncrona para não bloquear o flag isSyncing nem
+        // atrasar a atualização de status de conclusões e tarefas.
+        setTimeout(async () => {
+            try { await syncPendingTrainingPhotoUploads(); } catch (_) {}
+        }, 600);
     }
 }
 
