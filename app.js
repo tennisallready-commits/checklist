@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.55";
+const SERVICE_WORKER_URL = "./sw.js?v=10.56";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -6035,6 +6035,36 @@ async function syncCassolDashboardTaskQueue() {
     }
 }
 
+// Uma tarefa pode ter sido excluída localmente e, depois, atribuída novamente
+// no Dashboard. Nesse caso o servidor a reativa, mas o cache mantém a marca
+// temporária de exclusão por até 24 horas. Limpamos apenas os IDs confirmados
+// pelo Dashboard, sem tocar nas demais exclusões locais.
+function restoreCassolTasksReassignedByDashboard(taskIds = []) {
+    const ids = new Set((Array.isArray(taskIds) ? taskIds : []).map(String).filter(Boolean));
+    if (!ids.size) return false;
+    let changed = false;
+    const offlineTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    const restoredTasks = offlineTasks.map(task => {
+        if (!ids.has(String(task?.id)) || task?.is_active !== false) return task;
+        changed = true;
+        const restored = { ...task, is_active: true };
+        delete restored.local_deleted_at;
+        return restored;
+    });
+    if (changed) localStorage.setItem("offline_tasks", JSON.stringify(restoredTasks));
+
+    const updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+    let queueChanged = false;
+    ids.forEach(id => {
+        if (updatesQueue[id]?.is_active === false) {
+            delete updatesQueue[id];
+            queueChanged = true;
+        }
+    });
+    if (queueChanged) localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
+    return changed;
+}
+
 async function pullCassolDashboardTasks(force = false) {
     if (cassolDashboardPullInProgress || !supabaseClient || !currentUser || !navigator.onLine) return;
     if (document.visibilityState !== "visible" && !force) return;
@@ -6051,10 +6081,11 @@ async function pullCassolDashboardTasks(force = false) {
             console.warn("Não foi possível buscar as tarefas da Editora Cassol agora:", error?.message || data?.error);
             return;
         }
+        const restoredLocally = restoreCassolTasksReassignedByDashboard(data?.active_task_ids);
         const changes = Number(data?.created || 0) + Number(data?.updated || 0);
-        if (changes > 0) {
+        if (changes > 0 || restoredLocally) {
             await loadChecklistAndProgress();
-            console.log(`[Cassol dashboard] ${changes} tarefa(s) recebida(s) do dashboard.`);
+            console.log(`[Cassol dashboard] ${changes || 1} tarefa(s) recebida(s) ou restaurada(s) pelo dashboard.`);
         }
     } catch (error) {
         console.warn("Falha ao importar tarefas da Editora Cassol:", error?.message || error);
