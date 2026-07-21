@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.54";
+const SERVICE_WORKER_URL = "./sw.js?v=10.55";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -25,8 +25,13 @@ const LEGACY_AUTO_SEEDED_CATEGORIES = ["Tio Nan", "Cassol", "PUCRS"];
 // só é processada pela Edge Function, que ainda confirma no servidor se o
 // pedido veio da conta autorizada do Luiggi.
 const CASSOL_DASHBOARD_SYNC_QUEUE_KEY = "cassol_dashboard_sync_queue";
+const CASSOL_DASHBOARD_PULL_INTERVAL_MS = 15000;
 let cassolDashboardSyncTimer = null;
 let cassolDashboardSyncInProgress = false;
+let cassolDashboardPullTimer = null;
+let cassolDashboardPullInProgress = false;
+let cassolDashboardLastPullAt = 0;
+let cassolDashboardLastPushAt = 0;
 
 // Default tasks database for initial setup (offline fallback and reset option)
 const DEFAULT_TASKS = [];
@@ -2159,10 +2164,14 @@ function setupEventListeners() {
     });
 
     document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible" && hasPendingSyncData()) scheduleCloudSync("app-retomado", 120);
+        if (document.visibilityState === "visible") {
+            if (hasPendingSyncData()) scheduleCloudSync("app-retomado", 120);
+            pullCassolDashboardTasks();
+        }
     });
     window.addEventListener("focus", () => {
         if (hasPendingSyncData()) scheduleCloudSync("janela-em-foco", 180);
+        pullCassolDashboardTasks();
     });
     setInterval(() => {
         if (document.visibilityState === "visible" && navigator.onLine && hasPendingSyncData()) scheduleCloudSync("verificação-periódica", 0);
@@ -5969,6 +5978,7 @@ function isCassolDashboardTask(task) {
 
 function queueCassolDashboardTaskSync(taskId, payload = {}) {
     if (!taskId || isTemporaryId(taskId)) return;
+    cassolDashboardLastPushAt = Date.now();
     const queue = JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {};
     const key = String(taskId);
     const previous = queue[key] || {};
@@ -6023,6 +6033,40 @@ async function syncCassolDashboardTaskQueue() {
     } finally {
         cassolDashboardSyncInProgress = false;
     }
+}
+
+async function pullCassolDashboardTasks(force = false) {
+    if (cassolDashboardPullInProgress || !supabaseClient || !currentUser || !navigator.onLine) return;
+    if (document.visibilityState !== "visible" && !force) return;
+    const now = Date.now();
+    if (!force && now - cassolDashboardLastPullAt < CASSOL_DASHBOARD_PULL_INTERVAL_MS - 500) return;
+    // Dá prioridade à alteração recém-feita no Checklist, para que uma leitura
+    // do dashboard ainda desatualizada nunca sobrescreva a ação do usuário.
+    if (!force && now - cassolDashboardLastPushAt < 5000) return;
+    cassolDashboardPullInProgress = true;
+    cassolDashboardLastPullAt = now;
+    try {
+        const { data, error } = await supabaseClient.functions.invoke("sync-cassol-dashboard", { body: { operation: "pull" } });
+        if (error || data?.error) {
+            console.warn("Não foi possível buscar as tarefas da Editora Cassol agora:", error?.message || data?.error);
+            return;
+        }
+        const changes = Number(data?.created || 0) + Number(data?.updated || 0);
+        if (changes > 0) {
+            await loadChecklistAndProgress();
+            console.log(`[Cassol dashboard] ${changes} tarefa(s) recebida(s) do dashboard.`);
+        }
+    } catch (error) {
+        console.warn("Falha ao importar tarefas da Editora Cassol:", error?.message || error);
+    } finally {
+        cassolDashboardPullInProgress = false;
+    }
+}
+
+function startCassolDashboardPulling() {
+    if (cassolDashboardPullTimer) return;
+    cassolDashboardPullTimer = setInterval(() => pullCassolDashboardTasks(), CASSOL_DASHBOARD_PULL_INTERVAL_MS);
+    setTimeout(() => pullCassolDashboardTasks(true), 900);
 }
 
 function saveCompletionOffline(taskId, date, completed) {
@@ -8636,6 +8680,7 @@ function setupSupabaseAuth() {
                 document.body.dataset.awaitingCloud = "true";
             }
             currentUser = session.user;
+            cassolDashboardLastPullAt = 0;
             localPrefs.setItem("checklist_last_user_id", currentUser.id);
             localPrefs.setItem("checklist_last_user_email", currentUser.email || "");
             learningCloudState = "idle";
@@ -8699,6 +8744,7 @@ function setupSupabaseAuth() {
             // Toda conta precisa definir um ID público antes de continuar.
             await ensureUserIdentifier();
             subscribeToCollaborationUpdates();
+            startCassolDashboardPulling();
             // Sincroniza fotos pendentes de forma independente após o carregamento,
             // sem depender do fluxo geral de sync que pode ter sido bloqueado.
             setTimeout(async () => {
