@@ -13,7 +13,7 @@ const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
 // Camada persistente isolada em storage.js para manter este arquivo focado nas regras do app.
 const { dbCache, idb, localPrefs, localStorage } = window.ChecklistStorage.create({
     onStorageChange: () => scheduleSyncStatusRefresh(),
-    onCloudQueueChange: () => scheduleCloudSync("fila-local", 450)
+    onCloudQueueChange: () => scheduleCloudSync("fila-local", 1200)
 });
 
 // Novas contas e restaurações começam sem categorias pessoais pré-cadastradas.
@@ -8928,6 +8928,19 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
         // 4. Sincronizar conclusões (completions)
         let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
         let queueKeys = Object.keys(queue);
+
+        // Otimização: verifica a existência de todas as tarefas de uma vez
+        const uniqueTaskIds = [...new Set(queueKeys.map(k => k.split('_')[0]).filter(id => !isTemporaryId(id)))];
+        let existingTaskIds = new Set();
+        if (uniqueTaskIds.length > 0) {
+            const { data: existingTasks, error: checkTasksError } = await supabaseClient
+                .from("tasks")
+                .select("id")
+                .in("id", uniqueTaskIds);
+            if (checkTasksError) throw checkTasksError;
+            existingTaskIds = new Set((existingTasks || []).map(t => String(t.id)));
+        }
+
         for (const key of queueKeys) {
             const [taskId, date] = key.split('_');
             if (isTemporaryId(taskId)) continue;
@@ -8935,13 +8948,7 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
 
             // Descarta conclusões órfãs deixadas no cache quando uma categoria
             // e todas as suas tarefas foram removidas em cascata.
-            const { data: queuedTaskExists, error: queuedTaskCheckError } = await supabaseClient
-                .from("tasks")
-                .select("id")
-                .eq("id", taskId)
-                .maybeSingle();
-            if (queuedTaskCheckError) throw queuedTaskCheckError;
-            if (!queuedTaskExists) {
+            if (!existingTaskIds.has(String(taskId))) {
                 clearQueuedEntryIfCurrent("offline_completions_queue", key, queuedValue);
                 let cachedCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
                 cachedCompletions = cachedCompletions.filter(item => String(item.task_id) !== String(taskId));
