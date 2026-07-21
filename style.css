@@ -1667,7 +1667,7 @@ body.theme-girly .categories-bar .category-chip.active svg {
 .task-description-panel { position: relative; z-index: 2; margin-top: -1px; padding: 12px 14px 14px 46px; border: 1px solid var(--border-color); border-top: 0; border-radius: 0 0 var(--radius-md) var(--radius-md); background: var(--bg-surface); max-height: none !important; height: auto !important; overflow: visible !important; word-break: break-word; overflow-wrap: anywhere; box-sizing: border-box; }
 .task-description-panel[hidden] { display: none; }
 .task-description-panel p { margin: 0; color: var(--text-secondary); font-size: .82rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
-.task-item.description-open { overflow: visible !important; height: auto !important; }
+.task-item.description-open { overflow: visible !important; height: auto !important; max-height: none !important; }
 .task-item.description-open .task-item-foreground { border-radius: var(--radius-md) var(--radius-md) 0 0; }
 .task-item.has-description .task-item-foreground { gap: 9px; }
 .task-item.has-description .task-meta { flex-wrap: wrap; row-gap: 4px; overflow: visible; }
