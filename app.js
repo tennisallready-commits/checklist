@@ -5285,7 +5285,7 @@ async function toggleTask(id, options = {}) {
     }
     
     if (isHistoryMode && !isPastNightShiftException) return;
-    if (pendingToggles.has(id) || pendingTrainingCompletionId !== null) return;
+    if (pendingTrainingCompletionId !== null) return;
 
     if (task && !task.completed && isTrainingCategory(task.category)) {
         pendingTrainingCompletionId = id;
@@ -8804,10 +8804,13 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
     try {
         console.log(`[Sync] Iniciando sincronização sequencial (${reason})...`);
 
+        let madeChanges = false;
+
         // 1. Sincronizar novas categorias criadas offline
         let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
         const pendingInsertCats = localCats.filter(c => isTemporaryId(c.id) && c.is_active !== false);
         for (const pending of pendingInsertCats) {
+            madeChanges = true;
             const realCat = await insertOwnedCategoryInCloud({ name: pending.name, type: pending.type });
             const tempId = pending.id;
             categories = categories.map(c => String(c.id) === String(tempId) ? realCat : c);
@@ -8820,6 +8823,7 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
         let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
         const pendingInsertTasks = localTasks.filter(t => isTemporaryId(t.id) && t.is_active !== false);
         for (const pending of pendingInsertTasks) {
+            madeChanges = true;
             let pendingContext = typeof pending.context === "string" ? (() => { try { return JSON.parse(pending.context); } catch (_) { return {}; } })() : { ...(pending.context || {}) };
             pendingContext.sync_token = pendingContext.sync_token || `task-${currentUser.id}-${pending.id}`;
             if (JSON.stringify(pending.context || {}) !== JSON.stringify(pendingContext)) {
@@ -8893,6 +8897,7 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
         // 3. Enviar convites criados enquanto o aparelho estava offline.
         let inviteQueue = JSON.parse(localStorage.getItem("offline_collaboration_invites_queue")) || [];
         for (const pendingInvite of [...inviteQueue]) {
+            madeChanges = true;
             const category = categories.find(cat =>
                 String(cat.id) === String(pendingInvite.category_id)
                 || cat.name === pendingInvite.category_name
@@ -8946,6 +8951,7 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
         }
 
         for (const key of queueKeys) {
+            madeChanges = true;
             const [taskId, date] = key.split('_');
             if (isTemporaryId(taskId)) continue;
             const queuedValue = queue[key];
@@ -8977,6 +8983,7 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
         let taskUpdatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
         let updateKeys = Object.keys(taskUpdatesQueue);
         for (const id of updateKeys) {
+            madeChanges = true;
             if (isTemporaryId(id)) continue;
             const queuedUpdates = taskUpdatesQueue[id];
             const dbUpdates = { ...queuedUpdates };
@@ -8993,9 +9000,13 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
             clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdates);
         }
 
-        console.log("[Sync] Sincronização concluída com sucesso. Baixando dados mais recentes...");
+        if (madeChanges) {
+            console.log("[Sync] Sincronização concluída com sucesso. Baixando dados mais recentes...");
+            await loadChecklistAndProgress(false); // Busca dados e revalida
+        } else {
+            console.log("[Sync] Nenhuma alteração pendente de sincronização primária.");
+        }
         
-        await loadChecklistAndProgress(false); // Busca dados e revalida
         syncSucceeded = true;
         cloudSyncRetryCount = 0;
         cloudSyncLastError = "";
