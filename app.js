@@ -718,6 +718,14 @@ async function initApp() {
     // Connect to Supabase
     connectSupabase();
 
+    // Solicita armazenamento persistente para impedir que o Android/Chrome
+    // descarte os tokens de sessão do Supabase por pressão de memória.
+    if (navigator.storage?.persist) {
+        navigator.storage.persist().then(granted => {
+            console.log(granted ? "Armazenamento persistente concedido." : "Armazenamento persistente negado.");
+        }).catch(() => {});
+    }
+
     // Setup Auth and listen to session changes
     setupSupabaseAuth();
 
@@ -8697,11 +8705,23 @@ function setupSupabaseAuth() {
             // nunca deve apagar o checklist que já existe no aparelho.
             if (event !== "SIGNED_OUT") {
                 clearTimeout(pendingInitialSessionTimer);
-                pendingInitialSessionTimer = setTimeout(() => {
+                pendingInitialSessionTimer = setTimeout(async () => {
+                    if (currentUser) return;
+                    // Tentativa explícita de recuperação de sessão antes de
+                    // mostrar o login. Em Android, a restauração do storage pode
+                    // demorar mais que o evento INITIAL_SESSION.
+                    try {
+                        const { data } = await supabaseClient.auth.getSession();
+                        if (data?.session) {
+                            // A sessão existe — dispara o fluxo normal de login.
+                            currentUser = data.session.user;
+                            return;
+                        }
+                    } catch (_) { /* sem rede ou falha silenciosa */ }
                     if (currentUser) return;
                     document.getElementById("auth-container").style.display = "flex";
                     setAppContainerVisible(false);
-                }, 650);
+                }, 2500);
                 return;
             }
             clearTimeout(pendingInitialSessionTimer);
