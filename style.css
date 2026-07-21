@@ -3456,7 +3456,7 @@ body.theme-girly .modal-content::before {
 .training-report-summary article > span,.training-report-summary svg { width: 22px; height: 22px; font-size: 20px; color: #fb923c; }
 .training-report-summary strong { color: var(--text-primary); font-size: 1.15rem; }
 .training-report-summary small { color: var(--text-muted); font-size: .58rem; text-align: center; }
-.training-report-list { max-height: 55vh; overflow-y: auto; display: grid; gap: 10px; }
+.training-report-list { display: grid; gap: 10px; }
 .training-report-entry { display: grid; grid-template-columns: 92px 1fr; gap: 12px; align-items: center; padding: 8px; border: 1px solid var(--border-color); border-radius: 14px; }
 .training-report-entry img { width: 92px; height: 78px; border-radius: 10px; object-fit: cover; }
 .training-report-entry div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -3506,7 +3506,7 @@ body.theme-girly .modal-content::before {
 .training-day-gallery-heading span { color: #fb923c; font-size: .55rem; font-weight: 900; letter-spacing: .11em; }
 .training-day-gallery-heading strong { color: var(--text-primary); font-size: .78rem; text-transform: capitalize; }
 .training-day-gallery-heading > b { color: var(--text-muted); font-size: .6rem; }
-.training-report-list { max-height: 260px; grid-template-columns: repeat(2,minmax(0,1fr)); }
+.training-report-list { grid-template-columns: repeat(2,minmax(0,1fr)); }
 .training-day-photo-card { min-width: 0; overflow: hidden; border: 1px solid var(--border-color); border-radius: 14px; background: rgba(255,255,255,.025); }
 .training-day-photo { width: 100%; aspect-ratio: 4/3; display: block; object-fit: cover; cursor: zoom-in; transition: transform .22s ease,filter .22s ease; }
 .training-day-photo-card:hover .training-day-photo { transform: scale(1.015); filter: brightness(1.04); }
