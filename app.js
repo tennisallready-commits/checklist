@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.56";
+const SERVICE_WORKER_URL = "./sw.js?v=10.57";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -26,6 +26,7 @@ const LEGACY_AUTO_SEEDED_CATEGORIES = ["Tio Nan", "Cassol", "PUCRS"];
 // pedido veio da conta autorizada do Luiggi.
 const CASSOL_DASHBOARD_SYNC_QUEUE_KEY = "cassol_dashboard_sync_queue";
 const CASSOL_DASHBOARD_PULL_INTERVAL_MS = 15000;
+const CASSOL_DASHBOARD_LOCAL_CHANGE_GUARD_MS = 15000;
 let cassolDashboardSyncTimer = null;
 let cassolDashboardSyncInProgress = false;
 let cassolDashboardPullTimer = null;
@@ -5335,6 +5336,10 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
     const task = tasks.find(t => String(t.id) === String(id));
     if (!task) return;
 
+    // Impede que uma leitura do Dashboard iniciada antes deste toque devolva
+    // o estado anterior enquanto o check ainda está a caminho da integração.
+    if (isCassolDashboardTask(task)) cassolDashboardLastPushAt = Date.now();
+
     // Salva sempre no LocalStorage primeiro para resiliência e velocidade
     saveCompletionOffline(id, selectedDate, task.completed);
     // O coordenador central envia vários checks feitos em sequência em uma
@@ -6072,7 +6077,7 @@ async function pullCassolDashboardTasks(force = false) {
     if (!force && now - cassolDashboardLastPullAt < CASSOL_DASHBOARD_PULL_INTERVAL_MS - 500) return;
     // Dá prioridade à alteração recém-feita no Checklist, para que uma leitura
     // do dashboard ainda desatualizada nunca sobrescreva a ação do usuário.
-    if (!force && now - cassolDashboardLastPushAt < 5000) return;
+    if (!force && now - cassolDashboardLastPushAt < CASSOL_DASHBOARD_LOCAL_CHANGE_GUARD_MS) return;
     cassolDashboardPullInProgress = true;
     cassolDashboardLastPullAt = now;
     try {
