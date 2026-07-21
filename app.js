@@ -5299,9 +5299,6 @@ async function toggleTask(id, options = {}) {
 async function commitTaskToggle(id, isPastNightShiftException = false) {
     beginOptimisticMutation();
     if (isHistoryMode && !isPastNightShiftException) return;
-    if (pendingToggles.has(id)) return;
-    pendingToggles.add(id);
-
     // Toggle local state immediately for visual response
     const wasCompleted = tasks.find(t => String(t.id) === String(id))?.completed === true;
     if (!wasCompleted) pendingCompletionAnimationTaskId = id;
@@ -5317,15 +5314,19 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
     }
 
     const task = tasks.find(t => String(t.id) === String(id));
-    if (!task) {
-        pendingToggles.delete(id);
-        return;
-    }
+    if (!task) return;
 
     // Salva sempre no LocalStorage primeiro para resiliência e velocidade
     saveCompletionOffline(id, selectedDate, task.completed);
     const completionQueueKey = `${id}_${selectedDate}`;
     const queuedCompletion = (JSON.parse(localStorage.getItem("offline_completions_queue")) || {})[completionQueueKey];
+
+    // Se já houver um salvamento em andamento para esta tarefa, nós paramos por aqui.
+    // O estado local e a fila offline já foram atualizados acima.
+    // O sistema de fila offline (cloud-queue-change) garantirá o envio final
+    // sem criar race conditions com o envio atual.
+    if (pendingToggles.has(id)) return;
+    pendingToggles.add(id);
 
     // Se estiver conectado, envia para a nuvem em segundo plano sem bloquear a interface
     if (supabaseClient && currentUser && !isTemporaryId(id)) {
@@ -5337,6 +5338,9 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
             if (error) {
                 console.warn("Erro ao salvar conclusão no Supabase. Mantido offline.", error.message);
             } else {
+                // clearQueuedEntryIfCurrent só remove da fila se o estado atual for
+                // idêntico ao estado que enviamos. Se o usuário tocou novamente rápido,
+                // a fila não será limpa e a sincronização em background assumirá.
                 clearQueuedEntryIfCurrent("offline_completions_queue", completionQueueKey, queuedCompletion);
             }
             pendingToggles.delete(id);
