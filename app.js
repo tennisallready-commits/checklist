@@ -8642,6 +8642,11 @@ function setupSupabaseAuth() {
             // Toda conta precisa definir um ID público antes de continuar.
             await ensureUserIdentifier();
             subscribeToCollaborationUpdates();
+            // Sincroniza fotos pendentes de forma independente após o carregamento,
+            // sem depender do fluxo geral de sync que pode ter sido bloqueado.
+            setTimeout(async () => {
+                try { await syncPendingTrainingPhotoUploads(); } catch (_) { /* silencioso */ }
+            }, 2500);
             if ("requestIdleCallback" in window) window.requestIdleCallback(warmTrainingPhotoCache, { timeout: 3000 });
             else setTimeout(warmTrainingPhotoCache, 1800);
             updateNotificationsSettingUI();
@@ -8952,10 +8957,6 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
             clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdates);
         }
 
-        // 5. Reenvia fotos que ficaram somente no aparelho. As tarefas já
-        // receberam seus IDs definitivos nas etapas anteriores.
-        await syncPendingTrainingPhotoUploads();
-
         console.log("[Sync] Sincronização concluída com sucesso. Baixando dados mais recentes...");
         
         await loadChecklistAndProgress(false); // Busca dados e revalida
@@ -8974,6 +8975,13 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
             refreshSyncStatusFromQueues();
         }
     } finally {
+        // 5. Reenvia fotos que ficaram somente no aparelho.
+        // Roda no finally para garantir execução mesmo se etapas anteriores falharem.
+        try {
+            await syncPendingTrainingPhotoUploads();
+        } catch (photoErr) {
+            console.warn("[Sync] Fotos pendentes não puderam ser reenviadas:", photoErr.message);
+        }
         isSyncing = false;
         if (syncSucceeded) {
             refreshSyncStatusFromQueues();
