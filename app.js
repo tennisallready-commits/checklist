@@ -8719,6 +8719,11 @@ function setupSupabaseAuth() {
                         }
                     } catch (_) { /* sem rede ou falha silenciosa */ }
                     if (currentUser) return;
+                    // Limpa o estado interno do Supabase Client para evitar
+                    // race condition entre um refresh de token antigo e o novo
+                    // login que o usuário vai fazer. scope:'local' não faz
+                    // request de rede, apenas limpa a memória.
+                    try { await supabaseClient.auth.signOut({ scope: 'local' }); } catch (_) {}
                     document.getElementById("auth-container").style.display = "flex";
                     setAppContainerVisible(false);
                 }, 2500);
