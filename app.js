@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.50";
+const SERVICE_WORKER_URL = "./sw.js?v=10.51";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -8967,6 +8967,9 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
             existingTaskIds = new Set((existingTasks || []).map(t => String(t.id)));
         }
 
+        // As conclusões são independentes. Enviá-las em paralelo evita que
+        // três checks virem três esperas de rede consecutivas no celular.
+        const completionSyncJobs = [];
         for (const key of queueKeys) {
             const [taskId, date] = key.split('_');
             if (isTemporaryId(taskId)) continue;
@@ -8988,25 +8991,26 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
                 continue;
             }
 
-            const completed = queuedValue;
-            const query = completed === "excluded"
-                ? supabaseClient.from('completions').upsert({ task_id: taskId, date: date, completed: false }, { onConflict: 'task_id,date' })
-                : completed
-                ? supabaseClient.from('completions').upsert({ task_id: taskId, date: date, completed: true }, { onConflict: 'task_id,date' })
-                : supabaseClient.from('completions').delete().eq('task_id', taskId).eq('date', date);
-            
-            try {
-                const { error } = await query;
-                if (error) {
-                    console.warn(`[Sync] API Error na conclusão da tarefa ${taskId}, removendo da fila para não travar:`, error.message);
+            completionSyncJobs.push((async () => {
+                const completed = queuedValue;
+                const query = completed === "excluded"
+                    ? supabaseClient.from('completions').upsert({ task_id: taskId, date: date, completed: false }, { onConflict: 'task_id,date' })
+                    : completed
+                    ? supabaseClient.from('completions').upsert({ task_id: taskId, date: date, completed: true }, { onConflict: 'task_id,date' })
+                    : supabaseClient.from('completions').delete().eq('task_id', taskId).eq('date', date);
+                try {
+                    const { error } = await query;
+                    if (error) {
+                        console.warn(`[Sync] API Error na conclusão da tarefa ${taskId}, removendo da fila para não travar:`, error.message);
+                    }
+                } catch (compEx) {
+                    console.warn(`[Sync] Falha na rede ao concluir tarefa ${taskId}:`, compEx);
+                    throw compEx;
                 }
-            } catch (compEx) {
-                console.warn(`[Sync] Falha na rede ao concluir tarefa ${taskId}:`, compEx);
-                throw compEx; // Re-throw para retry da rede
-            }
-
-            clearQueuedEntryIfCurrent("offline_completions_queue", key, queuedValue);
+                clearQueuedEntryIfCurrent("offline_completions_queue", key, queuedValue);
+            })());
         }
+        await Promise.all(completionSyncJobs);
 
         // 4. Sincronizar atualizações e exclusões de tarefas
         let taskUpdatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
