@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.57";
+const SERVICE_WORKER_URL = "./sw.js?v=10.58";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -21,10 +21,11 @@ const { dbCache, idb, localPrefs, localStorage } = window.ChecklistStorage.creat
 // Novas contas e restaurações começam sem categorias pessoais pré-cadastradas.
 const DEFAULT_CATEGORIES = [];
 const LEGACY_AUTO_SEEDED_CATEGORIES = ["Tio Nan", "Cassol", "PUCRS"];
-// Espelho opcional da categoria Cassol no painel interno da Editora. A fila
-// só é processada pela Edge Function, que ainda confirma no servidor se o
-// pedido veio da conta autorizada do Luiggi.
+// Espelho opcional das categorias das empresas no painel interno. A fila só é
+// processada pela Edge Function, que ainda confirma no servidor se o pedido
+// veio da conta autorizada do Luiggi.
 const CASSOL_DASHBOARD_SYNC_QUEUE_KEY = "cassol_dashboard_sync_queue";
+const CASSOL_DASHBOARD_CATEGORY_NAMES = new Set(["cassol", "leia cassol", "gc estrategias"]);
 const CASSOL_DASHBOARD_PULL_INTERVAL_MS = 15000;
 const CASSOL_DASHBOARD_LOCAL_CHANGE_GUARD_MS = 15000;
 let cassolDashboardSyncTimer = null;
@@ -5978,7 +5979,7 @@ function paintTrainingReport(categoryName) {
 }
 
 function isCassolDashboardTask(task) {
-    return normalizeCategoryName(task?.category) === "cassol";
+    return CASSOL_DASHBOARD_CATEGORY_NAMES.has(normalizeCategoryName(task?.category));
 }
 
 function queueCassolDashboardTaskSync(taskId, payload = {}) {
