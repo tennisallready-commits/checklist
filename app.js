@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.41";
+const SERVICE_WORKER_URL = "./sw.js?v=10.50";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -13,7 +13,9 @@ const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
 // Camada persistente isolada em storage.js para manter este arquivo focado nas regras do app.
 const { dbCache, idb, localPrefs, localStorage } = window.ChecklistStorage.create({
     onStorageChange: () => scheduleSyncStatusRefresh(),
-    onCloudQueueChange: () => scheduleCloudSync("fila-local", 1200)
+    // Checks devem chegar à nuvem na hora. As demais alterações continuam
+    // agrupadas para não gerar muitas requisições enquanto o usuário edita.
+    onCloudQueueChange: key => scheduleCloudSync("fila-local", key === "offline_completions_queue" ? 0 : 1200)
 });
 
 // Novas contas e restaurações começam sem categorias pessoais pré-cadastradas.
@@ -5328,6 +5330,16 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
     if (pendingToggles.has(id)) return;
     pendingToggles.add(id);
 
+    // Um segundo toque pode atualizar a fila enquanto esta requisição ainda
+    // está em voo. Assim que ela termina, dispara a fila imediatamente para
+    // que o último estado não espere o debounce normal de 1,2 s.
+    const finishToggleSync = () => {
+        pendingToggles.delete(id);
+        if (navigator.onLine && hasPendingSyncData()) {
+            scheduleCloudSync("check-atualizado", 0);
+        }
+    };
+
     // Se estiver conectado, envia para a nuvem em segundo plano sem bloquear a interface
     if (supabaseClient && currentUser && !isTemporaryId(id)) {
         const query = task.completed
@@ -5343,13 +5355,13 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
                 // a fila não será limpa e a sincronização em background assumirá.
                 clearQueuedEntryIfCurrent("offline_completions_queue", completionQueueKey, queuedCompletion);
             }
-            pendingToggles.delete(id);
+            finishToggleSync();
         }).catch(err => {
             console.error("Erro assíncrono ao salvar conclusão:", err);
-            pendingToggles.delete(id);
+            finishToggleSync();
         });
     } else {
-        pendingToggles.delete(id);
+        finishToggleSync();
     }
 }
 
@@ -8936,7 +8948,12 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
 
         // 4. Sincronizar conclusões (completions)
         let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
-        let queueKeys = Object.keys(queue);
+        
+        // Otimização: Filtra chaves que já estão sendo processadas ativamente pelo commitTaskToggle
+        let queueKeys = Object.keys(queue).filter(key => {
+            const taskId = key.split('_')[0];
+            return !(typeof pendingToggles !== "undefined" && (pendingToggles.has(String(taskId)) || pendingToggles.has(Number(taskId))));
+        });
 
         // Otimização: verifica a existência de todas as tarefas de uma vez
         const uniqueTaskIds = [...new Set(queueKeys.map(k => k.split('_')[0]).filter(id => !isTemporaryId(id)))];
@@ -8951,9 +8968,14 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
         }
 
         for (const key of queueKeys) {
-            madeChanges = true;
             const [taskId, date] = key.split('_');
             if (isTemporaryId(taskId)) continue;
+            
+            // Otimização: Se a alteração acabou de ser feita na tela e a requisição
+            // original do commitTaskToggle ainda está rodando, não duplicamos o envio.
+            if (typeof pendingToggles !== "undefined" && (pendingToggles.has(String(taskId)) || pendingToggles.has(Number(taskId)))) continue;
+
+            madeChanges = true;
             const queuedValue = queue[key];
 
             // Descarta conclusões órfãs deixadas no cache quando uma categoria
@@ -9039,7 +9061,7 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
         isSyncing = false;
         if (syncSucceeded) {
             refreshSyncStatusFromQueues();
-            if ((cloudSyncRerunRequested || hasPendingSyncData()) && navigator.onLine) scheduleCloudSync("alterações-durante-sync", 180);
+            if (cloudSyncRerunRequested && navigator.onLine) scheduleCloudSync("alterações-durante-sync", 180);
         } else if (navigator.onLine) {
             scheduleCloudSyncRetry();
         }

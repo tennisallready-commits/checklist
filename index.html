@@ -501,11 +501,22 @@
                             <div class="siri-copy-row"><input id="siri-shortcut-url" readonly><button id="btn-copy-siri-url" type="button" class="btn">Copiar</button></div>
                             <label>Chave pessoal</label>
                             <div class="siri-copy-row"><input id="siri-shortcut-token" type="password" readonly placeholder="Gere uma nova chave"><button id="btn-copy-siri-token" type="button" class="btn">Copiar</button></div>
-                            <small>A chave aparece apenas quando e gerada. Nao compartilhe.</small>
+                            <small style="color: var(--text-secondary); margin-bottom: 10px; display: block;">A chave aparece apenas quando e gerada. Copie e guarde com seguranca.</small>
+
+                            <div class="siri-setup-guide" style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 12px; padding: 12px; margin: 12px 0;">
+                                <strong style="font-size: 0.8rem; color: var(--text-primary); display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+                                    <i data-lucide="sparkles" style="width: 14px; height: 14px; color: var(--primary);"></i> Como configurar no app Atalhos do iPhone:
+                                </strong>
+                                <ol style="margin: 0; padding-left: 18px; font-size: 0.76rem; color: var(--text-secondary); line-height: 1.6;">
+                                    <li>Abra o app <b>Atalhos</b> no iPhone e toque em <b>+</b> (Nome: <b>Criar tarefa no Checklist</b>).</li>
+                                    <li>Adicione a acao <b>Pedir Entrada</b> (Texto) com a pergunta <i>"Qual tarefa?"</i>.</li>
+                                    <li>Adicione a acao <b>Obter Conteudo de URL</b> (Metodo: <b>POST</b>, Corpo: <b>JSON</b>) informando os campos <code>title</code> (resultado do passo 1) e <code>token</code> (sua chave acima).</li>
+                                    <li>Adicione <b>Obter valor do dicionario</b> para a chave <code>message</code> e finalize com <b>Falar Texto</b>.</li>
+                                </ol>
+                            </div>
                         </div>
                         <div class="siri-settings-actions" style="display: flex; flex-wrap: wrap; gap: 8px;">
                             <button id="btn-generate-siri-token" type="button" class="btn btn-primary"><i data-lucide="key-round"></i> Gerar chave</button>
-                            <button id="btn-download-siri-shortcut" type="button" class="btn" style="background: rgba(59, 130, 246, 0.12); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.25); font-weight: 700;" hidden><i data-lucide="download"></i> Baixar Atalho (.shortcut)</button>
                             <button id="btn-revoke-siri-token" type="button" class="btn" hidden><i data-lucide="shield-x"></i> Revogar</button>
                         </div>
                     </div>
@@ -543,7 +554,7 @@
 
                 <div class="settings-version">
                     <span>Checklist</span>
-                        <strong>Versão 10.23</strong>
+                        <strong>Versão 10.30</strong>
                 </div>
             </div>
         </div>
@@ -1098,6 +1109,6 @@
     </div>
 
     <script src="storage.js?v=1.02"></script>
-    <script src="app.js?v=10.28"></script>
+    <script src="app.js?v=10.31"></script>
 </body>
 </html>
