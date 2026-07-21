@@ -8973,8 +8973,15 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
                 ? supabaseClient.from('completions').upsert({ task_id: taskId, date: date, completed: true }, { onConflict: 'task_id,date' })
                 : supabaseClient.from('completions').delete().eq('task_id', taskId).eq('date', date);
             
-            const { error } = await query;
-            if (error) throw error;
+            try {
+                const { error } = await query;
+                if (error) {
+                    console.warn(`[Sync] API Error na conclusão da tarefa ${taskId}, removendo da fila para não travar:`, error.message);
+                }
+            } catch (compEx) {
+                console.warn(`[Sync] Falha na rede ao concluir tarefa ${taskId}:`, compEx);
+                throw compEx; // Re-throw para retry da rede
+            }
 
             clearQueuedEntryIfCurrent("offline_completions_queue", key, queuedValue);
         }
@@ -8994,8 +9001,15 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
                 else delete dbUpdates.category_id;
             }
             
-            const { error } = await supabaseClient.from('tasks').update(dbUpdates).eq('id', id);
-            if (error) throw error;
+            try {
+                const { error } = await supabaseClient.from('tasks').update(dbUpdates).eq('id', id);
+                if (error) {
+                    console.warn(`[Sync] API Error na atualização da tarefa ${id}, removendo da fila para não travar:`, error.message);
+                }
+            } catch (updateEx) {
+                console.warn(`[Sync] Falha na rede ao atualizar tarefa ${id}:`, updateEx);
+                throw updateEx; // Falha de rede deve interromper o sync para tentar novamente depois
+            }
 
             clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdates);
         }
