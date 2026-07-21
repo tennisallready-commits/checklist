@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.53";
+const SERVICE_WORKER_URL = "./sw.js?v=10.54";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -21,6 +21,12 @@ const { dbCache, idb, localPrefs, localStorage } = window.ChecklistStorage.creat
 // Novas contas e restaurações começam sem categorias pessoais pré-cadastradas.
 const DEFAULT_CATEGORIES = [];
 const LEGACY_AUTO_SEEDED_CATEGORIES = ["Tio Nan", "Cassol", "PUCRS"];
+// Espelho opcional da categoria Cassol no painel interno da Editora. A fila
+// só é processada pela Edge Function, que ainda confirma no servidor se o
+// pedido veio da conta autorizada do Luiggi.
+const CASSOL_DASHBOARD_SYNC_QUEUE_KEY = "cassol_dashboard_sync_queue";
+let cassolDashboardSyncTimer = null;
+let cassolDashboardSyncInProgress = false;
 
 // Default tasks database for initial setup (offline fallback and reset option)
 const DEFAULT_TASKS = [];
@@ -5168,6 +5174,7 @@ async function moveFutureTaskToCurrentMoment(id) {
         supabaseClient.from("tasks").update(updates).eq("id", id).then(({ error }) => {
             if (error) return console.warn("A tarefa foi movida para hoje apenas neste aparelho por enquanto:", error.message);
             clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdate);
+            if (isCassolDashboardTask(task)) queueCassolDashboardTaskSync(id, { operation: "upsert" });
         }).catch(error => console.warn("Não foi possível sincronizar a nova data da tarefa:", error.message));
     }
     selectedDate = todayStr;
@@ -5223,6 +5230,7 @@ async function restoreMovedFutureTask(id, task) {
         supabaseClient.from("tasks").update(updates).eq("id", id).then(({ error }) => {
             if (error) return console.warn("A data original foi restaurada apenas neste aparelho por enquanto:", error.message);
             clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdate);
+            if (isCassolDashboardTask(task)) queueCassolDashboardTaskSync(id, { operation: "upsert" });
         }).catch(error => console.warn("Não foi possível sincronizar a restauração da tarefa:", error.message));
     }
 
@@ -5955,6 +5963,68 @@ function paintTrainingReport(categoryName) {
     lucide.createIcons();
 }
 
+function isCassolDashboardTask(task) {
+    return normalizeCategoryName(task?.category) === "cassol";
+}
+
+function queueCassolDashboardTaskSync(taskId, payload = {}) {
+    if (!taskId || isTemporaryId(taskId)) return;
+    const queue = JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {};
+    const key = String(taskId);
+    const previous = queue[key] || {};
+    const next = {
+        task_id: key,
+        operation: "upsert",
+        ...payload
+    };
+    // Uma exclusão sempre vence. Para os demais casos, não perdemos um check
+    // que ocorreu logo após a criação/edição da mesma tarefa.
+    if (next.operation !== "delete" && previous.operation === "delete") return;
+    if (next.operation === "upsert" && previous.operation === "completion") {
+        queue[key] = { ...next, ...previous, queued_at: Date.now() };
+    } else {
+        queue[key] = { ...previous, ...next, queued_at: Date.now() };
+    }
+    localStorage.setItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY, JSON.stringify(queue));
+    scheduleCassolDashboardTaskSync();
+}
+
+function scheduleCassolDashboardTaskSync(delay = 650) {
+    if (cassolDashboardSyncTimer) clearTimeout(cassolDashboardSyncTimer);
+    cassolDashboardSyncTimer = setTimeout(() => {
+        cassolDashboardSyncTimer = null;
+        syncCassolDashboardTaskQueue();
+    }, delay);
+}
+
+async function syncCassolDashboardTaskQueue() {
+    if (cassolDashboardSyncInProgress || !supabaseClient || !currentUser || !navigator.onLine) return;
+    const queue = JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {};
+    const entries = Object.values(queue);
+    if (!entries.length) return;
+    cassolDashboardSyncInProgress = true;
+    try {
+        for (const entry of entries) {
+            const taskId = String(entry?.task_id || "");
+            if (!taskId || isTemporaryId(taskId)) continue;
+            const { data, error } = await supabaseClient.functions.invoke("sync-cassol-dashboard", { body: entry });
+            if (error || data?.error) {
+                console.warn("A tarefa Cassol será reenviada ao dashboard quando a integração estiver disponível:", error?.message || data?.error);
+                break;
+            }
+            const currentQueue = JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {};
+            if (JSON.stringify(currentQueue[taskId]) === JSON.stringify(entry)) {
+                delete currentQueue[taskId];
+                localStorage.setItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY, JSON.stringify(currentQueue));
+            }
+        }
+    } catch (error) {
+        console.warn("Não foi possível atualizar o dashboard da Cassol agora:", error?.message || error);
+    } finally {
+        cassolDashboardSyncInProgress = false;
+    }
+}
+
 function saveCompletionOffline(taskId, date, completed) {
     let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
     localCompletions = localCompletions.filter(c => !(String(c.task_id) === String(taskId) && c.date === date));
@@ -6160,6 +6230,7 @@ async function renameTask(id, newTitle, context) {
                     console.warn("Erro ao renomear no Supabase. Mantido localmente.", error.message);
                 } else {
                     clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdate);
+                    if (isCassolDashboardTask(existingTask)) queueCassolDashboardTaskSync(id, { operation: "upsert" });
                 }
             })
             .catch(err => {
@@ -6253,6 +6324,7 @@ async function updateTask(id, updates) {
                     console.warn("Erro ao atualizar tarefa no Supabase. Mantido localmente.", error.message);
                 } else {
                     clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdate);
+                    if (isCassolDashboardTask(existingTask)) queueCassolDashboardTaskSync(id, { operation: "upsert" });
                 }
             })
             .catch(err => {
@@ -6415,6 +6487,7 @@ async function deleteTask(id) {
                     console.warn("Erro ao deletar no Supabase. Mantido localmente.", error.message);
                 } else {
                     clearQueuedEntryIfCurrent("offline_task_updates_queue", taskId, queuedDeletion);
+                    if (isCassolDashboardTask(existingTask)) queueCassolDashboardTaskSync(taskId, { operation: "delete" });
                 }
                 pendingDeletes.delete(taskId);
             })
@@ -8851,6 +8924,11 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
                     if (String(taskElement.dataset.id) === String(tempId)) taskElement.dataset.id = realTask.id;
                 });
                 if (createdNow && isCollaborativeCategory(realTask.category_id)) await requestSharedTaskPush(realTask.id);
+                // Também reenvia criações recuperadas após uma queda de rede;
+                // a função é idempotente e não duplica o item no dashboard.
+                if (isCassolDashboardTask(realTask)) {
+                    queueCassolDashboardTaskSync(realTask.id, { operation: "upsert" });
+                }
                 
                 let compQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
                 let updatedCompQueue = {};
@@ -8974,7 +9052,18 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
                 console.warn("[Sync] Falha de rede ao sincronizar conclusões:", compEx);
                 throw compEx;
             }
-            group.entries.forEach(entry => clearQueuedEntryIfCurrent("offline_completions_queue", entry.key, entry.queuedValue));
+            group.entries.forEach(entry => {
+                clearQueuedEntryIfCurrent("offline_completions_queue", entry.key, entry.queuedValue);
+                const syncedTask = localTasks.find(task => String(task.id) === String(entry.taskId))
+                    || allActiveTasks.find(task => String(task.id) === String(entry.taskId));
+                if (isCassolDashboardTask(syncedTask) && group.action !== "excluded") {
+                    queueCassolDashboardTaskSync(entry.taskId, {
+                        operation: "completion",
+                        date: group.date,
+                        completed: group.action === "complete"
+                    });
+                }
+            });
         });
         await Promise.all(completionSyncJobs);
 
@@ -9004,6 +9093,10 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
             }
 
             clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdates);
+            const syncedTask = localTasks.find(task => String(task.id) === String(id));
+            if (isCassolDashboardTask(syncedTask)) {
+                queueCassolDashboardTaskSync(id, { operation: dbUpdates.is_active === false ? "delete" : "upsert" });
+            }
         }
 
         if (madeChanges) {
