@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.52";
+const SERVICE_WORKER_URL = "./sw.js?v=10.53";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -9007,8 +9007,13 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
         }
 
         if (madeChanges) {
-            console.log("[Sync] Sincronização concluída com sucesso. Baixando dados mais recentes...");
-            await loadChecklistAndProgress(false); // Busca dados e revalida
+            // A fila já foi confirmada no Supabase. Não espera a recarga
+            // completa (categorias, tarefas e histórico) para liberar o
+            // indicador de sincronização; ela é apenas uma revalidação.
+            console.log("[Sync] Alterações confirmadas. Revalidando dados em segundo plano...");
+            loadChecklistAndProgress(false).catch(error => {
+                console.warn("[Sync] Revalidação pós-salvamento indisponível:", error.message);
+            });
         } else {
             console.log("[Sync] Nenhuma alteração pendente de sincronização primária.");
         }
