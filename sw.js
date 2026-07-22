@@ -1,10 +1,10 @@
-const CACHE_NAME = 'checklist-cache-v10.62';
+const CACHE_NAME = 'checklist-cache-v10.63';
 const CRITICAL_ASSETS = [
   './',
   './index.html',
   './style.css?v=8.41',
   './storage.js?v=1.02',
-  './app.js?v=10.43',
+  './app.js?v=10.44',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -98,7 +98,7 @@ self.addEventListener('notificationclick', (event) => {
           return existingClient.navigate(absoluteTargetUrl).then((navigatedClient) => (navigatedClient || existingClient).focus());
         }
         existingClient.postMessage(taskId
-          ? { type: notificationType === 'task-reminder' ? 'OPEN_TASK_REMINDER' : notificationType === 'dashboard-assigned' ? 'OPEN_DASHBOARD_TASK' : 'OPEN_SHARED_TASK', taskId }
+          ? { type: notificationType === 'task-reminder' ? 'OPEN_TASK_REMINDER' : ['dashboard-assigned', 'dashboard-updated'].includes(notificationType) ? 'OPEN_DASHBOARD_TASK' : 'OPEN_SHARED_TASK', taskId }
           : inviteId ? { type: 'OPEN_COLLABORATION_INVITE', inviteId } : { type: 'OPEN_NOTIFICATIONS' });
         return existingClient.focus();
       }
