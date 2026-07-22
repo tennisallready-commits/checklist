@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.63";
+const SERVICE_WORKER_URL = "./sw.js?v=10.64";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -9186,10 +9186,14 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
             try {
                 const { error } = await query;
                 if (error) {
-                    console.warn(`[Sync] API Error ao sincronizar ${group.entries.length} conclusão(ões):`, error.message);
+                    // Não retire a alteração da fila quando o servidor a
+                    // recusou. Antes, esse caminho apenas registrava o erro e
+                    // apagava a fila logo abaixo; uma revalidação posterior
+                    // trazia o estado antigo de volta para a tela.
+                    throw new Error(`O Supabase recusou ${group.entries.length} conclusão(ões): ${error.message}`);
                 }
             } catch (compEx) {
-                console.warn("[Sync] Falha de rede ao sincronizar conclusões:", compEx);
+                console.warn("[Sync] Falha ao sincronizar conclusões; a fila será mantida para nova tentativa:", compEx);
                 throw compEx;
             }
             group.entries.forEach(entry => {
@@ -9225,11 +9229,13 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
             try {
                 const { error } = await supabaseClient.from('tasks').update(dbUpdates).eq('id', id);
                 if (error) {
-                    console.warn(`[Sync] API Error na atualização da tarefa ${id}, removendo da fila para não travar:`, error.message);
+                    // Uma resposta de erro não é confirmação. Mantemos a
+                    // edição pendente para ela não desaparecer ao recarregar.
+                    throw new Error(`O Supabase recusou a atualização da tarefa ${id}: ${error.message}`);
                 }
             } catch (updateEx) {
-                console.warn(`[Sync] Falha na rede ao atualizar tarefa ${id}:`, updateEx);
-                throw updateEx; // Falha de rede deve interromper o sync para tentar novamente depois
+                console.warn(`[Sync] Falha ao atualizar tarefa ${id}; a fila será mantida para nova tentativa:`, updateEx);
+                throw updateEx;
             }
 
             clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdates);
