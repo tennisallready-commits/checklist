@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.59";
+const SERVICE_WORKER_URL = "./sw.js?v=10.60";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -575,6 +575,8 @@ document.addEventListener("DOMContentLoaded", () => {
         navigator.serviceWorker.addEventListener('message', event => {
             if (event.data && event.data.type === 'OPEN_TRAINING_REPORT') {
                 openTrainingCalendarFromPush(event.data.taskId, event.data.trainingDate);
+            } else if (event.data && event.data.type === 'OPEN_DASHBOARD_TASK' && event.data.taskId) {
+                focusSharedTaskFromNotification({ task_id: event.data.taskId, dashboard_task: true });
             } else if (event.data && event.data.type === 'OPEN_SHARED_TASK' && event.data.taskId) {
                 focusSharedTaskFromNotification({ task_id: event.data.taskId });
             } else if (event.data && event.data.type === 'OPEN_TASK_REMINDER' && event.data.taskId) {
@@ -7233,7 +7235,7 @@ function highlightRenderedTask(taskId) {
     return true;
 }
 
-async function primeTaskFromPush(taskId) {
+async function primeTaskFromPush(taskId, { openCategory = false } = {}) {
     if (!taskId) return null;
     let targetTask = (allActiveTasks || []).find(task => String(task.id) === String(taskId)) || null;
     if (supabaseClient && currentUser) {
@@ -7260,7 +7262,7 @@ async function primeTaskFromPush(taskId) {
     }
 
     selectedDate = extractDateFromTimestamp(targetTask.created_at);
-    currentFilter = "all";
+    currentFilter = openCategory && targetTask.category ? targetTask.category : "all";
     loadDataOffline();
     updateDateDisplay();
     renderCategories();
@@ -7274,6 +7276,13 @@ async function primeTaskFromPush(taskId) {
 async function focusSharedTaskFromNotification(notification) {
     if (!notification || !notification.task_id) return;
     closeModal(modalNotifications);
+    if (notification.dashboard_task) {
+        const dashboardTask = await primeTaskFromPush(notification.task_id, { openCategory: true });
+        if (dashboardTask) {
+            setTimeout(() => loadChecklistAndProgress().catch(error => console.warn("Revalidação após push do Dashboard indisponível:", error)), 2200);
+            return;
+        }
+    }
     currentFilter = "all";
     renderCategories();
     renderChecklist();
@@ -8739,6 +8748,7 @@ function setupSupabaseAuth() {
 
             const startupParams = new URLSearchParams(window.location.search);
             const earlyNotificationTaskId = startupParams.get("notification_task");
+            const earlyDashboardPush = startupParams.get("dashboard_task") === "1";
             const earlyTrainingDate = startupParams.get("training_date");
             const earlyTrainingPush = startupParams.get("training_calendar") === "1";
             let earlyTrainingPromise = null;
@@ -8753,7 +8763,7 @@ function setupSupabaseAuth() {
             // mostra o cartão imediatamente e continua o carregamento depois.
             let earlyNotificationTaskHandled = false;
             if (earlyNotificationTaskId && !earlyTrainingPush) {
-                const primedTask = await primeTaskFromPush(earlyNotificationTaskId);
+                const primedTask = await primeTaskFromPush(earlyNotificationTaskId, { openCategory: earlyDashboardPush });
                 if (primedTask) {
                     earlyNotificationTaskHandled = true;
                     if (appSessionLoader) appSessionLoader.classList.add("hidden");
@@ -8827,7 +8837,7 @@ function setupSupabaseAuth() {
             } else if (notificationTaskId) {
                 history.replaceState({}, "", window.location.pathname);
                 if (!earlyNotificationTaskHandled) {
-                    setTimeout(() => focusSharedTaskFromNotification({ task_id: notificationTaskId }), 250);
+                    setTimeout(() => focusSharedTaskFromNotification({ task_id: notificationTaskId, dashboard_task: earlyDashboardPush }), 250);
                 }
             } else if (collaborationInviteId) {
                 history.replaceState({}, "", window.location.pathname);
