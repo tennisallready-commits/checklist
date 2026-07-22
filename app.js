@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.58";
+const SERVICE_WORKER_URL = "./sw.js?v=10.59";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -3794,6 +3794,11 @@ function renderCategories() {
     const bar = document.getElementById("categories-bar");
     const select = document.getElementById("task-category");
     const manageList = document.getElementById("manage-categories-list");
+    // Uma sincronização pode terminar enquanto o modal de criação/edição está
+    // aberto. Guardamos a escolha feita pela pessoa antes de recriar as opções
+    // para ela não voltar silenciosamente para a primeira categoria da lista.
+    const selectedAddCategory = select?.value || "";
+    const selectedEditCategory = selectEditTaskCategory?.value || "";
 
     // 1. Render Category Filter Chips
     const activeCategory = currentFilter;
@@ -3867,6 +3872,12 @@ function renderCategories() {
             selectEditTaskCategory.appendChild(optEdit);
         }
     });
+    if (selectedAddCategory && categories.some(cat => cat.name === selectedAddCategory)) {
+        select.value = selectedAddCategory;
+    }
+    if (selectEditTaskCategory && selectedEditCategory && categories.some(cat => cat.name === selectedEditCategory)) {
+        selectEditTaskCategory.value = selectedEditCategory;
+    }
 
     // 3. Render categories list in Settings Modal
     manageList.innerHTML = "";
