@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.60";
+const SERVICE_WORKER_URL = "./sw.js?v=10.62";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -1082,6 +1082,28 @@ function setupEventListeners() {
         btnNextDay.addEventListener("click", (e) => {
             e.stopPropagation();
             changeDay(1);
+        });
+    }
+
+    // Atalho no centro do bloco de data: dois toques/cliques voltam direto
+    // para hoje. O contador manual também funciona no iPhone, onde o dblclick
+    // nativo pode não ser disparado de forma consistente após dois toques.
+    const squareDateDisplay = document.querySelector(".square-date-display");
+    if (squareDateDisplay) {
+        let lastDateDisplayClickAt = 0;
+        squareDateDisplay.title = "Dois toques para voltar a hoje";
+        squareDateDisplay.addEventListener("click", async event => {
+            const now = Date.now();
+            const isDoubleClick = event.detail >= 2 || (lastDateDisplayClickAt > 0 && now - lastDateDisplayClickAt <= 350);
+            lastDateDisplayClickAt = isDoubleClick ? 0 : now;
+            if (!isDoubleClick) return;
+
+            const today = getLocalDateString(new Date());
+            if (selectedDate === today) return;
+            selectedDate = today;
+            updateDateDisplay();
+            await loadChecklistAndProgress();
+            if (window.lucide) lucide.createIcons();
         });
     }
 
@@ -7421,12 +7443,15 @@ async function updateTaskReminderContext(taskId, updater) {
 }
 
 async function openTaskReminderAction(taskId) {
+    // Um toque rápido no push pode disparar mais de um caminho de abertura
+    // (URL e postMessage). Mantém sempre um único modal de lembrete.
+    document.querySelector(".task-reminder-action-layer")?.remove();
     focusSharedTaskFromNotification({ task_id: taskId });
     const task = getTaskById(taskId);
     const snoozeDefault = new Date(Date.now() + 30 * 60 * 1000).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false });
     const layer = document.createElement("div");
     layer.className = "task-reminder-action-layer";
-    layer.innerHTML = `<div class="task-reminder-action-backdrop"></div><div class="task-reminder-action-card" role="dialog" aria-modal="true"><span class="task-reminder-action-icon"><i data-lucide="alarm-clock"></i></span><small>Lembrete de tarefa</small><h3>${escapeHTML(task ? task.title : "Hora da sua tarefa")}</h3><p>Quer começar agora ou prefere receber um novo lembrete?</p><div class="task-reminder-action-buttons"><button type="button" class="btn task-reminder-do-now"><i data-lucide="check"></i><span><strong>Vou fazer agora</strong><small>Encerrar este lembrete</small></span></button><button type="button" class="btn btn-primary task-reminder-snooze"><i data-lucide="clock-3"></i><span><strong>Adiar lembrete</strong><small>Escolher outro horário</small></span></button></div><div class="task-reminder-snooze-panel" hidden><strong>Adiar por quanto tempo?</strong><div class="task-reminder-snooze-presets"><button type="button" data-minutes="10">+10 min</button><button type="button" data-minutes="30" class="selected">+30 min</button><button type="button" data-minutes="60">+1 hora</button></div><label>Escolher horário<input type="time" class="task-reminder-snooze-time" value="${snoozeDefault}"></label><button type="button" class="btn btn-primary task-reminder-snooze-save">Salvar novo horário</button></div></div>`;
+    layer.innerHTML = `<div class="task-reminder-action-backdrop"></div><div class="task-reminder-action-card" role="dialog" aria-modal="true"><span class="task-reminder-action-icon"><i data-lucide="alarm-clock"></i></span><small>Lembrete de tarefa</small><h3>${escapeHTML(task ? task.title : "Hora da sua tarefa")}</h3><p>Deseja adiar ou não receber mais lembretes?</p><div class="task-reminder-action-buttons"><button type="button" class="btn task-reminder-do-now"><i data-lucide="bell-off"></i><span><strong>Não lembrar mais</strong><small>Desativar lembrete desta tarefa</small></span></button><button type="button" class="btn btn-primary task-reminder-snooze"><i data-lucide="clock-3"></i><span><strong>Adiar lembrete</strong><small>Escolher outro horário</small></span></button></div><div class="task-reminder-snooze-panel" hidden><strong>Adiar por quanto tempo?</strong><div class="task-reminder-snooze-presets"><button type="button" data-minutes="10">+10 min</button><button type="button" data-minutes="30" class="selected">+30 min</button><button type="button" data-minutes="60">+1 hora</button></div><label>Escolher horário<input type="time" class="task-reminder-snooze-time" value="${snoozeDefault}"></label><button type="button" class="btn btn-primary task-reminder-snooze-save">Salvar novo horário</button></div></div>`;
     document.body.appendChild(layer);
     requestAnimationFrame(() => layer.classList.add("visible"));
     if (window.lucide) lucide.createIcons();
@@ -7444,10 +7469,10 @@ async function openTaskReminderAction(taskId) {
                 return context;
             });
             close();
-            showAppNotice("Lembrete encerrado. Esta tarefa não enviará outro aviso.", "success");
+            showAppNotice("Lembrete desativado. Esta tarefa não enviará outro aviso.", "success");
         } catch (error) {
             button.disabled = false;
-            showAppNotice(`Não foi possível encerrar o lembrete: ${error.message}`, "error");
+            showAppNotice(`Não foi possível desativar o lembrete: ${error.message}`, "error");
         }
     });
     const snoozePanel = layer.querySelector(".task-reminder-snooze-panel");
@@ -8748,6 +8773,7 @@ function setupSupabaseAuth() {
 
             const startupParams = new URLSearchParams(window.location.search);
             const earlyNotificationTaskId = startupParams.get("notification_task");
+            const earlyReminderTaskId = startupParams.get("reminder_task");
             const earlyDashboardPush = startupParams.get("dashboard_task") === "1";
             const earlyTrainingDate = startupParams.get("training_date");
             const earlyTrainingPush = startupParams.get("training_calendar") === "1";
@@ -8757,6 +8783,16 @@ function setupSupabaseAuth() {
                 // realtime. O cache pinta o modal; a foto nova entra em seguida.
                 history.replaceState({}, "", window.location.pathname);
                 earlyTrainingPromise = openTrainingCalendarFromPush(earlyNotificationTaskId, earlyTrainingDate);
+            }
+
+            // O lembrete abre antes da sincronização completa, perfil e fotos.
+            // Assim, tocar no push mostra imediatamente as opções de adiar ou
+            // desativar, mesmo se o app estava fechado.
+            let earlyReminderOpened = false;
+            if (earlyReminderTaskId) {
+                history.replaceState({}, "", window.location.pathname);
+                earlyReminderOpened = true;
+                openTaskReminderAction(earlyReminderTaskId);
             }
 
             // Um push de tarefa tem prioridade sobre a sincronização completa:
@@ -8820,7 +8856,7 @@ function setupSupabaseAuth() {
             const notificationTaskId = earlyNotificationTaskId;
             const shouldOpenTrainingCalendar = earlyTrainingPush;
             const notificationTrainingDate = earlyTrainingDate;
-            const reminderTaskId = new URLSearchParams(window.location.search).get("reminder_task");
+            const reminderTaskId = earlyReminderTaskId;
             const shouldOpenNotifications = new URLSearchParams(window.location.search).get("open_notifications") === "1";
             const collaborationInviteId = new URLSearchParams(window.location.search).get("collaboration_invite");
             if (shouldOpenTrainingCalendar) {
@@ -8831,7 +8867,7 @@ function setupSupabaseAuth() {
                     if (!modalTrainingReport?.classList.contains("active")) return;
                     renderTrainingReport().then(() => renderTrainingDayGallery(notificationTrainingDate || getLocalDateString(new Date())));
                 }, 50);
-            } else if (reminderTaskId) {
+            } else if (reminderTaskId && !earlyReminderOpened) {
                 history.replaceState({}, "", window.location.pathname);
                 setTimeout(() => openTaskReminderAction(reminderTaskId), 250);
             } else if (notificationTaskId) {
