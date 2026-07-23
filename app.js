@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.64";
+const SERVICE_WORKER_URL = "./sw.js?v=10.65";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -4425,6 +4425,23 @@ function renderChecklist() {
 
     tasksListEl.innerHTML = "";
     
+    // A categoria exibida pode representar mais de uma categoria física no
+    // banco (por exemplo, o Treino compartilhado e um Treino antigo). O
+    // calendário já consulta todos esses IDs; a lista precisa usar a mesma
+    // regra para não esconder treinos de outro participante.
+    const taskMatchesSelectedCategory = (task, categoryName) => {
+        const normalizedName = normalizeCategoryName(categoryName);
+        const selectedCategory = categories.find(category => category.name === categoryName)
+            || categories.find(category => normalizeCategoryName(category.name) === normalizedName);
+        const relatedIds = new Set((selectedCategory?.merged_category_ids || [selectedCategory?.id])
+            .filter(id => id !== undefined && id !== null)
+            .map(String));
+
+        if (task.category_id && relatedIds.has(String(task.category_id))) return true;
+        // Compatibilidade com tarefas antigas que ainda não tinham category_id.
+        return normalizeCategoryName(task.category) === normalizedName;
+    };
+
     // Filter tasks
     const filteredTasks = tasks.filter(task => {
         if (currentFilter === "all") {
@@ -4432,7 +4449,7 @@ function renderChecklist() {
             // da categoria Treino; não ocupam a rotina pessoal da aba Todos.
             return !isTrainingCategory(task.category) || isTrainingTaskOwnedByCurrentUser(task, true);
         }
-        return task.category === currentFilter;
+        return taskMatchesSelectedCategory(task, currentFilter);
     });
 
     if (isEditMode) {
