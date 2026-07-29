@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.66";
+const SERVICE_WORKER_URL = "./sw.js?v=10.67";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -103,6 +103,9 @@ let currentTheme = "default";
 let selectedDate = "";
 let currentCalendarMonth = new Date();
 let currentTrainingCalendarMonth = new Date();
+// A data escolhida dentro do calendário de treinos é independente da data
+// exibida no checklist. Assim, uma atualização das fotos não a joga para hoje.
+let currentTrainingCalendarSelectedDate = "";
 let currentTrainingCalendarRecords = [];
 let trainingThumbnailCacheJob = null;
 
@@ -851,6 +854,7 @@ function setupEventListeners() {
     const openContextualTrainingReport = async () => {
         if (currentFilter === "all" || !isTrainingCategory(currentFilter)) return;
         currentTrainingCalendarMonth = new Date(selectedDate + "T12:00:00");
+        currentTrainingCalendarSelectedDate = selectedDate;
         openModal(modalTrainingReport);
         renderTrainingReport();
     };
@@ -5810,6 +5814,9 @@ function getTrainingRecordOwner(record) {
 }
 
 function renderTrainingDayGallery(dateStr) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr || ""))) {
+        currentTrainingCalendarSelectedDate = String(dateStr);
+    }
     const heading = document.getElementById("training-day-gallery-heading");
     const list = document.getElementById("training-report-list");
     if (!heading || !list) return;
@@ -6077,7 +6084,7 @@ function paintTrainingReport(categoryName) {
 
     summary.classList.toggle("no-own-training", monthTrainedDates.size === 0);
     summary.innerHTML = `${monthTrainedDates.size ? '<span aria-label="Seus dias de treino">🔥</span>' : ''}<strong>${monthTrainedDates.size} ${monthTrainedDates.size === 1 ? "dia" : "dias"} de treino • ${monthParticipantCount} ${monthParticipantCount === 1 ? "participante" : "participantes"} • ${monthRecordCount} ${monthRecordCount === 1 ? "registro" : "registros"}</strong>`;
-    const activeDateStr = selectedDate || todayStr;
+    const activeDateStr = currentTrainingCalendarSelectedDate || selectedDate || todayStr;
     const defaultSelectedDay = activeDateStr.startsWith(monthPrefix)
         ? activeDateStr
         : (todayStr.startsWith(monthPrefix) ? todayStr : (initialGalleryDate || firstTrainedDate || `${monthPrefix}-01`));
@@ -7449,6 +7456,7 @@ async function openTrainingCalendarFromPush(taskId, trainingDate) {
     if (trainingCategory) currentFilter = trainingCategory;
     selectedDate = validDate;
     currentTrainingCalendarMonth = new Date(`${validDate}T12:00:00`);
+    currentTrainingCalendarSelectedDate = validDate;
     updateDateDisplay();
     loadDataOffline();
     renderCategories();
