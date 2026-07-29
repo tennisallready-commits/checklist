@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.65";
+const SERVICE_WORKER_URL = "./sw.js?v=10.66";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -357,8 +357,9 @@ function hasPendingSyncData() {
     const pendingCompletions = Object.keys(dbCache.offline_completions_queue || {}).length > 0;
     const pendingUpdates = Object.keys(dbCache.offline_task_updates_queue || {}).length > 0;
     const pendingInvites = (JSON.parse(localStorage.getItem("offline_collaboration_invites_queue")) || []).length > 0;
-    const pendingTrainingPhotos = Number(localPrefs.getItem("pending_training_photo_uploads") || 0) > 0;
-    return pendingCategories || pendingTasks || pendingCompletions || pendingUpdates || pendingInvites || pendingTrainingPhotos;
+    // A foto de treino é enviada em segundo plano. Ela não deve manter o
+    // Checklist inteiro como “pendente” depois que o check já foi confirmado.
+    return pendingCategories || pendingTasks || pendingCompletions || pendingUpdates || pendingInvites;
 }
 
 function refreshSyncStatusFromQueues() {
@@ -395,8 +396,47 @@ function getPendingSyncCount() {
     const pendingCompletions = Object.keys(dbCache.offline_completions_queue || {}).length;
     const pendingUpdates = Object.keys(dbCache.offline_task_updates_queue || {}).length;
     const pendingInvites = (JSON.parse(localPrefs.getItem("offline_collaboration_invites_queue") || "[]") || []).length;
-    const pendingTrainingPhotos = Number(localPrefs.getItem("pending_training_photo_uploads") || 0);
-    return pendingCategories + pendingTasks + pendingCompletions + pendingUpdates + pendingInvites + pendingTrainingPhotos;
+    return pendingCategories + pendingTasks + pendingCompletions + pendingUpdates + pendingInvites;
+}
+
+let trainingPhotoUploadTimer = null;
+let trainingPhotoUploadInProgress = false;
+let trainingPhotoUploadRerunRequested = false;
+let trainingPhotoUploadRetryCount = 0;
+
+function hasPendingTrainingPhotoUploads() {
+    return Number(localPrefs.getItem("pending_training_photo_uploads") || 0) > 0;
+}
+
+function scheduleTrainingPhotoUpload(reason = "foto-de-treino", delay = 0) {
+    if (!supabaseClient || !currentUser || !navigator.onLine || !hasPendingTrainingPhotoUploads()) return;
+    if (trainingPhotoUploadInProgress) {
+        trainingPhotoUploadRerunRequested = true;
+        return;
+    }
+    clearTimeout(trainingPhotoUploadTimer);
+    trainingPhotoUploadTimer = setTimeout(async () => {
+        trainingPhotoUploadTimer = null;
+        if (!supabaseClient || !currentUser || !navigator.onLine || !hasPendingTrainingPhotoUploads()) return;
+        trainingPhotoUploadInProgress = true;
+        let retryDelay = 0;
+        try {
+            await syncPendingTrainingPhotoUploads();
+            trainingPhotoUploadRetryCount = 0;
+        } catch (error) {
+            trainingPhotoUploadRetryCount = Math.min(trainingPhotoUploadRetryCount + 1, 6);
+            retryDelay = Math.min(30_000, 1_200 * (2 ** (trainingPhotoUploadRetryCount - 1)));
+            console.warn(`[Treino] Foto ainda pendente (${reason}); nova tentativa em ${Math.round(retryDelay / 1000)}s.`, error?.message || error);
+        } finally {
+            trainingPhotoUploadInProgress = false;
+            if (trainingPhotoUploadRerunRequested) {
+                trainingPhotoUploadRerunRequested = false;
+                scheduleTrainingPhotoUpload("nova-foto-durante-envio", 80);
+            } else if (retryDelay && hasPendingTrainingPhotoUploads()) {
+                scheduleTrainingPhotoUpload("nova-tentativa", retryDelay);
+            }
+        }
+    }, Math.max(0, delay));
 }
 
 function scheduleCloudSync(reason = "alteração-local", delay = 350) {
@@ -2165,6 +2205,7 @@ function setupEventListeners() {
         setSyncStatus("syncing", "Salvando…", "Conexão restaurada; sincronizando alterações");
         cloudSyncRetryCount = 0;
         scheduleCloudSync("conexão-restaurada", 50);
+        scheduleTrainingPhotoUpload("conexão-restaurada", 50);
     });
 
     window.addEventListener("offline", () => {
@@ -2175,6 +2216,13 @@ function setupEventListeners() {
         if (!navigator.onLine) {
             showAppNotice("Sem conexão. Suas alterações permanecem guardadas neste aparelho.", "warning");
             return;
+        }
+        if (hasPendingTrainingPhotoUploads()) {
+            scheduleTrainingPhotoUpload("toque-do-usuário", 0);
+            if (!hasPendingSyncData() && !cloudSyncLastError) {
+                showAppNotice("A foto do treino está sendo enviada em segundo plano.", "success");
+                return;
+            }
         }
         if (!hasPendingSyncData() && !cloudSyncLastError) {
             loadChecklistAndProgress().then(() => refreshSyncStatusFromQueues());
@@ -2192,15 +2240,18 @@ function setupEventListeners() {
     document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") {
             if (hasPendingSyncData()) scheduleCloudSync("app-retomado", 120);
+            scheduleTrainingPhotoUpload("app-retomado", 120);
             pullCassolDashboardTasks();
         }
     });
     window.addEventListener("focus", () => {
         if (hasPendingSyncData()) scheduleCloudSync("janela-em-foco", 180);
+        scheduleTrainingPhotoUpload("janela-em-foco", 180);
         pullCassolDashboardTasks();
     });
     setInterval(() => {
         if (document.visibilityState === "visible" && navigator.onLine && hasPendingSyncData()) scheduleCloudSync("verificação-periódica", 0);
+        if (document.visibilityState === "visible" && navigator.onLine) scheduleTrainingPhotoUpload("verificação-de-foto", 0);
     }, 30000);
 
     // Auth Listeners & Forms
@@ -5434,10 +5485,10 @@ async function finishPendingTrainingCompletion(photoDataUrl) {
     await idb.put("training_photo_records", records.slice(0, 120));
     updatePendingTrainingPhotoFlag(records.slice(0, 120));
     scheduleTrainingThumbnailCache([record]);
-    const uploadResult = await uploadTrainingPhotoRecord(record);
-    showAppNotice(uploadResult.ok ? "Foto compartilhada no relatório de treinos." : `Foto salva neste aparelho. Falha na nuvem: ${uploadResult.error}`, uploadResult.ok ? "success" : "warning");
-    if (uploadResult.ok) notifyCompletion(record.taskId);
-    else scheduleCloudSync("foto-de-treino-pendente", 1200);
+    // O check já pode ser confirmado; a imagem segue pela fila independente
+    // para não deixar o status do Checklist inteiro preso em “pendente”.
+    scheduleTrainingPhotoUpload("novo-registro", 0);
+    showAppNotice("Treino concluído. Foto sendo enviada em segundo plano.", "success");
 }
 
 function updatePendingTrainingPhotoFlag(records) {
@@ -5446,6 +5497,8 @@ function updatePendingTrainingPhotoFlag(records) {
         : 0;
     if (pendingCount) localPrefs.setItem("pending_training_photo_uploads", String(pendingCount));
     else localPrefs.removeItem("pending_training_photo_uploads");
+    // O indicador geral continua refletindo somente tarefas e categorias.
+    // A foto tem sua própria fila de envio em segundo plano.
     scheduleSyncStatusRefresh();
 }
 
@@ -5701,12 +5754,14 @@ function compressTrainingPhoto(file) {
             const image = new Image();
             image.onerror = () => reject(new Error("Não foi possível abrir a foto."));
             image.onload = () => {
-                const scale = Math.min(1, 1280 / Math.max(image.width, image.height));
+                // Registro visual, não arquivo original: reduz bastante o
+                // envio no celular preservando qualidade suficiente no mural.
+                const scale = Math.min(1, 1080 / Math.max(image.width, image.height));
                 const canvas = document.createElement("canvas");
                 canvas.width = Math.round(image.width * scale);
                 canvas.height = Math.round(image.height * scale);
                 canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
-                resolve(canvas.toDataURL("image/jpeg", .78));
+                resolve(canvas.toDataURL("image/jpeg", .72));
             };
             image.src = reader.result;
         };
@@ -8856,11 +8911,8 @@ function setupSupabaseAuth() {
             await ensureUserIdentifier();
             subscribeToCollaborationUpdates();
             startCassolDashboardPulling();
-            // Sincroniza fotos pendentes de forma independente após o carregamento,
-            // sem depender do fluxo geral de sync que pode ter sido bloqueado.
-            setTimeout(async () => {
-                try { await syncPendingTrainingPhotoUploads(); } catch (_) { /* silencioso */ }
-            }, 2500);
+            // Retoma fotos pendentes sem bloquear o carregamento do Checklist.
+            scheduleTrainingPhotoUpload("abertura-do-app", 2500);
             if ("requestIdleCallback" in window) window.requestIdleCallback(warmTrainingPhotoCache, { timeout: 3000 });
             else setTimeout(warmTrainingPhotoCache, 1800);
             updateNotificationsSettingUI();
@@ -9296,12 +9348,9 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
         } else if (navigator.onLine) {
             scheduleCloudSyncRetry();
         }
-        // 5. Reenvia fotos que ficaram somente no aparelho.
-        // Roda de forma assíncrona para não bloquear o flag isSyncing nem
-        // atrasar a atualização de status de conclusões e tarefas.
-        setTimeout(async () => {
-            try { await syncPendingTrainingPhotoUploads(); } catch (_) {}
-        }, 600);
+        // A foto usa uma fila própria. Assim a conclusão não espera o upload
+        // do arquivo e o status do Checklist é liberado imediatamente.
+        scheduleTrainingPhotoUpload("após-sincronização", 600);
     }
 }
 
