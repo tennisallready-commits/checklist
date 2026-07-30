@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.71";
+const SERVICE_WORKER_URL = "./sw.js?v=10.73";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -148,6 +148,7 @@ let trainingThumbnailCacheJob = null;
 // Async transaction locks (prevents double submits)
 let pendingDeletes = new Set();
 let pendingToggles = new Set();
+const immediateCompletionSyncChains = new Map();
 
 // Authentication State
 let currentUser = null;
@@ -909,14 +910,12 @@ function setupEventListeners() {
     const finishTrainingWithoutPhoto = () => finishPendingTrainingCompletion(null);
     const cancelPendingTrainingCompletion = () => {
         if (pendingTrainingCompletionId === null) return;
-        pendingTrainingCompletionId = null;
-        pendingTrainingPastNightException = false;
-        inputTrainingPhoto.value = "";
         closeModal(modalTrainingPhoto);
     };
-    document.getElementById("btn-skip-training-photo")?.addEventListener("click", finishTrainingWithoutPhoto);
+    document.getElementById("btn-skip-training-photo")?.addEventListener("click", cancelPendingTrainingCompletion);
     document.getElementById("btn-complete-without-photo")?.addEventListener("click", finishTrainingWithoutPhoto);
     document.getElementById("btn-cancel-training-completion")?.addEventListener("click", cancelPendingTrainingCompletion);
+    modalTrainingPhoto?.querySelector(".modal-overlay")?.addEventListener("click", cancelPendingTrainingCompletion);
     inputTrainingPhoto?.addEventListener("change", async () => {
         const file = inputTrainingPhoto.files?.[0];
         if (!file) return;
@@ -3408,6 +3407,39 @@ function subscribeToCollaborationUpdates() {
             if (modalTrainingReport?.classList.contains("active")) await renderTrainingReport();
         }, 220);
     };
+    const applyRealtimeCompletion = payload => {
+        const record = payload?.eventType === "DELETE" ? payload.old : payload?.new;
+        const taskId = String(record?.task_id || "");
+        const date = String(record?.date || "");
+        if (!taskId || !date) return false;
+
+        const queueKey = `${taskId}_${date}`;
+        const localQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+        // Nunca deixa um eco remoto atropelar uma alteração ainda pendente
+        // neste próprio aparelho.
+        if (Object.prototype.hasOwnProperty.call(localQueue, queueKey)) return false;
+
+        const completed = payload.eventType !== "DELETE" && record.completed === true;
+        let cachedCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+        cachedCompletions = cachedCompletions.filter(item =>
+            !(String(item.task_id) === taskId && item.date === date)
+        );
+        if (payload.eventType !== "DELETE") {
+            cachedCompletions.push({ task_id: taskId, date, completed: record.completed === true });
+        }
+        localStorage.setItem("offline_completions", JSON.stringify(cachedCompletions));
+
+        if (date === selectedDate) {
+            tasks = tasks.map(task => String(task.id) === taskId ? { ...task, completed } : task);
+            if (modalAddTask?.classList.contains("active") || modalEditTask?.classList.contains("active")) {
+                deferredTaskEditorBackgroundRender = true;
+            } else {
+                renderChecklist();
+                updateProgress();
+            }
+        }
+        return true;
+    };
     collaborationRealtimeChannel = supabaseClient
         .channel(`collaboration-invites-${currentUser.id}`)
         .on("postgres_changes", {
@@ -3438,7 +3470,12 @@ function subscribeToCollaborationUpdates() {
             loadChecklistAndProgress();
         })
         .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, refreshSharedTrainingData)
-        .on("postgres_changes", { event: "*", schema: "public", table: "completions" }, refreshSharedTrainingData)
+        .on("postgres_changes", { event: "*", schema: "public", table: "completions" }, payload => {
+            applyRealtimeCompletion(payload);
+            // Revalida depois para cobrir exclusões em bancos que ainda não
+            // enviam todas as colunas do registro antigo no Realtime.
+            refreshSharedTrainingData();
+        })
         .on("postgres_changes", { event: "*", schema: "public", table: "training_photos" }, () => {
             refreshSharedTrainingData();
             setTimeout(warmTrainingPhotoCache, 300);
@@ -5507,9 +5544,65 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
 
     // Salva sempre no LocalStorage primeiro para resiliência e velocidade
     saveCompletionOffline(id, selectedDate, task.completed);
-    // O coordenador central envia vários checks feitos em sequência em uma
-    // única requisição. Isso evita que cada toque crie uma rodada de rede.
-    scheduleCloudSync("check-agrupado", 120);
+    // Checks são o estado que mais precisa aparecer imediatamente em outro
+    // aparelho da mesma conta. Envia por uma rota curta (uma única escrita);
+    // a fila offline continua sendo a garantia em caso de falha.
+    syncCompletionImmediately(id, selectedDate, task.completed);
+}
+
+function syncCompletionImmediately(taskId, date, completed) {
+    if (!supabaseClient || !currentUser || !navigator.onLine || isTemporaryId(taskId)) {
+        scheduleCloudSync("check-pendente", 120);
+        return;
+    }
+
+    const id = String(taskId);
+    const queueKey = `${id}_${date}`;
+    const queuedValue = completed;
+    pendingToggles.add(id);
+    const previous = immediateCompletionSyncChains.get(id) || Promise.resolve();
+    const job = previous.catch(() => {}).then(async () => {
+        const currentQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+        // Se houve outro toque enquanto esta operação aguardava, somente o
+        // estado mais recente precisa chegar ao servidor.
+        if (!Object.prototype.hasOwnProperty.call(currentQueue, queueKey)
+            || currentQueue[queueKey] !== queuedValue) return;
+
+        const query = completed
+            ? supabaseClient.from("completions").upsert(
+                { task_id: taskId, date, completed: true },
+                { onConflict: "task_id,date" }
+            )
+            : supabaseClient.from("completions").delete().eq("task_id", taskId).eq("date", date);
+        const { error } = await query;
+        if (error) throw error;
+        clearQueuedEntryIfCurrent("offline_completions_queue", queueKey, queuedValue);
+
+        const syncedTask = tasks.find(item => String(item.id) === id)
+            || allActiveTasks.find(item => String(item.id) === id);
+        if (isCassolDashboardTask(syncedTask)) {
+            queueCassolDashboardTaskSync(taskId, {
+                operation: "completion",
+                date,
+                completed
+            });
+        }
+        cloudSyncLastSuccessAt = Date.now();
+        cloudSyncLastError = "";
+    }).catch(error => {
+        cloudSyncLastError = error?.message || String(error);
+        console.warn("[Sync] Envio imediato do check indisponível; mantendo na fila:", cloudSyncLastError);
+    }).finally(() => {
+        if (immediateCompletionSyncChains.get(id) !== job) return;
+        immediateCompletionSyncChains.delete(id);
+        pendingToggles.delete(id);
+        refreshSyncStatusFromQueues();
+        const remainingQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+        if (Object.prototype.hasOwnProperty.call(remainingQueue, queueKey)) {
+            scheduleCloudSync("fallback-do-check", 80);
+        }
+    });
+    immediateCompletionSyncChains.set(id, job);
 }
 
 function isTrainingCategory(categoryName) {
@@ -8730,6 +8823,15 @@ function openModal(modalEl) {
 
 function closeModal(modalEl) {
     if (!modalEl) return;
+
+    // Fechar a captura de foto significa cancelar o check. A conclusão só é
+    // confirmada pelos botões de foto/sem foto, que limpam o pendente antes.
+    if (modalEl === modalTrainingPhoto && pendingTrainingCompletionId !== null) {
+        pendingTrainingCompletionId = null;
+        pendingTrainingPastNightException = false;
+        if (inputTrainingPhoto) inputTrainingPhoto.value = "";
+    }
+
     modalEl.classList.remove("active");
 
     if ((modalEl === modalAddTask || modalEl === modalEditTask) && deferredTaskEditorBackgroundRender) {
