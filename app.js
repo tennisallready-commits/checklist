@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.69";
+const SERVICE_WORKER_URL = "./sw.js?v=10.71";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -562,6 +562,7 @@ const taskAssigneeGroup = document.getElementById("task-assignee-group");
 const modalEditTask = document.getElementById("modal-edit-task");
 const selectEditTaskAssignedTo = document.getElementById("edit-task-assigned-to");
 const editTaskAssigneeGroup = document.getElementById("edit-task-assignee-group");
+let deferredTaskEditorBackgroundRender = false;
 
 const inputOrgName = document.getElementById("input-org-name");
 const inputProfileAvatar = document.getElementById("input-profile-avatar");
@@ -1763,12 +1764,20 @@ function setupEventListeners() {
             return;
         }
 
-        // Pré-selecionar a categoria/local atualmente ativo na barra de filtros
-        if (currentFilter !== "all") {
-            selectTaskCategory.value = currentFilter;
-        } else if (categories.length > 0) {
-            selectTaskCategory.value = categories[0].name;
-        }
+        // Na aba Todos, recupera a última categoria usada. Se ainda não houver
+        // preferência, evita escolher Treino apenas por ela estar no topo.
+        const addCategoryPreferenceKey = `checklist_last_add_category_${currentUser?.id || "local"}`;
+        const lastAddCategory = localStorage.getItem(addCategoryPreferenceKey) || "";
+        const availableCategoryNames = new Set(categories.map(category => category.name));
+        const currentSelectCategory = selectTaskCategory.value;
+        const preferredCategory = currentFilter !== "all" && availableCategoryNames.has(currentFilter)
+            ? currentFilter
+            : (availableCategoryNames.has(lastAddCategory)
+                ? lastAddCategory
+                : (availableCategoryNames.has(currentSelectCategory) && !isTrainingCategory(currentSelectCategory)
+                    ? currentSelectCategory
+                    : (categories.find(category => !isTrainingCategory(category.name))?.name || categories[0].name)));
+        selectTaskCategory.value = preferredCategory;
 
         selectTaskRecurring.value = "once";
 
@@ -1793,6 +1802,8 @@ function setupEventListeners() {
 
     if (selectTaskCategory) {
         selectTaskCategory.addEventListener("change", () => {
+            const preferenceKey = `checklist_last_add_category_${currentUser?.id || "local"}`;
+            localStorage.setItem(preferenceKey, selectTaskCategory.value);
             updateTaskAssigneeDropdown(selectTaskCategory.value, selectTaskAssignedTo, taskAssigneeGroup);
         });
     }
@@ -1931,6 +1942,7 @@ function setupEventListeners() {
             
             const queuedSharedTask = Boolean(assignedTo) && !navigator.onLine;
             const description = document.getElementById("task-description")?.value.trim() || "";
+            localStorage.setItem(`checklist_last_add_category_${currentUser?.id || "local"}`, selectTaskCategory.value);
             await addTask(inputTaskTitle.value.trim(), selectTaskCategory.value, selectTaskRecurring.value, taskDate, repeatDays, assignedTo, shifts, important, null, 0, description);
             if (queuedSharedTask) {
                 showAppNotice("Tarefa salva neste celular, mas ainda não enviada ao responsável. Para a outra pessoa receber, este celular precisa recuperar a internet e sincronizar o app.", "warning");
@@ -2659,10 +2671,16 @@ async function loadChecklistAndProgress(skipOfflineReload = false, skipInitialRe
         loadDataOffline();
     }
 
-    if (!skipInitialRender) {
+    const taskEditorOpen = Boolean(modalAddTask?.classList.contains("active") || modalEditTask?.classList.contains("active"));
+    if (!skipInitialRender && !taskEditorOpen) {
         renderCategories();
         renderChecklist();
         updateProgress();
+    } else if (!skipInitialRender && taskEditorOpen) {
+        // Realtime e sincronização podem chegar enquanto a pessoa digita.
+        // Mantemos os dados em memória, mas adiamos a reconstrução visual para
+        // não recriar selects nem repintar o fundo sob o modal.
+        deferredTaskEditorBackgroundRender = true;
     }
     checkAutomaticReports();
     if (typeof checkImportantTaskNotifications === "function") {
@@ -2703,11 +2721,14 @@ async function loadChecklistAndProgress(skipOfflineReload = false, skipInitialRe
             const fingerprintAfter = getTaskRenderFingerprint();
             const catFingerprintAfter = getCategoryRenderFingerprint();
 
-            if (fingerprintAfter !== fingerprintBefore) {
+            const editorStillOpen = Boolean(modalAddTask?.classList.contains("active") || modalEditTask?.classList.contains("active"));
+            if (editorStillOpen && (fingerprintAfter !== fingerprintBefore || catFingerprintAfter !== catFingerprintBefore)) {
+                deferredTaskEditorBackgroundRender = true;
+            } else if (fingerprintAfter !== fingerprintBefore) {
                 renderChecklist();
                 updateProgress();
             }
-            if (catFingerprintAfter !== catFingerprintBefore) {
+            if (!editorStillOpen && catFingerprintAfter !== catFingerprintBefore) {
                 renderCategories();
             }
             updateCollaborationInviteAttention();
@@ -7247,7 +7268,7 @@ function renderNotifications() {
                     </div>
                 </div>
                 <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;">
-                    <button class="btn btn-secondary btn-accept-invite" data-id="${invite.id}" style="padding: 6px 12px; font-size: 0.75rem; font-weight: 700; border-radius: var(--radius-sm); border: 1px solid var(--border-color); background: var(--bg-surface-solid); color: #fff; cursor: pointer;">Aceitar</button>
+                    <button class="btn btn-secondary btn-accept-invite" data-id="${invite.id}" style="padding: 6px 12px; font-size: 0.75rem; font-weight: 700; border-radius: var(--radius-sm); border: 1px solid var(--border-color); background: var(--bg-surface-solid); color: var(--text-primary); cursor: pointer;">Aceitar</button>
                     <button class="btn btn-danger-outline btn-decline-invite" data-id="${invite.id}" style="padding: 6px 12px; font-size: 0.75rem; font-weight: 700; border-radius: var(--radius-sm); cursor: pointer;">Recusar</button>
                 </div>
             `;
@@ -8710,6 +8731,13 @@ function openModal(modalEl) {
 function closeModal(modalEl) {
     if (!modalEl) return;
     modalEl.classList.remove("active");
+
+    if ((modalEl === modalAddTask || modalEl === modalEditTask) && deferredTaskEditorBackgroundRender) {
+        deferredTaskEditorBackgroundRender = false;
+        renderCategories();
+        renderChecklist();
+        updateProgress();
+    }
     
     // Se não restou nenhum modal ativo, restaura o scroll
     const activeModals = document.querySelectorAll(".modal.active");

@@ -38,8 +38,9 @@ body.theme-light {
     --bg-surface-solid: #ffffff;
     --bg-surface-hover: rgba(241, 245, 249, 0.95);
     --primary: #1d4ed8; /* Stronger blue */
-    --primary-gradient: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+    --primary-gradient: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
     --primary-light: rgba(29, 78, 216, 0.08);
+    --danger: #b91c1c;
     --text-primary: #0f172a; /* Deep Slate 900 */
     --text-secondary: #334155; /* High contrast Slate 700 */
     --text-muted: #57606f; /* Clear Slate 600 for completed tasks */
@@ -60,8 +61,9 @@ body.theme-girly {
     --bg-surface-solid: #ffffff;
     --bg-surface-hover: rgba(255, 241, 242, 0.95);
     --primary: #db2777; /* Deep Pink */
-    --primary-gradient: linear-gradient(135deg, #f472b6 0%, #db2777 100%);
+    --primary-gradient: linear-gradient(135deg, #db2777 0%, #9d174d 100%);
     --primary-light: rgba(219, 39, 119, 0.08);
+    --danger: #be123c;
     --text-primary: #4c0519; /* Deep Crimson/Rose 950 */
     --text-secondary: #881337; /* Rose 900 */
     --text-muted: #9f1239; /* Rose 800 for completed tasks visibility */
@@ -101,6 +103,10 @@ body.theme-girly .progress-ring-circle {
     padding: 0;
     -webkit-tap-highlight-color: transparent; /* Disable default gray tap highlight on mobile */
     font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+button {
+    color: inherit;
 }
 
 html, body {
@@ -2507,12 +2513,14 @@ body.theme-girly .fab-menu-container.open::before { border-color: rgba(219,39,11
     transition: var(--transition-smooth);
     border: none;
     outline: none;
-    color: #ffffff;
+    color: var(--text-primary);
     box-shadow: var(--shadow-sm);
 }
 
 .btn-primary {
     background: var(--primary-gradient);
+    color: #ffffff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, .24);
     box-shadow: 0 4px 16px rgba(139, 92, 246, 0.2);
 }
 
@@ -3456,7 +3464,7 @@ body.theme-girly .modal-content::before {
 .training-report-summary article > span,.training-report-summary svg { width: 22px; height: 22px; font-size: 20px; color: #fb923c; }
 .training-report-summary strong { color: var(--text-primary); font-size: 1.15rem; }
 .training-report-summary small { color: var(--text-muted); font-size: .58rem; text-align: center; }
-.training-report-list { display: grid; gap: 10px; }
+.training-report-list { max-height: 55vh; overflow-y: auto; display: grid; gap: 10px; }
 .training-report-entry { display: grid; grid-template-columns: 92px 1fr; gap: 12px; align-items: center; padding: 8px; border: 1px solid var(--border-color); border-radius: 14px; }
 .training-report-entry img { width: 92px; height: 78px; border-radius: 10px; object-fit: cover; }
 .training-report-entry div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -3506,7 +3514,7 @@ body.theme-girly .modal-content::before {
 .training-day-gallery-heading span { color: #fb923c; font-size: .55rem; font-weight: 900; letter-spacing: .11em; }
 .training-day-gallery-heading strong { color: var(--text-primary); font-size: .78rem; text-transform: capitalize; }
 .training-day-gallery-heading > b { color: var(--text-muted); font-size: .6rem; }
-.training-report-list { grid-template-columns: repeat(2,minmax(0,1fr)); }
+.training-report-list { max-height: 260px; grid-template-columns: repeat(2,minmax(0,1fr)); }
 .training-day-photo-card { min-width: 0; overflow: hidden; border: 1px solid var(--border-color); border-radius: 14px; background: rgba(255,255,255,.025); }
 .training-day-photo { width: 100%; aspect-ratio: 4/3; display: block; object-fit: cover; cursor: zoom-in; transition: transform .22s ease,filter .22s ease; }
 .training-day-photo-card:hover .training-day-photo { transform: scale(1.015); filter: brightness(1.04); }
@@ -4735,6 +4743,7 @@ body.theme-girly .auth-container input[type="email"]:focus {
 .day-toggle.active {
     background: var(--primary-gradient);
     color: #ffffff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, .24);
     border-color: transparent;
     box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
 }
@@ -4925,6 +4934,7 @@ body.theme-light .date-navigator-section .icon-button:active {
 .shift-toggle-btn.active {
     background: var(--primary-gradient);
     color: #ffffff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, .24);
     border-color: transparent;
     box-shadow: 0 4px 10px rgba(139, 92, 246, 0.25);
 }
