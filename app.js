@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.67";
+const SERVICE_WORKER_URL = "./sw.js?v=10.69";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -88,6 +88,42 @@ function normalizeCategoryName(value) {
         .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
         .replace(/[\u200B-\u200D\uFEFF]/g, "")
         .replace(/\s+/g, " ").trim().toLocaleLowerCase("pt-BR");
+}
+
+function dedupeDashboardTasks(list) {
+    const result = [];
+    const importedTaskIndexBySource = new Map();
+    (Array.isArray(list) ? list : []).forEach(task => {
+        if (!task) return;
+        const context = typeof task.context === "string"
+            ? (() => { try { return JSON.parse(task.context); } catch (_) { return {}; } })()
+            : (task.context || {});
+        const isDashboardImport = normalizeCategoryName(context.source) === "cassol_dashboard"
+            || context.cassol_dashboard_linked === true;
+        const dashboardEventId = String(context.cassol_dashboard_event_id || "");
+        if (!isDashboardImport || !dashboardEventId) {
+            result.push(task);
+            return;
+        }
+
+        const sourceKey = `${String(task.user_id || "")}::${dashboardEventId}`;
+        const existingIndex = importedTaskIndexBySource.get(sourceKey);
+        if (existingIndex === undefined) {
+            importedTaskIndexBySource.set(sourceKey, result.length);
+            result.push(task);
+            return;
+        }
+
+        const existing = result[existingIndex];
+        const existingCreatedAt = new Date(existing.created_at || 0).getTime();
+        const currentCreatedAt = new Date(task.created_at || 0).getTime();
+        const preferred = currentCreatedAt < existingCreatedAt ? task : existing;
+        result[existingIndex] = {
+            ...preferred,
+            completed: Boolean(existing.completed || task.completed)
+        };
+    });
+    return result;
 }
 
 // App State
@@ -3622,7 +3658,7 @@ async function loadData() {
             }
 
             categories = dbCats;
-            allActiveTasks = dbTasks || [];
+            allActiveTasks = dedupeDashboardTasks(dbTasks || []);
 
             const completedBeforeIds = new Set(dbCompletionsBefore.map(c => String(c.task_id)));
             
@@ -3656,7 +3692,7 @@ async function loadData() {
             const todayStr = getLocalDateString(new Date());
 
             // Map tasks with Rollover and Recurrence
-            tasks = dbTasks.filter(task => {
+            tasks = dedupeDashboardTasks(dbTasks.filter(task => {
                 if (excludedTodayIds.has(String(task.id))) return false;
                 
                 const taskCreatedDate = extractDateFromTimestamp(task.created_at);
@@ -3692,7 +3728,7 @@ async function loadData() {
                 user_id: task.user_id || null,
                 created_at: task.created_at,
                 completed: completedTodayIds.has(String(task.id))
-            }));
+            })));
 
             // Salva os dados mais recentes carregados do Supabase no cache local.
             // MERGE: Preserva tarefas com tempId pendentes (ainda não confirmadas pelo Supabase)
@@ -3793,7 +3829,7 @@ function loadDataOffline() {
 
     // 2. Fetch tasks offline
     let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
-    allActiveTasks = localTasks.filter(task => task.is_active !== false);
+    allActiveTasks = dedupeDashboardTasks(localTasks.filter(task => task.is_active !== false));
 
     // 3. Fetch completions
     let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
@@ -3811,7 +3847,7 @@ function loadDataOffline() {
     // Map tasks
     const todayStr = getLocalDateString(new Date());
 
-    tasks = localTasks.filter(task => {
+    tasks = dedupeDashboardTasks(localTasks.filter(task => {
         if (!task.is_active) return false;
         if (excludedTodayIds.has(String(task.id))) return false;
         
@@ -3846,7 +3882,7 @@ function loadDataOffline() {
         user_id: task.user_id || null,
         created_at: task.created_at,
         completed: completedTodayIds.has(String(task.id))
-    }));
+    })));
 }
 
 let categoriesOverflowEventsBound = false;
