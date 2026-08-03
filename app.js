@@ -51,6 +51,8 @@ let cassolDashboardPullTimer = null;
 let cassolDashboardPullInProgress = false;
 let cassolDashboardLastPullAt = 0;
 let cassolDashboardLastPushAt = 0;
+let cassolDashboardRealtimePullTimer = null;
+let cassolDashboardRealtimeStartPending = false;
 
 // Default tasks database for initial setup (offline fallback and reset option)
 const DEFAULT_TASKS = [];
@@ -6411,10 +6413,41 @@ async function pullCassolDashboardTasks(force = false) {
     }
 }
 
+function startCassolDashboardRealtimeListener() {
+    if (typeof window.startCassolDashboardRealtime === "function") {
+        cassolDashboardRealtimeStartPending = false;
+        window.startCassolDashboardRealtime();
+        return;
+    }
+    if (cassolDashboardRealtimeStartPending) return;
+    cassolDashboardRealtimeStartPending = true;
+    window.addEventListener("cassol-dashboard-realtime-ready", () => {
+        cassolDashboardRealtimeStartPending = false;
+        if (currentUser) window.startCassolDashboardRealtime?.();
+    }, { once: true });
+}
+
+window.requestCassolDashboardRealtimePull = function requestCassolDashboardRealtimePull() {
+    if (!currentUser || !supabaseClient || !navigator.onLine) return;
+    clearTimeout(cassolDashboardRealtimePullTimer);
+    const guardRemaining = Math.max(0, CASSOL_DASHBOARD_LOCAL_CHANGE_GUARD_MS - (Date.now() - cassolDashboardLastPushAt));
+    const delay = Math.max(350, guardRemaining + 150);
+    cassolDashboardRealtimePullTimer = setTimeout(async () => {
+        cassolDashboardRealtimePullTimer = null;
+        const pendingPushes = Object.keys(JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {}).length > 0;
+        if (cassolDashboardPullInProgress || pendingPushes) {
+            window.requestCassolDashboardRealtimePull();
+            return;
+        }
+        await pullCassolDashboardTasks(true);
+    }, delay);
+};
+
 function startCassolDashboardPulling() {
     if (cassolDashboardPullTimer) return;
     cassolDashboardPullTimer = setInterval(() => pullCassolDashboardTasks(), CASSOL_DASHBOARD_PULL_INTERVAL_MS);
     setTimeout(() => pullCassolDashboardTasks(true), 900);
+    startCassolDashboardRealtimeListener();
 }
 
 function saveCompletionOffline(taskId, date, completed) {
@@ -9155,6 +9188,9 @@ function setupSupabaseAuth() {
                 supabaseClient.removeChannel(collaborationRealtimeChannel);
                 collaborationRealtimeChannel = null;
             }
+            clearTimeout(cassolDashboardRealtimePullTimer);
+            cassolDashboardRealtimePullTimer = null;
+            window.stopCassolDashboardRealtime?.();
             if (currentUser) await removePushSubscription().catch(() => {});
             currentUser = null;
             currentUsername = "";
