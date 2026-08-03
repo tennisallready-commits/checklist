@@ -5,14 +5,31 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.73";
+const SERVICE_WORKER_URL = "./sw.js?v=10.74";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
 
 // Camada persistente isolada em storage.js para manter este arquivo focado nas regras do app.
+let crossTabStorageRefreshTimer = null;
+function handleChecklistStorageChange(key, metadata = {}) {
+    scheduleSyncStatusRefresh();
+    if (!metadata.external || !currentUser || document.visibilityState !== "visible") return;
+    clearTimeout(crossTabStorageRefreshTimer);
+    crossTabStorageRefreshTimer = setTimeout(() => {
+        loadDataOffline();
+        if (modalAddTask?.classList.contains("active") || modalEditTask?.classList.contains("active")) {
+            deferredTaskEditorBackgroundRender = true;
+            return;
+        }
+        renderCategories();
+        renderChecklist();
+        updateProgress();
+    }, 100);
+}
+
 const { dbCache, idb, localPrefs, localStorage } = window.ChecklistStorage.create({
-    onStorageChange: () => scheduleSyncStatusRefresh(),
+    onStorageChange: handleChecklistStorageChange,
     // Agrupa toques seguidos no check em um único lote para a nuvem. As
     // demais alterações continuam com debounce maior para não gerar ruído.
     onCloudQueueChange: key => scheduleCloudSync("fila-local", key === "offline_completions_queue" ? 120 : 1200)
@@ -396,10 +413,12 @@ function hasPendingSyncData() {
     const pendingTasks = (dbCache.offline_tasks || []).some(t => isTemporaryId(t.id) && t.is_active !== false);
     const pendingCompletions = Object.keys(dbCache.offline_completions_queue || {}).length > 0;
     const pendingUpdates = Object.keys(dbCache.offline_task_updates_queue || {}).length > 0;
+    const pendingCategoryUpdates = Object.keys(dbCache.offline_category_updates_queue || {}).length > 0;
     const pendingInvites = (JSON.parse(localStorage.getItem("offline_collaboration_invites_queue")) || []).length > 0;
+    const pendingDashboard = Object.keys(JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {}).length > 0;
     // A foto de treino é enviada em segundo plano. Ela não deve manter o
     // Checklist inteiro como “pendente” depois que o check já foi confirmado.
-    return pendingCategories || pendingTasks || pendingCompletions || pendingUpdates || pendingInvites;
+    return pendingCategories || pendingTasks || pendingCompletions || pendingUpdates || pendingCategoryUpdates || pendingInvites || pendingDashboard;
 }
 
 function refreshSyncStatusFromQueues() {
@@ -435,8 +454,10 @@ function getPendingSyncCount() {
     const pendingTasks = (dbCache.offline_tasks || []).filter(item => isTemporaryId(item.id) && item.is_active !== false).length;
     const pendingCompletions = Object.keys(dbCache.offline_completions_queue || {}).length;
     const pendingUpdates = Object.keys(dbCache.offline_task_updates_queue || {}).length;
+    const pendingCategoryUpdates = Object.keys(dbCache.offline_category_updates_queue || {}).length;
     const pendingInvites = (JSON.parse(localPrefs.getItem("offline_collaboration_invites_queue") || "[]") || []).length;
-    return pendingCategories + pendingTasks + pendingCompletions + pendingUpdates + pendingInvites;
+    const pendingDashboard = Object.keys(JSON.parse(localPrefs.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY) || "{}") || {}).length;
+    return pendingCategories + pendingTasks + pendingCompletions + pendingUpdates + pendingCategoryUpdates + pendingInvites + pendingDashboard;
 }
 
 let trainingPhotoUploadTimer = null;
@@ -510,6 +531,27 @@ function clearQueuedEntryIfCurrent(queueName, entryKey, expectedValue) {
     delete queue[entryKey];
     localStorage.setItem(queueName, JSON.stringify(queue));
     return true;
+}
+
+function enqueueTaskCloudUpdate(taskId, updates, reason = "atualização-de-tarefa") {
+    if (!taskId || isTemporaryId(taskId) || !updates || !Object.keys(updates).length) return;
+    const id = String(taskId);
+    const queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+    queue[id] = { ...(queue[id] || {}), ...updates };
+    localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
+    scheduleCloudSync(reason, 80);
+}
+
+function enqueueCategoryCloudUpdate(categoryId, updates, reason = "atualização-de-categoria") {
+    if (!categoryId || isTemporaryId(categoryId) || !updates || !Object.keys(updates).length) return;
+    const id = String(categoryId);
+    const queue = JSON.parse(localStorage.getItem("offline_category_updates_queue")) || {};
+    const previous = queue[id] || {};
+    queue[id] = { ...previous, ...updates };
+    // Em várias renomeações offline, a nuvem ainda conhece o primeiro nome.
+    if (previous.previous_name) queue[id].previous_name = previous.previous_name;
+    localStorage.setItem("offline_category_updates_queue", JSON.stringify(queue));
+    scheduleCloudSync(reason, 80);
 }
 
 // Modals
@@ -2532,7 +2574,8 @@ function clearLocalUserCache() {
     [
         "offline_categories", "offline_tasks", "offline_completions",
         "offline_category_shares", "offline_completions_queue",
-        "offline_task_updates_queue", "offline_collaboration_invites_queue"
+        "offline_task_updates_queue", "offline_category_updates_queue",
+        "offline_collaboration_invites_queue", CASSOL_DASHBOARD_SYNC_QUEUE_KEY
     ].forEach(key => localStorage.removeItem(key));
     [
         "checklist_device_cache_ready", "checklist_last_user_id",
@@ -2703,10 +2746,15 @@ async function loadChecklistAndProgress(skipOfflineReload = false, skipInitialRe
         
         const updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
         const hasPendingUpdates = Object.keys(updatesQueue).length > 0;
+        const categoryUpdatesQueue = JSON.parse(localStorage.getItem("offline_category_updates_queue")) || {};
+        const hasPendingCategoryUpdates = Object.keys(categoryUpdatesQueue).length > 0;
 
-        if (hasPendingCats || hasPendingTasks || hasPendingCompletions || hasPendingUpdates) {
-            console.log("[Sync] Revalidação com o servidor adiada: existem alterações locais pendentes de envio.");
-            return;
+        if (hasPendingCats || hasPendingTasks || hasPendingCompletions || hasPendingUpdates || hasPendingCategoryUpdates) {
+            // loadData mescla tarefas/categorias temporárias e aplica as filas
+            // por cima da resposta. Portanto podemos receber alterações de
+            // outros aparelhos sem deixar uma única pendência congelar toda a
+            // conta.
+            console.log("[Sync] Revalidando com alterações locais protegidas pela fila.");
         }
 
         // Guarda fingerprint dos dados atuais para comparar depois
@@ -3646,6 +3694,19 @@ async function loadData() {
             }
             dbCats = dedupeCategories(dbCats);
             const cachedCategoryOrder = JSON.parse(localStorage.getItem("offline_categories")) || [];
+            const pendingLocalCategories = cachedCategoryOrder.filter(category =>
+                isTemporaryId(category.id) && category.is_active !== false
+            );
+            pendingLocalCategories.forEach(category => {
+                if (!dbCats.some(dbCategory => dbCategory.name === category.name)) dbCats.push(category);
+            });
+            const categoryUpdatesQueue = JSON.parse(localStorage.getItem("offline_category_updates_queue")) || {};
+            dbCats = dbCats.map(category => {
+                const queued = categoryUpdatesQueue[String(category.id)];
+                if (!queued) return category;
+                const { previous_name: _previousName, ...cloudFields } = queued;
+                return { ...category, ...cloudFields };
+            });
             const cachedOrderById = new Map(cachedCategoryOrder.map((cat, index) => [String(cat.id), index]));
             const cachedOrderByName = new Map(cachedCategoryOrder.map((cat, index) => [cat.name, index]));
             dbCats.sort((a, b) => {
@@ -3702,6 +3763,19 @@ async function loadData() {
                         dbTasks[taskIndex] = { ...dbTasks[taskIndex], ...dbUpdates };
                     }
                 });
+
+                // Mantém criações locais visíveis enquanto o identificador
+                // temporário ainda está sendo trocado pelo UUID do Supabase.
+                existingLocal
+                    .filter(task => isTemporaryId(task.id) && task.is_active !== false)
+                    .forEach(pendingTask => {
+                        const pendingToken = pendingTask.context?.sync_token;
+                        const alreadyExists = dbTasks.some(task =>
+                            (pendingToken && task.context?.sync_token === pendingToken)
+                            || (task.title === pendingTask.title && task.category === pendingTask.category)
+                        );
+                        if (!alreadyExists) dbTasks.push(pendingTask);
+                    });
 
                 const recentDeletionCutoff = Date.now() - 24 * 60 * 60 * 1000;
                 const localDeletionIds = new Set(existingLocal
@@ -3797,8 +3871,7 @@ async function loadData() {
                 const localCat = localCatsBefore.find(lc => String(lc.id) === String(dbCat.id) || lc.name === dbCat.name);
                 if (localCat && localCat.type && !dbCat.type) {
                     if (CATEGORIES_CLOUD_SUPPORTS_TYPE && String(dbCat.user_id) === String(currentUser.id) && !isTemporaryId(dbCat.id)) {
-                        supabaseClient.from("categories").update({ type: localCat.type }).eq("id", dbCat.id)
-                            .then(({ error }) => { if (error) console.warn("Tipo da categoria ainda não pôde ser sincronizado:", error.message); });
+                        enqueueCategoryCloudUpdate(dbCat.id, { type: localCat.type }, "reparar-tipo-da-categoria");
                     }
                     return { ...dbCat, type: localCat.type };
                 }
@@ -5233,27 +5306,9 @@ function saveNewTasksOrder(container) {
                 if (task && task.context) {
                     const dbUpdates = { context: task.context };
                     
-                    let updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
-                    updatesQueue[realId] = { ...(updatesQueue[realId] || {}), ...dbUpdates };
-                    const queuedUpdate = updatesQueue[realId];
-                    localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
-
-                    supabaseClient.from('tasks').update(dbUpdates).eq('id', realId)
-                        .then(({ error }) => {
-                            if (error) {
-                                console.warn("Erro ao reordenar tarefa " + realId, error);
-                            } else {
-                                clearQueuedEntryIfCurrent("offline_task_updates_queue", realId, queuedUpdate);
-                            }
-                        })
-                        .catch(err => console.error("Erro assíncrono ao salvar ordenação:", err));
+                    enqueueTaskCloudUpdate(realId, dbUpdates, "reordenação-de-tarefas");
                 }
             });
-        }
-
-        // Tenta disparar uma sincronização silenciosa para garantir que o banco seja atualizado se possível
-        if (navigator.onLine && typeof syncOfflineDataToCloud === 'function') {
-            setTimeout(syncOfflineDataToCloud, 1000);
         }
 
     } catch(err) { 
@@ -5379,15 +5434,7 @@ async function moveFutureTaskToCurrentMoment(id) {
     const localTasks = (JSON.parse(localStorage.getItem("offline_tasks")) || []).map(applyUpdates);
     localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
     if (supabaseClient && currentUser && !isTemporaryId(id)) {
-        const queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
-        queue[id] = { ...(queue[id] || {}), ...updates };
-        const queuedUpdate = queue[id];
-        localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
-        supabaseClient.from("tasks").update(updates).eq("id", id).then(({ error }) => {
-            if (error) return console.warn("A tarefa foi movida para hoje apenas neste aparelho por enquanto:", error.message);
-            clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdate);
-            if (isCassolDashboardTask(task)) queueCassolDashboardTaskSync(id, { operation: "upsert" });
-        }).catch(error => console.warn("Não foi possível sincronizar a nova data da tarefa:", error.message));
+        enqueueTaskCloudUpdate(id, updates, "mover-tarefa-para-hoje");
     }
     selectedDate = todayStr;
     updateDateDisplay();
@@ -5435,15 +5482,7 @@ async function restoreMovedFutureTask(id, task) {
     localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
 
     if (supabaseClient && currentUser && !isTemporaryId(id)) {
-        const queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
-        queue[id] = { ...(queue[id] || {}), ...updates };
-        const queuedUpdate = queue[id];
-        localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
-        supabaseClient.from("tasks").update(updates).eq("id", id).then(({ error }) => {
-            if (error) return console.warn("A data original foi restaurada apenas neste aparelho por enquanto:", error.message);
-            clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdate);
-            if (isCassolDashboardTask(task)) queueCassolDashboardTaskSync(id, { operation: "upsert" });
-        }).catch(error => console.warn("Não foi possível sincronizar a restauração da tarefa:", error.message));
+        enqueueTaskCloudUpdate(id, updates, "restaurar-data-da-tarefa");
     }
 
     loadDataOffline();
@@ -6278,11 +6317,12 @@ function scheduleCassolDashboardTaskSync(delay = 650) {
 }
 
 async function syncCassolDashboardTaskQueue() {
-    if (cassolDashboardSyncInProgress || !supabaseClient || !currentUser || !navigator.onLine) return;
+    if (cassolDashboardSyncInProgress || !supabaseClient || !currentUser || !navigator.onLine) return null;
     const queue = JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {};
     const entries = Object.values(queue);
-    if (!entries.length) return;
+    if (!entries.length) return true;
     cassolDashboardSyncInProgress = true;
+    let succeeded = true;
     try {
         for (const entry of entries) {
             const taskId = String(entry?.task_id || "");
@@ -6290,6 +6330,7 @@ async function syncCassolDashboardTaskQueue() {
             const { data, error } = await supabaseClient.functions.invoke("sync-cassol-dashboard", { body: entry });
             if (error || data?.error) {
                 console.warn("A tarefa Cassol será reenviada ao dashboard quando a integração estiver disponível:", error?.message || data?.error);
+                succeeded = false;
                 break;
             }
             const currentQueue = JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {};
@@ -6299,10 +6340,14 @@ async function syncCassolDashboardTaskQueue() {
             }
         }
     } catch (error) {
+        succeeded = false;
         console.warn("Não foi possível atualizar o dashboard da Cassol agora:", error?.message || error);
     } finally {
         cassolDashboardSyncInProgress = false;
+        const remaining = JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {};
+        if (Object.keys(remaining).length) scheduleCassolDashboardTaskSync(5000);
     }
+    return succeeded;
 }
 
 // Uma tarefa pode ter sido excluída localmente e, depois, atribuída novamente
@@ -6339,10 +6384,12 @@ async function pullCassolDashboardTasks(force = false) {
     if (cassolDashboardPullInProgress || !supabaseClient || !currentUser || !navigator.onLine) return;
     if (document.visibilityState !== "visible" && !force) return;
     const now = Date.now();
+    const pendingDashboardPush = Object.keys(JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {}).length > 0;
+    if (pendingDashboardPush) return;
     if (!force && now - cassolDashboardLastPullAt < CASSOL_DASHBOARD_PULL_INTERVAL_MS - 500) return;
     // Dá prioridade à alteração recém-feita no Checklist, para que uma leitura
     // do dashboard ainda desatualizada nunca sobrescreva a ação do usuário.
-    if (!force && now - cassolDashboardLastPushAt < CASSOL_DASHBOARD_LOCAL_CHANGE_GUARD_MS) return;
+    if (now - cassolDashboardLastPushAt < CASSOL_DASHBOARD_LOCAL_CHANGE_GUARD_MS) return;
     cassolDashboardPullInProgress = true;
     cassolDashboardLastPullAt = now;
     try {
@@ -6564,23 +6611,7 @@ async function renameTask(id, newTitle, context) {
         const updates = { title: newTitle };
         if (finalContext) updates.context = finalContext;
 
-        let updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
-        updatesQueue[id] = { ...(updatesQueue[id] || {}), ...updates };
-        const queuedUpdate = updatesQueue[id];
-        localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
-
-        supabaseClient.from('tasks').update(updates).eq('id', id)
-            .then(({ error }) => {
-                if (error) {
-                    console.warn("Erro ao renomear no Supabase. Mantido localmente.", error.message);
-                } else {
-                    clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdate);
-                    if (isCassolDashboardTask(existingTask)) queueCassolDashboardTaskSync(id, { operation: "upsert" });
-                }
-            })
-            .catch(err => {
-                console.error("Erro assíncrono ao renomear:", err);
-            });
+        enqueueTaskCloudUpdate(id, updates, "renomear-tarefa");
     }
 }
 
@@ -6658,23 +6689,7 @@ async function updateTask(id, updates) {
         if (updates.context !== undefined) dbUpdates.context = updates.context;
         if (updates.assigned_to !== undefined) dbUpdates.assigned_to = updates.assigned_to;
 
-        let updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
-        updatesQueue[id] = { ...(updatesQueue[id] || {}), ...dbUpdates };
-        const queuedUpdate = updatesQueue[id];
-        localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
-
-        supabaseClient.from('tasks').update(dbUpdates).eq('id', id)
-            .then(({ error }) => {
-                if (error) {
-                    console.warn("Erro ao atualizar tarefa no Supabase. Mantido localmente.", error.message);
-                } else {
-                    clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdate);
-                    if (isCassolDashboardTask(existingTask)) queueCassolDashboardTaskSync(id, { operation: "upsert" });
-                }
-            })
-            .catch(err => {
-                console.error("Erro assíncrono ao editar tarefa:", err);
-            });
+        enqueueTaskCloudUpdate(id, dbUpdates, "editar-tarefa");
     }
 }
 
@@ -6806,7 +6821,6 @@ async function deleteTask(id) {
 
     let updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
     updatesQueue[taskId] = { ...(updatesQueue[taskId] || {}), is_active: false };
-    const queuedDeletion = updatesQueue[taskId];
     localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
 
     renderChecklist();
@@ -6822,24 +6836,13 @@ async function deleteTask(id) {
         if (!completionDeletion.ok) showAppNotice(`Tarefa removida deste aparelho, mas o histórico de conclusão ainda aguarda exclusão na nuvem: ${completionDeletion.error}`, "warning");
     }).catch(error => console.warn("Limpeza complementar da tarefa pendente:", error.message));
 
-    // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
+    // A exclusão segue pelo mesmo coordenador das demais edições. Isso evita
+    // que um update direto e a fila cheguem fora de ordem ao Supabase.
     if (supabaseClient && currentUser) {
-        // Mantém a ordem segura na nuvem (fotos antes da tarefa), mas toda a
-        // sequência ocorre fora do caminho de renderização da interface.
-        cleanupPromise.then(() => supabaseClient.from('tasks').update({ is_active: false }).eq('id', id))
-            .then(({ error }) => {
-                if (error) {
-                    console.warn("Erro ao deletar no Supabase. Mantido localmente.", error.message);
-                } else {
-                    clearQueuedEntryIfCurrent("offline_task_updates_queue", taskId, queuedDeletion);
-                    if (isCassolDashboardTask(existingTask)) queueCassolDashboardTaskSync(taskId, { operation: "delete" });
-                }
-                pendingDeletes.delete(taskId);
-            })
-            .catch(err => {
-                console.error("Erro assíncrono ao deletar:", err);
-                pendingDeletes.delete(taskId);
-            });
+        cleanupPromise.finally(() => {
+            pendingDeletes.delete(taskId);
+            scheduleCloudSync("excluir-tarefa", 80);
+        });
     } else {
         pendingDeletes.delete(taskId);
     }
@@ -7660,16 +7663,13 @@ async function updateTaskReminderContext(taskId, updater) {
     }
     context = updater({ ...context });
     task.context = context;
+    const applyContext = item => String(item.id) === String(taskId) ? { ...item, context } : item;
+    tasks = tasks.map(applyContext);
+    allActiveTasks = allActiveTasks.map(applyContext);
+    const localTasks = (JSON.parse(localStorage.getItem("offline_tasks")) || []).map(applyContext);
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
     renderChecklist();
-
-    if (!supabaseClient || !currentUser || !navigator.onLine || isTemporaryId(taskId)) {
-        const queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
-        queue[taskId] = { ...(queue[taskId] || {}), context };
-        localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
-        return;
-    }
-    const { error } = await supabaseClient.from("tasks").update({ context }).eq("id", taskId);
-    if (error) throw error;
+    enqueueTaskCloudUpdate(taskId, { context }, "atualizar-lembrete");
 }
 
 async function openTaskReminderAction(taskId) {
@@ -8043,23 +8043,11 @@ async function updateCategoryFields(id, newName, newType) {
     renderChecklist();
     updateProgress();
 
-    // 3. Sync to Supabase if logged in
-    if (supabaseClient && currentUser && !isTemporaryId(id)) {
-        supabaseClient.from('categories').update({ name: newName, type: newType }).eq('id', id)
-            .then(({ error }) => {
-                if (error) {
-                    console.warn("Erro ao atualizar categoria no Supabase. Tentando apenas nome:", error.message);
-                    supabaseClient.from('categories').update({ name: newName }).eq('id', id);
-                }
-            });
-            
-        if (oldName !== newName) {
-            supabaseClient.from('tasks').update({ category: newName }).eq('category', oldName)
-                .then(({ error }) => {
-                    if (error) console.warn("Erro ao atualizar categoria nas tarefas no Supabase:", error.message);
-                });
-        }
-    }
+    enqueueCategoryCloudUpdate(id, {
+        name: newName,
+        type: newType,
+        ...(oldName !== newName ? { previous_name: oldName } : {})
+    }, "editar-categoria");
 }
 
 async function deleteCategory(id) {
@@ -9247,6 +9235,36 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
             localStorage.setItem("offline_categories", JSON.stringify(localCats));
         }
 
+        // 1b. Sincronizar edições e ordem de categorias pelo mesmo coordenador.
+        // Antes essas alterações eram enviadas diretamente e podiam chegar ao
+        // servidor fora da ordem em que a pessoa as realizou.
+        const categoryUpdatesQueue = JSON.parse(localStorage.getItem("offline_category_updates_queue")) || {};
+        for (const [id, queuedUpdates] of Object.entries(categoryUpdatesQueue)) {
+            if (isTemporaryId(id)) continue;
+            madeChanges = true;
+            const { previous_name: previousName, ...categoryFields } = queuedUpdates;
+            let categoryResult = await supabaseClient.from("categories").update(categoryFields).eq("id", id);
+            if (categoryResult.error && Object.prototype.hasOwnProperty.call(categoryFields, "type") && /type|column/i.test(categoryResult.error.message || "")) {
+                const { type: _ignoredType, ...legacyFields } = categoryFields;
+                categoryResult = await supabaseClient.from("categories").update(legacyFields).eq("id", id);
+            }
+            if (categoryResult.error) throw categoryResult.error;
+
+            if (previousName && categoryFields.name && previousName !== categoryFields.name) {
+                const linkedUpdate = await supabaseClient.from("tasks")
+                    .update({ category: categoryFields.name })
+                    .eq("category_id", id);
+                if (linkedUpdate.error) throw linkedUpdate.error;
+                const legacyUpdate = await supabaseClient.from("tasks")
+                    .update({ category: categoryFields.name })
+                    .is("category_id", null)
+                    .eq("user_id", currentUser.id)
+                    .eq("category", previousName);
+                if (legacyUpdate.error) throw legacyUpdate.error;
+            }
+            clearQueuedEntryIfCurrent("offline_category_updates_queue", id, queuedUpdates);
+        }
+
         // 2. Sincronizar novas tarefas criadas offline
         let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
         const pendingInsertTasks = localTasks.filter(t => isTemporaryId(t.id) && t.is_active !== false);
@@ -9486,6 +9504,14 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
             if (isCassolDashboardTask(syncedTask)) {
                 queueCassolDashboardTaskSync(id, { operation: dbUpdates.is_active === false ? "delete" : "upsert" });
             }
+        }
+
+        // A integração com o Dashboard participa da mesma confirmação visual.
+        // Enquanto ela estiver pendente, o app não deve afirmar que tudo foi
+        // sincronizado nem puxar de volta um estado antigo.
+        const dashboardSyncResult = await syncCassolDashboardTaskQueue();
+        if (dashboardSyncResult === false) {
+            throw new Error("A integração com o Dashboard ainda não confirmou as alterações.");
         }
 
         if (madeChanges) {
@@ -9893,23 +9919,7 @@ async function saveCategoryOrder() {
     });
     localStorage.setItem("offline_categories", JSON.stringify(orderedLocalCats));
 
-    // Save order online to Supabase if order column is available
-    if (supabaseClient) {
-        try {
-            const promises = categories.map((cat, index) => {
-                return supabaseClient
-                    .from('categories')
-                    .update({ sort_order: index })
-                    .eq('id', cat.id);
-            });
-            const results = await Promise.all(promises);
-            const firstError = results.find(result => result.error)?.error;
-            if (firstError) throw firstError;
-            console.log("Ordem de categorias atualizada no Supabase.");
-        } catch (e) {
-            console.warn("A ordem foi salva neste aparelho, mas não pôde ser atualizada no Supabase:", e.message);
-        }
-    }
+    categories.forEach((cat, index) => enqueueCategoryCloudUpdate(cat.id, { sort_order: index }, "reordenar-categorias"));
 }
 
 // Swipe to Reveal actions (WhatsApp iOS style gesture handler)

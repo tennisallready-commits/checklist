@@ -10,12 +10,14 @@
         "offline_category_shares",
         "offline_completions_queue",
         "offline_task_updates_queue",
+        "offline_category_updates_queue",
         "user_term_associations",
         "user_function_associations"
     ];
     const OBJECT_STORES = new Set([
         "offline_completions_queue",
         "offline_task_updates_queue",
+        "offline_category_updates_queue",
         "user_term_associations",
         "user_function_associations"
     ]);
@@ -23,7 +25,8 @@
         "offline_tasks",
         "offline_categories",
         "offline_completions_queue",
-        "offline_task_updates_queue"
+        "offline_task_updates_queue",
+        "offline_category_updates_queue"
     ]);
     const EMERGENCY_SNAPSHOT_KEYS = new Map([
         ["offline_categories", "checklist_snapshot_categories"],
@@ -194,6 +197,22 @@
                 onStorageChange(key);
             }
         };
+
+        // Cada aba mantém um cache em memória. Sem escutar o evento storage,
+        // uma segunda aba continuava lendo sua cópia antiga e podia regravar o
+        // array inteiro por cima de uma alteração mais recente.
+        window.addEventListener("storage", event => {
+            if (!event.key || !Object.prototype.hasOwnProperty.call(dbCache, event.key)) return;
+            let nextValue = defaultValue(event.key);
+            if (event.newValue !== null) {
+                try { nextValue = JSON.parse(event.newValue); }
+                catch (_) { nextValue = event.newValue; }
+            }
+            dbCache[event.key] = nextValue;
+            void idb.put(event.key, nextValue);
+            onStorageChange(event.key, { external: true });
+            if (CLOUD_SYNC_QUEUE_KEYS.has(event.key)) onCloudQueueChange(event.key);
+        });
 
         return { dbCache, idb, localPrefs, localStorage };
     }
