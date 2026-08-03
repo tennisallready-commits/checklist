@@ -71,7 +71,7 @@ let firebaseAccessTokenCache: FirebaseAccessTokenCache | null = null;
 const CHECKLIST_COMPLETION_GUARD_MS = 30_000;
 // Versão visível nos logs e nas respostas da função. Ajuda a confirmar que o
 // Supabase está rodando exatamente a correção mais recente.
-const CASSOL_DASHBOARD_SYNC_VERSION = "2.4.0";
+const CASSOL_DASHBOARD_SYNC_VERSION = "2.4.2";
   
   const normalize = (value: unknown) => String(value || "")
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -376,7 +376,7 @@ async function assertChecklistCompletion(
   }
   
   const CONTENT_STAGE_KEYS = ["copy", "gravado", "edicao", "aprovado", "agendado", "postado", "turbinar", "metricas"];
-  const CONTENT_STAGE_NAMES = ["Copy", "Gravado", "Em edição", "Aprovado", "Agendado", "Postado", "Turbinar", "Métricas"];
+  const CONTENT_STAGE_NAMES = ["Para criar a copy", "Para gravar", "Para editar", "Para aprovar", "Para agendar", "Para postar", "Para turbinar", "Para analisar métricas"];
   
   function contentStageEvents(contents: DashboardContent[]) {
     return contents.flatMap(content => {
@@ -739,7 +739,20 @@ async function assertChecklistCompletion(
   function contentStageReferenceFromTitle(title: unknown) {
     const match = /^\[([^\]]+)\]\s+(.+)$/.exec(String(title || "").trim());
     if (!match) return null;
-    const stageIndex = CONTENT_STAGE_NAMES.findIndex(name => normalize(name) === normalize(match[2]));
+    const legacyStageNames: Record<string, string> = {
+      "copy": "para criar a copy",
+      "gravado": "para gravar",
+      "em edicao": "para editar",
+      "aprovado": "para aprovar",
+      "agendado": "para agendar",
+      "postado": "para postar",
+      "turbinar": "para turbinar",
+      "metricas": "para analisar metricas",
+      "analise de metricas": "para analisar metricas",
+    };
+    const normalizedStageName = normalize(match[2]);
+    const canonicalStageName = legacyStageNames[normalizedStageName] || normalizedStageName;
+    const stageIndex = CONTENT_STAGE_NAMES.findIndex(name => normalize(name) === canonicalStageName);
     if (stageIndex < 0) return null;
     return { contentName: match[1], stageKey: CONTENT_STAGE_KEYS[stageIndex] };
   }
