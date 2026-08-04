@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.78";
+const SERVICE_WORKER_URL = "./sw.js?v=10.79";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -287,6 +287,38 @@ function beginOptimisticMutation() {
     // Assim uma resposta antiga nunca repinta a tarefa que acabou de mudar.
     dataLoadRequestVersion += 1;
 }
+
+function requireOnlineTaskMutation(actionLabel = "alterar tarefas") {
+    if (navigator.onLine && supabaseClient && currentUser) return true;
+    showAppNotice(`Conecte-se à internet para ${actionLabel}. As tarefas continuam disponíveis apenas para consulta offline.`, "warning");
+    return false;
+}
+
+async function runConfirmedTaskMutation(operation, actionLabel, timeoutMs = 15000) {
+    setSyncStatus("syncing", "Salvando…", `${actionLabel}; aguardando confirmação do servidor`);
+    let timeoutId;
+    try {
+        const result = await Promise.race([
+            Promise.resolve(operation),
+            new Promise((_, reject) => {
+                timeoutId = setTimeout(() => reject(new Error("O servidor demorou para responder. Tente novamente.")), timeoutMs);
+            }),
+        ]);
+        if (result?.error) throw result.error;
+        cloudSyncLastSuccessAt = Date.now();
+        cloudSyncLastError = "";
+        setSyncStatus("synced", "Sincronizado", `${actionLabel} confirmada pelo servidor`);
+        return result;
+    } catch (error) {
+        const message = error?.message || "Não foi possível confirmar a alteração.";
+        cloudSyncLastError = message;
+        setSyncStatus("error", "Não foi salvo", message);
+        showAppNotice(`${actionLabel} não foi salva: ${message}`, "error");
+        throw error;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
 let scrollPosition = 0;
 let learningCloudState = "idle";
 let reportsCloudState = "idle";
@@ -420,10 +452,11 @@ function hasPendingSyncData() {
     const pendingUpdates = Object.keys(dbCache.offline_task_updates_queue || {}).length > 0;
     const pendingCategoryUpdates = Object.keys(dbCache.offline_category_updates_queue || {}).length > 0;
     const pendingInvites = (JSON.parse(localStorage.getItem("offline_collaboration_invites_queue")) || []).length > 0;
-    const pendingDashboard = Object.keys(JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {}).length > 0;
+    // A integração com o Dashboard é secundária e possui repetição própria.
+    // Ela não deve manter o salvamento principal preso na interface.
     // A foto de treino é enviada em segundo plano. Ela não deve manter o
     // Checklist inteiro como “pendente” depois que o check já foi confirmado.
-    return pendingCategories || pendingTasks || pendingCompletions || pendingUpdates || pendingCategoryUpdates || pendingInvites || pendingDashboard;
+    return pendingCategories || pendingTasks || pendingCompletions || pendingUpdates || pendingCategoryUpdates || pendingInvites;
 }
 
 function refreshSyncStatusFromQueues() {
@@ -461,8 +494,7 @@ function getPendingSyncCount() {
     const pendingUpdates = Object.keys(dbCache.offline_task_updates_queue || {}).length;
     const pendingCategoryUpdates = Object.keys(dbCache.offline_category_updates_queue || {}).length;
     const pendingInvites = (JSON.parse(localPrefs.getItem("offline_collaboration_invites_queue") || "[]") || []).length;
-    const pendingDashboard = Object.keys(JSON.parse(localPrefs.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY) || "{}") || {}).length;
-    return pendingCategories + pendingTasks + pendingCompletions + pendingUpdates + pendingCategoryUpdates + pendingInvites + pendingDashboard;
+    return pendingCategories + pendingTasks + pendingCompletions + pendingUpdates + pendingCategoryUpdates + pendingInvites;
 }
 
 let trainingPhotoUploadTimer = null;
@@ -2116,8 +2148,8 @@ function setupEventListeners() {
 
         // Parse ID (handle uuid string or int)
         const parsedId = String(taskId).match(/^\d+$/) ? parseInt(taskId, 10) : taskId;
-        await updateTask(parsedId, updates);
-        closeModal(modalEditTask);
+        const updated = await updateTask(parsedId, updates);
+        if (updated) closeModal(modalEditTask);
     });
 
     // Notifications Modal Events
@@ -5499,6 +5531,7 @@ async function restoreMovedFutureTask(id, task) {
 }
 
 async function toggleTask(id, options = {}) {
+    if (!requireOnlineTaskMutation("marcar ou desmarcar uma tarefa")) return;
     if (options.completeAtCurrentMoment && selectedDate > getLocalDateString(new Date())) {
         const futureTask = tasks.find(item => String(item.id) === String(id)) || allActiveTasks.find(item => String(item.id) === String(id));
         if (futureTask && isTrainingCategory(futureTask.category)) {
@@ -5563,13 +5596,24 @@ async function toggleTask(id, options = {}) {
 }
 
 async function commitTaskToggle(id, isPastNightShiftException = false) {
-    beginOptimisticMutation();
     if (isHistoryMode && !isPastNightShiftException) return;
-    // Toggle local state immediately for visual response
-    const wasCompleted = tasks.find(t => String(t.id) === String(id))?.completed === true;
+    if (!requireOnlineTaskMutation("marcar ou desmarcar uma tarefa") || isTemporaryId(id)) return;
+    const previousTask = tasks.find(t => String(t.id) === String(id));
+    if (!previousTask) return;
+    const wasCompleted = previousTask.completed === true;
+    const completed = !wasCompleted;
+    const query = completed
+        ? supabaseClient.from("completions").upsert(
+            { task_id: id, date: selectedDate, completed: true },
+            { onConflict: "task_id,date" }
+        )
+        : supabaseClient.from("completions").delete().eq("task_id", id).eq("date", selectedDate);
+    await runConfirmedTaskMutation(query, completed ? "Conclusão da tarefa" : "Remoção do check");
+
+    beginOptimisticMutation();
     if (!wasCompleted) pendingCompletionAnimationTaskId = id;
     tasks = tasks.map(t => {
-        if (String(t.id) === String(id)) return { ...t, completed: !t.completed };
+        if (String(t.id) === String(id)) return { ...t, completed };
         return t;
     });
     updateProgress();
@@ -5586,12 +5630,14 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
     // o estado anterior enquanto o check ainda está a caminho da integração.
     if (isCassolDashboardTask(task)) cassolDashboardLastPushAt = Date.now();
 
-    // Salva sempre no LocalStorage primeiro para resiliência e velocidade
-    saveCompletionOffline(id, selectedDate, task.completed);
-    // Checks são o estado que mais precisa aparecer imediatamente em outro
-    // aparelho da mesma conta. Envia por uma rota curta (uma única escrita);
-    // a fila offline continua sendo a garantia em caso de falha.
-    syncCompletionImmediately(id, selectedDate, task.completed);
+    let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+    localCompletions = localCompletions.filter(item => !(String(item.task_id) === String(id) && item.date === selectedDate));
+    if (completed) localCompletions.push({ task_id: id, date: selectedDate, completed: true });
+    localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
+
+    if (isCassolDashboardTask(task)) {
+        queueCassolDashboardTaskSync(id, { operation: "completion", date: selectedDate, completed });
+    }
 }
 
 function syncCompletionImmediately(taskId, date, completed) {
@@ -6515,6 +6561,7 @@ function saveCompletionOffline(taskId, date, completed) {
 
 async function addTask(title, category, recurrenceMode, customDate, repeatDays, assignedTo, shifts, important = false, reminderTime = null, reminderOffsetDays = 0, description = "") {
     if (!title) return;
+    if (!requireOnlineTaskMutation("criar uma tarefa")) throw new Error("Sem conexão com a internet.");
     beginOptimisticMutation();
     if (isTrainingCollaborativeCategory(category)) {
         assignedTo = null;
@@ -6561,9 +6608,16 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
     if (assignedTo) newTask.assigned_to = assignedTo;
     if (currentUser) newTask.user_id = currentUser.id;
 
-    // Salva no local storage offline_tasks
+    const result = await runConfirmedTaskMutation(
+        insertTaskWithCategoryFallback(newTask),
+        "Criação da tarefa"
+    );
+    const savedTask = result?.data?.[0];
+    if (!savedTask) throw new Error("O servidor não devolveu a tarefa criada.");
+
+    // O cache local recebe somente a versão já confirmada pelo servidor.
     let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
-    localTasks.push({ ...newTask, id: tempId });
+    localTasks.push(savedTask);
     localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
 
     // Reconstrói tasks[] via fluxo centralizado (respeita data, recorrência, filtros)
@@ -6571,9 +6625,9 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
     renderChecklist();
     updateProgress();
 
-    // Toda criação usa o mesmo coordenador. Isso elimina a corrida entre o
-    // insert direto e a fila offline quando a conexão oscila.
-    scheduleCloudSync("nova-tarefa", 80);
+    if (isCollaborativeCategory(savedTask.category_id)) requestSharedTaskPush(savedTask.id, true);
+    if (isCassolDashboardTask(savedTask)) queueCassolDashboardTaskSync(savedTask.id, { operation: "upsert" });
+    return savedTask;
 }
 
 async function insertTaskWithCategoryFallback(taskPayload) {
@@ -6671,26 +6725,28 @@ async function addTaskOffline(title, category, isRecurring, id, createdAt, repea
 }
 
 async function renameTask(id, newTitle, context) {
-    beginOptimisticMutation();
     if (!newTitle) return;
+    if (!requireOnlineTaskMutation("editar uma tarefa") || isTemporaryId(id)) return;
 
     const existingTask = tasks.find(t => String(t.id) === String(id));
     const category = existingTask ? existingTask.category : "";
     const nlpContext = analyzeTaskContext(newTitle, category, tasks);
     const finalContext = context || nlpContext;
 
-    // Salva no LocalStorage e reconstrói memória via fluxo central
+    const updates = { title: newTitle };
+    if (finalContext) updates.context = finalContext;
+    await runConfirmedTaskMutation(
+        supabaseClient.from("tasks").update(updates).eq("id", id),
+        "Edição da tarefa"
+    );
+
+    beginOptimisticMutation();
     renameTaskOffline(id, newTitle, finalContext);
     loadDataOffline();
     renderChecklist();
 
-    // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
-    if (supabaseClient && currentUser && !isTemporaryId(id)) {
-        const updates = { title: newTitle };
-        if (finalContext) updates.context = finalContext;
-
-        enqueueTaskCloudUpdate(id, updates, "renomear-tarefa");
-    }
+    const syncedTask = tasks.find(task => String(task.id) === String(id));
+    if (isCassolDashboardTask(syncedTask)) queueCassolDashboardTaskSync(id, { operation: "upsert" });
 }
 
 function renameTaskOffline(id, newTitle, context) {
@@ -6709,7 +6765,7 @@ function renameTaskOffline(id, newTitle, context) {
 
 // Full task update (title, date, recurrence, repeat_days)
 async function updateTask(id, updates) {
-    beginOptimisticMutation();
+    if (!requireOnlineTaskMutation("editar uma tarefa") || isTemporaryId(id)) return false;
     const existingTask = tasks.find(t => String(t.id) === String(id));
     if (existingTask && isTrainingCategory(existingTask.category)) {
         if (!isTrainingTaskOwnedByCurrentUser(existingTask)) {
@@ -6742,8 +6798,25 @@ async function updateTask(id, updates) {
         updates.context = { ...existingContext, ...(updates.context || {}), ...nlpContext };
     }
 
-    // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
-    // Salva no LocalStorage primeiro
+    const dbUpdates = {};
+    if (updates.title !== undefined) dbUpdates.title = updates.title;
+    if (updates.category !== undefined) {
+        dbUpdates.category = updates.category;
+        const matchingCategory = categories.find(category => category.name === updates.category && !isTemporaryId(category.id));
+        if (matchingCategory) dbUpdates.category_id = matchingCategory.id;
+    }
+    if (updates.is_recurring !== undefined) dbUpdates.is_recurring = updates.is_recurring;
+    if (updates.repeat_days !== undefined) dbUpdates.repeat_days = updates.repeat_days;
+    if (updates.created_at !== undefined) dbUpdates.created_at = updates.created_at;
+    if (updates.context !== undefined) dbUpdates.context = updates.context;
+    if (updates.assigned_to !== undefined) dbUpdates.assigned_to = updates.assigned_to;
+
+    await runConfirmedTaskMutation(
+        supabaseClient.from("tasks").update(dbUpdates).eq("id", id),
+        "Edição da tarefa"
+    );
+
+    beginOptimisticMutation();
     let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
     localTasks = localTasks.map(t => {
         if (String(t.id) === String(id)) return { ...t, ...updates };
@@ -6757,18 +6830,9 @@ async function updateTask(id, updates) {
     renderChecklist();
     updateProgress();
 
-    // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
-    if (supabaseClient && currentUser && !isTemporaryId(id)) {
-        const dbUpdates = {};
-        if (updates.title !== undefined) dbUpdates.title = updates.title;
-        if (updates.is_recurring !== undefined) dbUpdates.is_recurring = updates.is_recurring;
-        if (updates.repeat_days !== undefined) dbUpdates.repeat_days = updates.repeat_days;
-        if (updates.created_at !== undefined) dbUpdates.created_at = updates.created_at;
-        if (updates.context !== undefined) dbUpdates.context = updates.context;
-        if (updates.assigned_to !== undefined) dbUpdates.assigned_to = updates.assigned_to;
-
-        enqueueTaskCloudUpdate(id, dbUpdates, "editar-tarefa");
-    }
+    const syncedTask = tasks.find(task => String(task.id) === String(id));
+    if (isCassolDashboardTask(syncedTask)) queueCassolDashboardTaskSync(id, { operation: "upsert" });
+    return true;
 }
 
 // Recurrence label helper
@@ -6880,7 +6944,7 @@ function openEditTaskModal(task) {
 }
 
 async function deleteTask(id) {
-    beginOptimisticMutation();
+    if (!requireOnlineTaskMutation("excluir uma tarefa") || isTemporaryId(id)) return;
     const existingTask = tasks.find(task => String(task.id) === String(id));
     if (existingTask && isTrainingCategory(existingTask.category) && !isTrainingTaskOwnedByCurrentUser(existingTask)) {
         showAppNotice("Somente o dono pode excluir esta tarefa de treino.", "warning");
@@ -6890,16 +6954,22 @@ async function deleteTask(id) {
     if ([...pendingDeletes].some(pendingId => String(pendingId) === taskId)) return;
     pendingDeletes.add(taskId);
 
-    // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
+    try {
+        await runConfirmedTaskMutation(
+            supabaseClient.from("tasks").update({ is_active: false }).eq("id", id),
+            "Exclusão da tarefa"
+        );
+    } catch (error) {
+        pendingDeletes.delete(taskId);
+        return;
+    }
+
+    beginOptimisticMutation();
     tasks = tasks.filter(t => String(t.id) !== String(id));
     allActiveTasks = allActiveTasks.filter(t => String(t.id) !== String(id));
     
     // Salva no LocalStorage
     deleteTaskOffline(id);
-
-    let updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
-    updatesQueue[taskId] = { ...(updatesQueue[taskId] || {}), is_active: false };
-    localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
 
     renderChecklist();
     updateProgress();
@@ -6914,16 +6984,10 @@ async function deleteTask(id) {
         if (!completionDeletion.ok) showAppNotice(`Tarefa removida deste aparelho, mas o histórico de conclusão ainda aguarda exclusão na nuvem: ${completionDeletion.error}`, "warning");
     }).catch(error => console.warn("Limpeza complementar da tarefa pendente:", error.message));
 
-    // A exclusão segue pelo mesmo coordenador das demais edições. Isso evita
-    // que um update direto e a fila cheguem fora de ordem ao Supabase.
-    if (supabaseClient && currentUser) {
-        cleanupPromise.finally(() => {
-            pendingDeletes.delete(taskId);
-            scheduleCloudSync("excluir-tarefa", 80);
-        });
-    } else {
+    cleanupPromise.finally(() => {
         pendingDeletes.delete(taskId);
-    }
+        if (isCassolDashboardTask(existingTask)) queueCassolDashboardTaskSync(id, { operation: "delete" });
+    });
 }
 
 function deleteTaskOffline(id) {
@@ -7728,6 +7792,9 @@ function getTaskById(taskId) {
 }
 
 async function updateTaskReminderContext(taskId, updater) {
+    if (!requireOnlineTaskMutation("editar o lembrete da tarefa") || isTemporaryId(taskId)) {
+        throw new Error("É necessário estar conectado à internet.");
+    }
     let task = getTaskById(taskId);
     if (!task && supabaseClient && currentUser) {
         const { data } = await supabaseClient.from("tasks").select("*").eq("id", taskId).maybeSingle();
@@ -7740,6 +7807,10 @@ async function updateTaskReminderContext(taskId, updater) {
         try { context = JSON.parse(context); } catch (_) { context = {}; }
     }
     context = updater({ ...context });
+    await runConfirmedTaskMutation(
+        supabaseClient.from("tasks").update({ context }).eq("id", taskId),
+        "Edição do lembrete"
+    );
     task.context = context;
     const applyContext = item => String(item.id) === String(taskId) ? { ...item, context } : item;
     tasks = tasks.map(applyContext);
@@ -7747,7 +7818,6 @@ async function updateTaskReminderContext(taskId, updater) {
     const localTasks = (JSON.parse(localStorage.getItem("offline_tasks")) || []).map(applyContext);
     localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
     renderChecklist();
-    enqueueTaskCloudUpdate(taskId, { context }, "atualizar-lembrete");
 }
 
 async function openTaskReminderAction(taskId) {
