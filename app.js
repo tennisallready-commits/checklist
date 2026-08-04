@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.79";
+const SERVICE_WORKER_URL = "./sw.js?v=10.80";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -298,6 +298,13 @@ async function runConfirmedTaskMutation(operation, actionLabel, timeoutMs = 1500
     setSyncStatus("syncing", "Salvando…", `${actionLabel}; aguardando confirmação do servidor`);
     let timeoutId;
     try {
+        const { data: sessionData, error: sessionError } = await supabaseClient.auth.getSession();
+        if (sessionError) throw sessionError;
+        if (!sessionData?.session) {
+            const { data: refreshed, error: refreshError } = await supabaseClient.auth.refreshSession();
+            if (refreshError || !refreshed?.session) throw refreshError || new Error("Sua sessão expirou. Entre novamente no Checklist.");
+            currentUser = refreshed.session.user;
+        }
         const result = await Promise.race([
             Promise.resolve(operation),
             new Promise((_, reject) => {
@@ -317,6 +324,27 @@ async function runConfirmedTaskMutation(operation, actionLabel, timeoutMs = 1500
         throw error;
     } finally {
         clearTimeout(timeoutId);
+    }
+}
+
+function migrateToOnlineOnlyTaskMutations() {
+    const migrationKey = "online_only_task_mutations_v10_80";
+    if (localStorage.getItem(migrationKey) === "done") return;
+
+    // A partir desta versão, alterações de tarefa nunca são recuperadas dessas
+    // filas. Removê-las evita que uma tentativa antiga concorra com a gravação
+    // online atual e mantenha o indicador preso em erro/salvamento.
+    localStorage.setItem("offline_completions_queue", "{}");
+    localStorage.setItem("offline_task_updates_queue", "{}");
+    const cachedTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    localStorage.setItem("offline_tasks", JSON.stringify(
+        cachedTasks.filter(task => !isTemporaryId(task?.id))
+    ));
+    localStorage.setItem(migrationKey, "done");
+    if (typeof dbCache === "object" && dbCache) {
+        dbCache.offline_completions_queue = {};
+        dbCache.offline_task_updates_queue = {};
+        dbCache.offline_tasks = (dbCache.offline_tasks || []).filter(task => !isTemporaryId(task?.id));
     }
 }
 let scrollPosition = 0;
@@ -9193,6 +9221,10 @@ function setupSupabaseAuth() {
             // inicia um swipe, toque ou edição logo após abrir o PWA.
             await waitForStartupInteractionToSettle();
             
+            // A migração remove filas antigas de tarefas antes que o
+            // sincronizador geral tente processá-las junto das ações online.
+            migrateToOnlineOnlyTaskMutations();
+
             // Sync local data to cloud
             await syncOfflineDataToCloud();
             
