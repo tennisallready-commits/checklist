@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.77";
+const SERVICE_WORKER_URL = "./sw.js?v=10.78";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -6434,7 +6434,20 @@ async function startCassolDashboardRealtimeListener() {
         };
         const firebaseInstance = firebaseApp.getApps().find(item => item.options?.projectId === firebaseConfig.projectId)
             || firebaseApp.initializeApp(firebaseConfig, "checklist-cassol-realtime");
-        const db = firestore.getFirestore(firebaseInstance);
+        // Safari/PWAs e algumas redes móveis podem deixar o WebChannel tentando
+        // conectar por quase um minuto antes do fallback. Long polling mantém o
+        // listener em tempo real, mas usa um transporte HTTP mais compatível.
+        let db;
+        try {
+            db = firestore.initializeFirestore(firebaseInstance, {
+                experimentalForceLongPolling: true,
+                useFetchStreams: false,
+            });
+        } catch (error) {
+            // Se outra parte da página já tiver inicializado essa mesma
+            // instância, reutiliza-a em vez de perder completamente a escuta.
+            db = firestore.getFirestore(firebaseInstance);
+        }
         const watchedDocuments = ["gc-events", "gc-conteudos", "gc-livros", "gc-projetos"];
 
         cassolFirebaseRealtimeUnsubscribers = watchedDocuments.map(documentId => firestore.onSnapshot(
