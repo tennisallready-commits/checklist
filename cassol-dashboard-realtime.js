@@ -19,7 +19,7 @@ function announceDashboardChange(documentId, timestamp) {
     if (typeof window.requestCassolDashboardRealtimePull === 'function') {
       window.requestCassolDashboardRealtimePull({ documentId, timestamp });
     }
-  }, 350);
+  }, 80);
 }
 
 window.startCassolDashboardRealtime = async function startCassolDashboardRealtime() {
