@@ -4,7 +4,7 @@ const CRITICAL_ASSETS = [
   './index.html',
   './style.css?v=8.42',
   './storage.js?v=1.03',
-  './app.js?v=10.59',
+  './app.js?v=10.77',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
