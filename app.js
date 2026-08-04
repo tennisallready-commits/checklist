@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.76";
+const SERVICE_WORKER_URL = "./sw.js?v=10.77";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -53,6 +53,9 @@ let cassolDashboardLastPullAt = 0;
 let cassolDashboardLastPushAt = 0;
 let cassolDashboardRealtimePullTimer = null;
 let cassolDashboardRealtimeStartPending = false;
+let cassolFirebaseRealtimeStarted = false;
+let cassolFirebaseRealtimeUnsubscribers = [];
+const cassolFirebaseLastTimestamp = new Map();
 
 // Default tasks database for initial setup (offline fallback and reset option)
 const DEFAULT_TASKS = [];
@@ -6413,18 +6416,49 @@ async function pullCassolDashboardTasks(force = false) {
     }
 }
 
-function startCassolDashboardRealtimeListener() {
-    if (typeof window.startCassolDashboardRealtime === "function") {
-        cassolDashboardRealtimeStartPending = false;
-        window.startCassolDashboardRealtime();
-        return;
-    }
-    if (cassolDashboardRealtimeStartPending) return;
+async function startCassolDashboardRealtimeListener() {
+    if (cassolFirebaseRealtimeStarted || cassolDashboardRealtimeStartPending) return;
     cassolDashboardRealtimeStartPending = true;
-    window.addEventListener("cassol-dashboard-realtime-ready", () => {
+    try {
+        const [firebaseApp, firestore] = await Promise.all([
+            import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js"),
+            import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js"),
+        ]);
+        const firebaseConfig = {
+            apiKey: "AIzaSyCuifhZ4I3_doR6N_2xdqMe3zUDMgjeeR0",
+            authDomain: "grupo-cassol-2.firebaseapp.com",
+            projectId: "grupo-cassol-2",
+            storageBucket: "grupo-cassol-2.firebasestorage.app",
+            messagingSenderId: "265678011446",
+            appId: "1:265678011446:web:3e1e7737d1e6fd5fb26c97",
+        };
+        const firebaseInstance = firebaseApp.getApps().find(item => item.options?.projectId === firebaseConfig.projectId)
+            || firebaseApp.initializeApp(firebaseConfig, "checklist-cassol-realtime");
+        const db = firestore.getFirestore(firebaseInstance);
+        const watchedDocuments = ["gc-events", "gc-conteudos", "gc-livros", "gc-projetos"];
+
+        cassolFirebaseRealtimeUnsubscribers = watchedDocuments.map(documentId => firestore.onSnapshot(
+            firestore.doc(db, "dados", documentId),
+            snapshot => {
+                if (!snapshot.exists()) return;
+                const timestamp = Number(snapshot.data()?.ts || 0);
+                if (!cassolFirebaseLastTimestamp.has(documentId)) {
+                    cassolFirebaseLastTimestamp.set(documentId, timestamp);
+                    return;
+                }
+                if (cassolFirebaseLastTimestamp.get(documentId) === timestamp) return;
+                cassolFirebaseLastTimestamp.set(documentId, timestamp);
+                window.requestCassolDashboardRealtimePull?.();
+            },
+            error => console.warn(`[Cassol dashboard] Firebase não permitiu acompanhar ${documentId}:`, error?.message || error),
+        ));
+        cassolFirebaseRealtimeStarted = true;
+        console.log("[Cassol dashboard] Escuta direta do Firebase conectada.");
+    } catch (error) {
+        console.warn("[Cassol dashboard] Escuta direta indisponível; mantendo o cron:", error?.message || error);
+    } finally {
         cassolDashboardRealtimeStartPending = false;
-        if (currentUser) window.startCassolDashboardRealtime?.();
-    }, { once: true });
+    }
 }
 
 window.requestCassolDashboardRealtimePull = function requestCassolDashboardRealtimePull() {
