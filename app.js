@@ -6430,8 +6430,6 @@ function startCassolDashboardRealtimeListener() {
 window.requestCassolDashboardRealtimePull = function requestCassolDashboardRealtimePull() {
     if (!currentUser || !supabaseClient || !navigator.onLine) return;
     clearTimeout(cassolDashboardRealtimePullTimer);
-    const guardRemaining = Math.max(0, CASSOL_DASHBOARD_LOCAL_CHANGE_GUARD_MS - (Date.now() - cassolDashboardLastPushAt));
-    const delay = Math.max(350, guardRemaining + 150);
     cassolDashboardRealtimePullTimer = setTimeout(async () => {
         cassolDashboardRealtimePullTimer = null;
         const pendingPushes = Object.keys(JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {}).length > 0;
@@ -6440,7 +6438,7 @@ window.requestCassolDashboardRealtimePull = function requestCassolDashboardRealt
             return;
         }
         await pullCassolDashboardTasks(true);
-    }, delay);
+    }, 100);
 };
 
 function startCassolDashboardPulling() {
