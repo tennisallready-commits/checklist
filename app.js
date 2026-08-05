@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.94";
+const SERVICE_WORKER_URL = "./sw.js?v=10.95";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -5824,6 +5824,15 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
     const completionQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
     completionQueue[`${pendingId}_${selectedDate}`] = completed;
     localStorage.setItem("offline_completions_queue", JSON.stringify(completionQueue));
+    // Supabase e Dashboard são destinos independentes. O envio ao Dashboard
+    // começa agora e não fica bloqueado por uma resposta lenta de completions.
+    if (isCassolDashboardTask(task)) {
+        queueCassolDashboardTaskSync(id, {
+            operation: "completion",
+            date: selectedDate,
+            completed
+        });
+    }
     setSyncStatus("syncing", "Salvando…", "Check salvo neste aparelho e sendo confirmado pelo servidor");
     syncCompletionImmediately(id, selectedDate, completed);
     return true;
@@ -5863,15 +5872,6 @@ function syncCompletionImmediately(taskId, date, completed) {
         if (error) throw error;
         clearQueuedEntryIfCurrent("offline_completions_queue", queueKey, queuedValue);
 
-        const syncedTask = tasks.find(item => String(item.id) === id)
-            || allActiveTasks.find(item => String(item.id) === id);
-        if (isCassolDashboardTask(syncedTask)) {
-            queueCassolDashboardTaskSync(taskId, {
-                operation: "completion",
-                date,
-                completed
-            });
-        }
         cloudSyncLastSuccessAt = Date.now();
         cloudSyncLastError = "";
     }).catch(error => {
