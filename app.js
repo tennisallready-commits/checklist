@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.81";
+const SERVICE_WORKER_URL = "./sw.js?v=10.82";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -300,13 +300,16 @@ async function runConfirmedTaskMutation(operation, actionLabel, timeoutMs = 1500
     try {
         const { data: sessionData, error: sessionError } = await supabaseClient.auth.getSession();
         if (sessionError) throw sessionError;
+        let activeSession = sessionData?.session || null;
         if (!sessionData?.session) {
             const { data: refreshed, error: refreshError } = await supabaseClient.auth.refreshSession();
             if (refreshError || !refreshed?.session) throw refreshError || new Error("Sua sessão expirou. Entre novamente no Checklist.");
             currentUser = refreshed.session.user;
+            activeSession = refreshed.session;
         }
+        const pendingOperation = typeof operation === "function" ? operation(activeSession) : operation;
         const result = await Promise.race([
-            Promise.resolve(operation),
+            Promise.resolve(pendingOperation),
             new Promise((_, reject) => {
                 timeoutId = setTimeout(() => reject(new Error("O servidor demorou para responder. Tente novamente.")), timeoutMs);
             }),
@@ -325,6 +328,32 @@ async function runConfirmedTaskMutation(operation, actionLabel, timeoutMs = 1500
     } finally {
         clearTimeout(timeoutId);
     }
+}
+
+async function writeCompletionDirectly(session, taskId, date, completed) {
+    if (!session?.access_token) return { error: new Error("Sessão do Checklist indisponível.") };
+    const filter = `task_id=eq.${encodeURIComponent(taskId)}&date=eq.${encodeURIComponent(date)}`;
+    const url = completed
+        ? `${SUPABASE_URL}/rest/v1/completions?on_conflict=task_id,date`
+        : `${SUPABASE_URL}/rest/v1/completions?${filter}`;
+    const response = await fetch(url, {
+        method: completed ? "POST" : "DELETE",
+        headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${session.access_token}`,
+            "Content-Type": "application/json",
+            Prefer: completed ? "resolution=merge-duplicates,return=minimal" : "return=minimal",
+        },
+        body: completed ? JSON.stringify({ task_id: taskId, date, completed: true }) : undefined,
+        cache: "no-store",
+    });
+    if (response.ok) return { error: null };
+    let detail = "";
+    try {
+        const payload = await response.json();
+        detail = payload?.message || payload?.hint || payload?.details || "";
+    } catch (_) {}
+    return { error: new Error(detail || `Supabase respondeu HTTP ${response.status}.`) };
 }
 
 function migrateToOnlineOnlyTaskMutations() {
@@ -5560,6 +5589,7 @@ async function restoreMovedFutureTask(id, task) {
 
 async function toggleTask(id, options = {}) {
     if (!requireOnlineTaskMutation("marcar ou desmarcar uma tarefa")) return;
+    if (pendingToggles.has(String(id))) return;
     if (options.completeAtCurrentMoment && selectedDate > getLocalDateString(new Date())) {
         const futureTask = tasks.find(item => String(item.id) === String(id)) || allActiveTasks.find(item => String(item.id) === String(id));
         if (futureTask && isTrainingCategory(futureTask.category)) {
@@ -5628,6 +5658,9 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
     if (!requireOnlineTaskMutation("marcar ou desmarcar uma tarefa") || isTemporaryId(id)) return;
     const previousTask = tasks.find(t => String(t.id) === String(id));
     if (!previousTask) return;
+    const pendingId = String(id);
+    if (pendingToggles.has(pendingId)) return;
+    pendingToggles.add(pendingId);
     const wasCompleted = previousTask.completed === true;
     const completed = !wasCompleted;
     // Resposta visual imediata, sem gravar em fila offline. Se o Supabase
@@ -5652,20 +5685,19 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
     // o estado anterior enquanto o check ainda está a caminho da integração.
     if (isCassolDashboardTask(task)) cassolDashboardLastPushAt = Date.now();
 
-    const query = completed
-        ? supabaseClient.from("completions").upsert(
-            { task_id: id, date: selectedDate, completed: true },
-            { onConflict: "task_id,date" }
-        )
-        : supabaseClient.from("completions").delete().eq("task_id", id).eq("date", selectedDate);
     try {
-        await runConfirmedTaskMutation(query, completed ? "Conclusão da tarefa" : "Remoção do check");
+        await runConfirmedTaskMutation(
+            session => writeCompletionDirectly(session, id, selectedDate, completed),
+            completed ? "Conclusão da tarefa" : "Remoção do check"
+        );
     } catch (error) {
         tasks = tasks.map(item => String(item.id) === String(id) ? { ...item, completed: wasCompleted } : item);
         pendingCompletionAnimationTaskId = null;
         renderChecklist();
         updateProgress();
         return false;
+    } finally {
+        pendingToggles.delete(pendingId);
     }
 
     let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
