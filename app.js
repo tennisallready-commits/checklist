@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.80";
+const SERVICE_WORKER_URL = "./sw.js?v=10.81";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -5630,14 +5630,8 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
     if (!previousTask) return;
     const wasCompleted = previousTask.completed === true;
     const completed = !wasCompleted;
-    const query = completed
-        ? supabaseClient.from("completions").upsert(
-            { task_id: id, date: selectedDate, completed: true },
-            { onConflict: "task_id,date" }
-        )
-        : supabaseClient.from("completions").delete().eq("task_id", id).eq("date", selectedDate);
-    await runConfirmedTaskMutation(query, completed ? "Conclusão da tarefa" : "Remoção do check");
-
+    // Resposta visual imediata, sem gravar em fila offline. Se o Supabase
+    // recusar, o estado local é revertido logo abaixo.
     beginOptimisticMutation();
     if (!wasCompleted) pendingCompletionAnimationTaskId = id;
     tasks = tasks.map(t => {
@@ -5658,6 +5652,22 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
     // o estado anterior enquanto o check ainda está a caminho da integração.
     if (isCassolDashboardTask(task)) cassolDashboardLastPushAt = Date.now();
 
+    const query = completed
+        ? supabaseClient.from("completions").upsert(
+            { task_id: id, date: selectedDate, completed: true },
+            { onConflict: "task_id,date" }
+        )
+        : supabaseClient.from("completions").delete().eq("task_id", id).eq("date", selectedDate);
+    try {
+        await runConfirmedTaskMutation(query, completed ? "Conclusão da tarefa" : "Remoção do check");
+    } catch (error) {
+        tasks = tasks.map(item => String(item.id) === String(id) ? { ...item, completed: wasCompleted } : item);
+        pendingCompletionAnimationTaskId = null;
+        renderChecklist();
+        updateProgress();
+        return false;
+    }
+
     let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
     localCompletions = localCompletions.filter(item => !(String(item.task_id) === String(id) && item.date === selectedDate));
     if (completed) localCompletions.push({ task_id: id, date: selectedDate, completed: true });
@@ -5666,6 +5676,7 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
     if (isCassolDashboardTask(task)) {
         queueCassolDashboardTaskSync(id, { operation: "completion", date: selectedDate, completed });
     }
+    return true;
 }
 
 function syncCompletionImmediately(taskId, date, completed) {
