@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.83";
+const SERVICE_WORKER_URL = "./sw.js?v=10.84";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -356,7 +356,44 @@ async function writeCompletionDirectly(session, taskId, date, completed) {
     return { error: new Error(detail || `Supabase respondeu HTTP ${response.status}.`) };
 }
 
+async function writeDashboardCompletionDirectly(session, taskId, date, completed) {
+    if (!session?.access_token) return { error: new Error("Sessão do Checklist indisponível.") };
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 22000);
+    try {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/sync-cassol-dashboard`, {
+            method: "POST",
+            headers: {
+                apikey: SUPABASE_KEY,
+                Authorization: `Bearer ${session.access_token}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ task_id: String(taskId), operation: "completion", date, completed }),
+            cache: "no-store",
+            signal: controller.signal,
+        });
+        let payload = {};
+        try { payload = await response.json(); } catch (_) {}
+        if (response.ok && !payload?.error) return { error: null, data: payload };
+        return { error: new Error(payload?.error || `Integração respondeu HTTP ${response.status}.`) };
+    } catch (error) {
+        if (error?.name === "AbortError") return { error: new Error("A integração com o Dashboard demorou para responder.") };
+        return { error };
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
 function migrateToOnlineOnlyTaskMutations() {
+    const dashboardCompletionMigrationKey = "dashboard_completion_direct_v10_84";
+    if (localStorage.getItem(dashboardCompletionMigrationKey) !== "done") {
+        const dashboardQueue = JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {};
+        Object.keys(dashboardQueue).forEach(taskId => {
+            if (dashboardQueue[taskId]?.operation === "completion") delete dashboardQueue[taskId];
+        });
+        localStorage.setItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY, JSON.stringify(dashboardQueue));
+        localStorage.setItem(dashboardCompletionMigrationKey, "done");
+    }
     const migrationKey = "online_only_task_mutations_v10_80";
     if (localStorage.getItem(migrationKey) === "done") return;
 
@@ -5680,15 +5717,19 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
 
     const task = tasks.find(t => String(t.id) === String(id));
     if (!task) return;
+    const dashboardTask = isCassolDashboardTask(task);
 
     // Impede que uma leitura do Dashboard iniciada antes deste toque devolva
     // o estado anterior enquanto o check ainda está a caminho da integração.
-    if (isCassolDashboardTask(task)) cassolDashboardLastPushAt = Date.now();
+    if (dashboardTask) cassolDashboardLastPushAt = Date.now();
 
     try {
         await runConfirmedTaskMutation(
-            session => writeCompletionDirectly(session, id, selectedDate, completed),
-            completed ? "Conclusão da tarefa" : "Remoção do check"
+            session => dashboardTask
+                ? writeDashboardCompletionDirectly(session, id, selectedDate, completed)
+                : writeCompletionDirectly(session, id, selectedDate, completed),
+            completed ? "Conclusão da tarefa" : "Remoção do check",
+            dashboardTask ? 24000 : 15000
         );
     } catch (error) {
         tasks = tasks.map(item => String(item.id) === String(id) ? { ...item, completed: wasCompleted } : item);
@@ -5705,9 +5746,8 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
     if (completed) localCompletions.push({ task_id: id, date: selectedDate, completed: true });
     localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
 
-    if (isCassolDashboardTask(task)) {
-        queueCassolDashboardTaskSync(id, { operation: "completion", date: selectedDate, completed });
-    }
+    // Para tarefas do Dashboard, a mesma chamada acima já confirmou os dois
+    // sistemas. Não cria uma segunda fila que poderia repetir ou atrasar o check.
     return true;
 }
 
