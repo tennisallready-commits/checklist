@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.89";
+const SERVICE_WORKER_URL = "./sw.js?v=10.90";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -615,7 +615,7 @@ function refreshSyncStatusFromQueues() {
     if (!navigator.onLine) {
         setSyncStatus("offline", hasPending ? `Offline — ${pendingCount} pendente${pendingCount === 1 ? "" : "s"}` : "Offline", hasPending ? "Sem internet; toque para tentar quando a conexão voltar" : "Sem conexão com a internet");
     } else if (isSyncing) {
-        setSyncStatus("syncing", pendingCount ? `Salvando ${pendingCount}…` : "Confirmando…", "Enviando alterações para a nuvem");
+        setSyncStatus("pending", "Salvo · sincronizando", pendingCount ? `${pendingCount} alteração(ões) sendo confirmada(s) na nuvem` : "Finalizando a confirmação na nuvem");
     } else if (hasPending) {
         setSyncStatus("pending", `${pendingCount} pendente${pendingCount === 1 ? "" : "s"}`, cloudSyncLastError ? `Última tentativa: ${cloudSyncLastError}. Toque para tentar novamente.` : "Toque para sincronizar agora");
     } else {
@@ -724,7 +724,7 @@ function enqueueTaskCloudUpdate(taskId, updates, reason = "atualização-de-tare
     const queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
     queue[id] = { ...(queue[id] || {}), ...updates };
     localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
-    scheduleCloudSync(reason, 80);
+    scheduleCloudSync(reason, 0);
 }
 
 function enqueueCategoryCloudUpdate(categoryId, updates, reason = "atualização-de-categoria") {
@@ -9562,7 +9562,7 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
     isSyncing = true;
     cloudSyncRerunRequested = false;
     let syncSucceeded = false;
-    setSyncStatus("syncing", "Salvando…", "Enviando alterações para a nuvem");
+    setSyncStatus("pending", "Salvo · sincronizando", "A alteração já está neste aparelho e está sendo confirmada na nuvem");
 
     try {
         console.log(`[Sync] Iniciando sincronização sequencial (${reason})...`);
@@ -9645,14 +9645,29 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
 
             // Recupera um insert cuja resposta possa ter se perdido. O token
             // torna a criação idempotente sem depender do título da tarefa.
-            const recovered = await supabaseClient.from("tasks")
-                .select("*")
-                .eq("user_id", currentUser.id)
-                .contains("context", { sync_token: pendingContext.sync_token })
-                .limit(1)
-                .maybeSingle();
-            if (recovered.error) throw recovered.error;
-            let realTask = recovered.data || null;
+            // Na primeira tentativa fazemos somente o INSERT. A consulta de
+            // recuperação é necessária apenas depois de uma tentativa cuja
+            // resposta possa ter se perdido, reduzindo a criação normal de
+            // duas viagens ao servidor para uma.
+            const shouldRecoverPreviousInsert = pendingContext.sync_insert_attempted === true;
+            if (!shouldRecoverPreviousInsert) {
+                pendingContext.sync_insert_attempted = true;
+                pending.context = pendingContext;
+                localTasks = (JSON.parse(localStorage.getItem("offline_tasks")) || [])
+                    .map(task => String(task.id) === String(pending.id) ? { ...task, context: pendingContext } : task);
+                localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+            }
+            let realTask = null;
+            if (shouldRecoverPreviousInsert) {
+                const recovered = await supabaseClient.from("tasks")
+                    .select("*")
+                    .eq("user_id", currentUser.id)
+                    .contains("context", { sync_token: pendingContext.sync_token })
+                    .limit(1)
+                    .maybeSingle();
+                if (recovered.error) throw recovered.error;
+                realTask = recovered.data || null;
+            }
             let createdNow = false;
             if (!realTask) {
                 const { data, error } = await insertTaskWithCategoryFallback(newTaskPayload);
