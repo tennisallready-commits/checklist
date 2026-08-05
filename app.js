@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.92";
+const SERVICE_WORKER_URL = "./sw.js?v=10.93";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -7874,6 +7874,24 @@ async function primeTaskFromPush(taskId, { openCategory = false, navigate = true
     if (taskIndex >= 0) cachedTasks[taskIndex] = targetTask;
     else cachedTasks.push(targetTask);
     localStorage.setItem("offline_tasks", JSON.stringify(cachedTasks));
+
+    // O push de atualização pode chegar antes do evento Realtime de
+    // completions. Reconcilia explicitamente o check da data da tarefa para
+    // que concluir e desmarcar no Dashboard tenham o mesmo resultado imediato.
+    const taskDate = extractDateFromTimestamp(targetTask.created_at);
+    if (taskDate && supabaseClient && currentUser) {
+        const { data: completionRows } = await supabaseClient
+            .from("completions")
+            .select("task_id,date,completed")
+            .eq("task_id", targetTask.id)
+            .eq("date", taskDate);
+        let cachedCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+        cachedCompletions = cachedCompletions.filter(item =>
+            !(String(item.task_id) === String(targetTask.id) && item.date === taskDate)
+        );
+        (completionRows || []).forEach(item => cachedCompletions.push(item));
+        localStorage.setItem("offline_completions", JSON.stringify(cachedCompletions));
+    }
 
     if (targetTask.category_id && supabaseClient && currentUser) {
         const cachedCategories = JSON.parse(localStorage.getItem("offline_categories")) || [];
