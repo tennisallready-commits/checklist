@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.85";
+const SERVICE_WORKER_URL = "./sw.js?v=10.86";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -410,6 +410,32 @@ async function deleteDashboardTaskDirectly(session, taskId) {
     } finally {
         clearTimeout(timeoutId);
     }
+}
+
+async function deleteChecklistTaskDirectly(session, taskId) {
+    if (!session?.access_token) return { error: new Error("Sessão do Checklist indisponível.") };
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/tasks?id=eq.${encodeURIComponent(taskId)}`, {
+        method: "PATCH",
+        headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${session.access_token}`,
+            "Content-Type": "application/json",
+            Prefer: "return=representation",
+        },
+        body: JSON.stringify({ is_active: false }),
+        cache: "no-store",
+    });
+    if (response.ok) {
+        const updatedRows = await response.json().catch(() => []);
+        if (Array.isArray(updatedRows) && updatedRows.length > 0) return { error: null };
+        return { error: new Error("O Supabase não autorizou a exclusão desta tarefa.") };
+    }
+    let detail = "";
+    try {
+        const payload = await response.json();
+        detail = payload?.message || payload?.hint || payload?.details || "";
+    } catch (_) {}
+    return { error: new Error(detail || `Supabase respondeu HTTP ${response.status}.`) };
 }
 
 function migrateToOnlineOnlyTaskMutations() {
@@ -7124,7 +7150,7 @@ async function deleteTask(id) {
         await runConfirmedTaskMutation(
             dashboardTask
                 ? session => deleteDashboardTaskDirectly(session, id)
-                : supabaseClient.from("tasks").update({ is_active: false }).eq("id", id),
+                : session => deleteChecklistTaskDirectly(session, id),
             "Exclusão da tarefa",
             dashboardTask ? 24000 : 15000
         );
