@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.84";
+const SERVICE_WORKER_URL = "./sw.js?v=10.85";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -378,6 +378,34 @@ async function writeDashboardCompletionDirectly(session, taskId, date, completed
         return { error: new Error(payload?.error || `Integração respondeu HTTP ${response.status}.`) };
     } catch (error) {
         if (error?.name === "AbortError") return { error: new Error("A integração com o Dashboard demorou para responder.") };
+        return { error };
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+async function deleteDashboardTaskDirectly(session, taskId) {
+    if (!session?.access_token) return { error: new Error("Sessão do Checklist indisponível.") };
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 22000);
+    try {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/sync-cassol-dashboard`, {
+            method: "POST",
+            headers: {
+                apikey: SUPABASE_KEY,
+                Authorization: `Bearer ${session.access_token}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ task_id: String(taskId), operation: "delete" }),
+            cache: "no-store",
+            signal: controller.signal,
+        });
+        let payload = {};
+        try { payload = await response.json(); } catch (_) {}
+        if (response.ok && !payload?.error) return { error: null, data: payload };
+        return { error: new Error(payload?.error || `Integração respondeu HTTP ${response.status}.`) };
+    } catch (error) {
+        if (error?.name === "AbortError") return { error: new Error("A exclusão no Dashboard demorou para responder.") };
         return { error };
     } finally {
         clearTimeout(timeoutId);
@@ -7088,13 +7116,17 @@ async function deleteTask(id) {
         return;
     }
     const taskId = String(id);
+    const dashboardTask = isCassolDashboardTask(existingTask);
     if ([...pendingDeletes].some(pendingId => String(pendingId) === taskId)) return;
     pendingDeletes.add(taskId);
 
     try {
         await runConfirmedTaskMutation(
-            supabaseClient.from("tasks").update({ is_active: false }).eq("id", id),
-            "Exclusão da tarefa"
+            dashboardTask
+                ? session => deleteDashboardTaskDirectly(session, id)
+                : supabaseClient.from("tasks").update({ is_active: false }).eq("id", id),
+            "Exclusão da tarefa",
+            dashboardTask ? 24000 : 15000
         );
     } catch (error) {
         pendingDeletes.delete(taskId);
@@ -7123,7 +7155,6 @@ async function deleteTask(id) {
 
     cleanupPromise.finally(() => {
         pendingDeletes.delete(taskId);
-        if (isCassolDashboardTask(existingTask)) queueCassolDashboardTaskSync(id, { operation: "delete" });
     });
 }
 
