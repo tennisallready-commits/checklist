@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.86";
+const SERVICE_WORKER_URL = "./sw.js?v=10.89";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -5779,11 +5779,9 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
 
     try {
         await runConfirmedTaskMutation(
-            session => dashboardTask
-                ? writeDashboardCompletionDirectly(session, id, selectedDate, completed)
-                : writeCompletionDirectly(session, id, selectedDate, completed),
+            session => writeCompletionDirectly(session, id, selectedDate, completed),
             completed ? "Conclusão da tarefa" : "Remoção do check",
-            dashboardTask ? 24000 : 15000
+            15000
         );
     } catch (error) {
         tasks = tasks.map(item => String(item.id) === String(id) ? { ...item, completed: wasCompleted } : item);
@@ -5800,8 +5798,16 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
     if (completed) localCompletions.push({ task_id: id, date: selectedDate, completed: true });
     localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
 
-    // Para tarefas do Dashboard, a mesma chamada acima já confirmou os dois
-    // sistemas. Não cria uma segunda fila que poderia repetir ou atrasar o check.
+    // A confirmação do Supabase libera a interface. O espelhamento no
+    // Dashboard acontece fora do caminho principal e pode ser repetido sem
+    // bloquear o check.
+    if (dashboardTask) {
+        queueCassolDashboardTaskSync(id, {
+            operation: "completion",
+            date: selectedDate,
+            completed
+        });
+    }
     return true;
 }
 
@@ -6799,26 +6805,17 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
     if (assignedTo) newTask.assigned_to = assignedTo;
     if (currentUser) newTask.user_id = currentUser.id;
 
-    const result = await runConfirmedTaskMutation(
-        insertTaskWithCategoryFallback(newTask),
-        "Criação da tarefa"
-    );
-    const savedTask = result?.data?.[0];
-    if (!savedTask) throw new Error("O servidor não devolveu a tarefa criada.");
-
-    // O cache local recebe somente a versão já confirmada pelo servidor.
-    let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
-    localTasks.push(savedTask);
-    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
-
-    // Reconstrói tasks[] via fluxo centralizado (respeita data, recorrência, filtros)
-    loadDataOffline();
-    renderChecklist();
-    updateProgress();
-
-    if (isCollaborativeCategory(savedTask.category_id)) requestSharedTaskPush(savedTask.id, true);
-    if (isCassolDashboardTask(savedTask)) queueCassolDashboardTaskSync(savedTask.id, { operation: "upsert" });
-    return savedTask;
+    // A criação aparece imediatamente e usa o sincronizador idempotente. O
+    // sync_token recupera a mesma tarefa caso o Supabase grave, mas a resposta
+    // demore ou se perca — sem toast falso e sem criar duplicata.
+    await addTaskOffline(title, category, isRecurring, tempId, createdAt, repeatDays, context, assignedTo);
+    setSyncStatus("pending", "Salvo localmente", "Confirmando a tarefa na nuvem em segundo plano");
+    scheduleCloudSync("nova-tarefa", 0);
+    return {
+        ...newTask,
+        id: tempId,
+        category_id: selectedCategory && !isTemporaryId(selectedCategory.id) ? selectedCategory.id : undefined
+    };
 }
 
 async function insertTaskWithCategoryFallback(taskPayload) {
@@ -6956,7 +6953,7 @@ function renameTaskOffline(id, newTitle, context) {
 
 // Full task update (title, date, recurrence, repeat_days)
 async function updateTask(id, updates) {
-    if (!requireOnlineTaskMutation("editar uma tarefa") || isTemporaryId(id)) return false;
+    if (!requireOnlineTaskMutation("editar uma tarefa")) return false;
     const existingTask = tasks.find(t => String(t.id) === String(id));
     if (existingTask && isTrainingCategory(existingTask.category)) {
         if (!isTrainingTaskOwnedByCurrentUser(existingTask)) {
@@ -7002,11 +6999,9 @@ async function updateTask(id, updates) {
     if (updates.context !== undefined) dbUpdates.context = updates.context;
     if (updates.assigned_to !== undefined) dbUpdates.assigned_to = updates.assigned_to;
 
-    await runConfirmedTaskMutation(
-        supabaseClient.from("tasks").update(dbUpdates).eq("id", id),
-        "Edição da tarefa"
-    );
-
+    // Atualiza primeiro a interface. Para IDs reais, a fila envia somente os
+    // campos alterados; para IDs temporários, o insert pendente já lerá a
+    // versão mais recente completa do cache.
     beginOptimisticMutation();
     let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
     localTasks = localTasks.map(t => {
@@ -7021,8 +7016,11 @@ async function updateTask(id, updates) {
     renderChecklist();
     updateProgress();
 
-    const syncedTask = tasks.find(task => String(task.id) === String(id));
-    if (isCassolDashboardTask(syncedTask)) queueCassolDashboardTaskSync(id, { operation: "upsert" });
+    if (!isTemporaryId(id)) enqueueTaskCloudUpdate(id, dbUpdates, "edição-imediata");
+    else scheduleCloudSync("edição-de-tarefa-nova", 0);
+
+    // O espelhamento Cassol será enfileirado após o banco principal confirmar
+    // o update. IDs temporários são convertidos antes dessa etapa.
     return true;
 }
 
@@ -7148,11 +7146,9 @@ async function deleteTask(id) {
 
     try {
         await runConfirmedTaskMutation(
-            dashboardTask
-                ? session => deleteDashboardTaskDirectly(session, id)
-                : session => deleteChecklistTaskDirectly(session, id),
+            session => deleteChecklistTaskDirectly(session, id),
             "Exclusão da tarefa",
-            dashboardTask ? 24000 : 15000
+            15000
         );
     } catch (error) {
         pendingDeletes.delete(taskId);
@@ -7165,6 +7161,8 @@ async function deleteTask(id) {
     
     // Salva no LocalStorage
     deleteTaskOffline(id);
+
+    if (dashboardTask) queueCassolDashboardTaskSync(id, { operation: "delete" });
 
     renderChecklist();
     updateProgress();
@@ -9855,13 +9853,11 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
             }
         }
 
-        // A integração com o Dashboard participa da mesma confirmação visual.
-        // Enquanto ela estiver pendente, o app não deve afirmar que tudo foi
-        // sincronizado nem puxar de volta um estado antigo.
-        const dashboardSyncResult = await syncCassolDashboardTaskQueue();
-        if (dashboardSyncResult === false) {
-            throw new Error("A integração com o Dashboard ainda não confirmou as alterações.");
-        }
+        // A integração externa nunca bloqueia a confirmação do banco principal.
+        // A fila é idempotente e continuará tentando em segundo plano.
+        syncCassolDashboardTaskQueue().catch(error => {
+            console.warn("Integração com o Dashboard pendente:", error?.message || error);
+        });
 
         if (madeChanges) {
             // A fila já foi confirmada no Supabase. Não espera a recarga
