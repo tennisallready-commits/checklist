@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.90";
+const SERVICE_WORKER_URL = "./sw.js?v=10.91";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -43,7 +43,7 @@ const LEGACY_AUTO_SEEDED_CATEGORIES = ["Tio Nan", "Cassol", "PUCRS"];
 // veio da conta autorizada do Luiggi.
 const CASSOL_DASHBOARD_SYNC_QUEUE_KEY = "cassol_dashboard_sync_queue";
 const CASSOL_DASHBOARD_CATEGORY_NAMES = new Set(["cassol", "leia cassol", "gc estrategias"]);
-const CASSOL_DASHBOARD_PULL_INTERVAL_MS = 15000;
+const CASSOL_DASHBOARD_RECONCILE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const CASSOL_DASHBOARD_LOCAL_CHANGE_GUARD_MS = 2500;
 let cassolDashboardSyncTimer = null;
 let cassolDashboardSyncInProgress = false;
@@ -3650,7 +3650,7 @@ function subscribeToCollaborationUpdates() {
         const localQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
         // Nunca deixa um eco remoto atropelar uma alteração ainda pendente
         // neste próprio aparelho.
-        if (Object.prototype.hasOwnProperty.call(localQueue, queueKey)) return false;
+        if (Object.prototype.hasOwnProperty.call(localQueue, queueKey)) return true;
 
         const completed = payload.eventType !== "DELETE" && record.completed === true;
         let cachedCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
@@ -3670,6 +3670,45 @@ function subscribeToCollaborationUpdates() {
                 renderChecklist();
                 updateProgress();
             }
+        }
+        return true;
+    };
+    const applyRealtimeTask = payload => {
+        const record = payload?.eventType === "DELETE" ? payload.old : payload?.new;
+        const taskId = String(record?.id || "");
+        if (!taskId) return false;
+
+        const updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+        if (Object.prototype.hasOwnProperty.call(updatesQueue, taskId)) return true;
+
+        let cachedTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+        if (payload.eventType === "DELETE" || record.is_active === false) {
+            cachedTasks = cachedTasks.filter(task => String(task.id) !== taskId);
+        } else {
+            let recordContext = record.context || {};
+            if (typeof recordContext === "string") {
+                try { recordContext = JSON.parse(recordContext); } catch (_) { recordContext = {}; }
+            }
+            const syncToken = String(recordContext.sync_token || "");
+            const index = cachedTasks.findIndex(task => {
+                if (String(task.id) === taskId) return true;
+                if (!syncToken || !isTemporaryId(task.id)) return false;
+                let taskContext = task.context || {};
+                if (typeof taskContext === "string") {
+                    try { taskContext = JSON.parse(taskContext); } catch (_) { taskContext = {}; }
+                }
+                return String(taskContext.sync_token || "") === syncToken;
+            });
+            if (index >= 0) cachedTasks[index] = record;
+            else cachedTasks.push(record);
+        }
+        localStorage.setItem("offline_tasks", JSON.stringify(cachedTasks));
+        loadDataOffline();
+        if (modalAddTask?.classList.contains("active") || modalEditTask?.classList.contains("active")) {
+            deferredTaskEditorBackgroundRender = true;
+        } else {
+            renderChecklist();
+            updateProgress();
         }
         return true;
     };
@@ -3700,17 +3739,15 @@ function subscribeToCollaborationUpdates() {
             }
             updateCollaborationInviteAttention();
             if (areNotificationsEnabled()) showSharedTaskAlert(notification);
-            loadChecklistAndProgress();
         })
-        .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, refreshSharedTrainingData)
+        .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, payload => {
+            if (!applyRealtimeTask(payload)) refreshSharedTrainingData();
+        })
         .on("postgres_changes", { event: "*", schema: "public", table: "completions" }, payload => {
-            applyRealtimeCompletion(payload);
-            // Revalida depois para cobrir exclusões em bancos que ainda não
-            // enviam todas as colunas do registro antigo no Realtime.
-            refreshSharedTrainingData();
+            if (!applyRealtimeCompletion(payload)) refreshSharedTrainingData();
         })
         .on("postgres_changes", { event: "*", schema: "public", table: "training_photos" }, () => {
-            refreshSharedTrainingData();
+            if (modalTrainingReport?.classList.contains("active")) renderTrainingReport();
             setTimeout(warmTrainingPhotoCache, 300);
         })
         .subscribe();
@@ -3750,7 +3787,6 @@ async function loadData() {
             // Executa as consultas ao banco de dados em paralelo usando Promise.all para máxima velocidade de carregamento
             const [
                 catsResult,
-                countResult,
                 tasksResult,
                 compTodayResult,
                 compBeforeResult,
@@ -3758,11 +3794,10 @@ async function loadData() {
                 sharesCollabResult,
                 sharedNotificationsResult
             ] = await Promise.all([
-                supabaseClient.from('categories').select('*').eq('is_active', true),
-                supabaseClient.from('categories').select('*', { count: 'exact', head: true }),
-                supabaseClient.from('tasks').select('*').eq('is_active', true),
-                supabaseClient.from('completions').select('*').eq('date', selectedDateAtFetchStart),
-                supabaseClient.from('completions').select('task_id, date, completed').lt('date', selectedDateAtFetchStart),
+                supabaseClient.from('categories').select('id,name,user_id,is_active,type,sort_order').eq('is_active', true),
+                supabaseClient.from('tasks').select('id,title,category,category_id,user_id,is_recurring,is_active,created_at,repeat_days,assigned_to,context').eq('is_active', true),
+                supabaseClient.from('completions').select('task_id,date,completed').eq('date', selectedDateAtFetchStart),
+                supabaseClient.from('completions').select('task_id,date,completed').lt('date', selectedDateAtFetchStart).eq('completed', true),
                 supabaseClient.from('category_shares').select('*').eq('owner_id', currentUser.id).then(r => r, err => {
                     console.warn("Tabela 'category_shares' não encontrada ou inacessível ao buscar proprietário.", err);
                     return { data: [], error: null };
@@ -3786,9 +3821,6 @@ async function loadData() {
 
             let dbCats = catsResult.data || [];
             const errCats = catsResult.error;
-            
-            const count = countResult.count;
-            const errCount = countResult.error;
             
             let dbTasks = tasksResult.data || [];
             const errTasks = tasksResult.error;
@@ -6639,7 +6671,7 @@ async function pullCassolDashboardTasks(force = false) {
     if (cassolDashboardPullInProgress || !supabaseClient || !currentUser || !navigator.onLine) return;
     if (document.visibilityState !== "visible" && !force) return;
     const now = Date.now();
-    if (!force && now - cassolDashboardLastPullAt < CASSOL_DASHBOARD_PULL_INTERVAL_MS - 500) return;
+    if (!force && now - cassolDashboardLastPullAt < CASSOL_DASHBOARD_RECONCILE_INTERVAL_MS) return;
     // Dá prioridade à alteração recém-feita no Checklist, para que uma leitura
     // do dashboard ainda desatualizada nunca sobrescreva a ação do usuário.
     if (!force && now - cassolDashboardLastPushAt < CASSOL_DASHBOARD_LOCAL_CHANGE_GUARD_MS) return;
@@ -6712,7 +6744,7 @@ async function startCassolDashboardRealtimeListener() {
         cassolFirebaseRealtimeStarted = true;
         console.log("[Cassol dashboard] Escuta direta do Firebase conectada.");
     } catch (error) {
-        console.warn("[Cassol dashboard] Escuta direta indisponível; mantendo o cron:", error?.message || error);
+        console.warn("[Cassol dashboard] Escuta direta indisponível; a reconciliação ocorrerá na próxima abertura:", error?.message || error);
     } finally {
         cassolDashboardRealtimeStartPending = false;
     }
@@ -6732,10 +6764,8 @@ window.requestCassolDashboardRealtimePull = function requestCassolDashboardRealt
 };
 
 function startCassolDashboardPulling() {
-    if (cassolDashboardPullTimer) return;
-    cassolDashboardPullTimer = setInterval(() => pullCassolDashboardTasks(), CASSOL_DASHBOARD_PULL_INTERVAL_MS);
+    if (cassolDashboardLastPullAt) return;
     setTimeout(() => pullCassolDashboardTasks(true), 900);
-    startCassolDashboardRealtimeListener();
 }
 
 function saveCompletionOffline(taskId, date, completed) {
@@ -9875,13 +9905,10 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
         });
 
         if (madeChanges) {
-            // A fila já foi confirmada no Supabase. Não espera a recarga
-            // completa (categorias, tarefas e histórico) para liberar o
-            // indicador de sincronização; ela é apenas uma revalidação.
-            console.log("[Sync] Alterações confirmadas. Revalidando dados em segundo plano...");
-            loadChecklistAndProgress(false).catch(error => {
-                console.warn("[Sync] Revalidação pós-salvamento indisponível:", error.message);
-            });
+            // O cache otimista e o Realtime já contêm a versão confirmada.
+            // Recarregar categorias, tarefas, compartilhamentos e histórico
+            // após cada ação multiplicava o egress sem acrescentar dados.
+            console.log("[Sync] Alterações confirmadas; cache local mantido pelo Realtime.");
         } else {
             console.log("[Sync] Nenhuma alteração pendente de sincronização primária.");
         }
