@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.95";
+const SERVICE_WORKER_URL = "./sw.js?v=10.96";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -7165,24 +7165,17 @@ async function deleteTask(id) {
     const dashboardTask = isCassolDashboardTask(existingTask);
     if ([...pendingDeletes].some(pendingId => String(pendingId) === taskId)) return;
     pendingDeletes.add(taskId);
-
-    try {
-        await runConfirmedTaskMutation(
-            session => deleteChecklistTaskDirectly(session, id),
-            "Exclusão da tarefa",
-            15000
-        );
-    } catch (error) {
-        pendingDeletes.delete(taskId);
-        return;
-    }
-
     beginOptimisticMutation();
     tasks = tasks.filter(t => String(t.id) !== String(id));
     allActiveTasks = allActiveTasks.filter(t => String(t.id) !== String(id));
     
     // Salva no LocalStorage
     deleteTaskOffline(id);
+
+    // A exclusão principal e o espelhamento seguem em paralelo. A fila mantém
+    // is_active=false até o Supabase confirmar, sem recolocar o cartão ou
+    // exibir um erro falso quando a resposta apenas estiver lenta.
+    enqueueTaskCloudUpdate(id, { is_active: false }, "exclusão-imediata");
 
     if (dashboardTask) queueCassolDashboardTaskSync(id, { operation: "delete" });
 
