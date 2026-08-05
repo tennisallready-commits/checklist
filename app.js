@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.96";
+const SERVICE_WORKER_URL = "./sw.js?v=10.97";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -6851,6 +6851,16 @@ async function insertTaskWithCategoryFallback(taskPayload) {
     return result;
 }
 
+function cloudRequestWithTimeout(request, timeoutMs = 10000) {
+    return Promise.race([
+        Promise.resolve(request),
+        new Promise((_, reject) => setTimeout(
+            () => reject(new Error("A confirmação está demorando; nova tentativa automática agendada.")),
+            timeoutMs
+        )),
+    ]);
+}
+
 function isCollaborativeCategory(categoryId) {
     if (!categoryId) return false;
     const category = categories.find(item =>
@@ -9696,18 +9706,18 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
             }
             let realTask = null;
             if (shouldRecoverPreviousInsert) {
-                const recovered = await supabaseClient.from("tasks")
+                const recovered = await cloudRequestWithTimeout(supabaseClient.from("tasks")
                     .select("*")
                     .eq("user_id", currentUser.id)
                     .contains("context", { sync_token: pendingContext.sync_token })
                     .limit(1)
-                    .maybeSingle();
+                    .maybeSingle());
                 if (recovered.error) throw recovered.error;
                 realTask = recovered.data || null;
             }
             let createdNow = false;
             if (!realTask) {
-                const { data, error } = await insertTaskWithCategoryFallback(newTaskPayload);
+                const { data, error } = await cloudRequestWithTimeout(insertTaskWithCategoryFallback(newTaskPayload));
                 if (error) throw error;
                 realTask = data?.[0] || null;
                 createdNow = Boolean(realTask);
@@ -9930,7 +9940,11 @@ async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
         if (navigator.onLine) {
             const errorDetail = e && e.message ? e.message : "Falha desconhecida";
             cloudSyncLastError = errorDetail;
-            setSyncStatus("error", "Erro ao sincronizar", `Não foi possível sincronizar: ${errorDetail}`);
+            if (/nova tentativa automática|confirmação está demorando/i.test(errorDetail)) {
+                setSyncStatus("pending", "Salvo", errorDetail);
+            } else {
+                setSyncStatus("error", "Erro ao sincronizar", `Não foi possível sincronizar: ${errorDetail}`);
+            }
         } else {
             refreshSyncStatusFromQueues();
         }
