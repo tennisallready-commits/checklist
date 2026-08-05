@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.93";
+const SERVICE_WORKER_URL = "./sw.js?v=10.94";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -5810,43 +5810,22 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
 
     const task = tasks.find(t => String(t.id) === String(id));
     if (!task) return;
-    const dashboardTask = isCassolDashboardTask(task);
-
     // Impede que uma leitura do Dashboard iniciada antes deste toque devolva
     // o estado anterior enquanto o check ainda está a caminho da integração.
-    if (dashboardTask) cassolDashboardLastPushAt = Date.now();
+    if (isCassolDashboardTask(task)) cassolDashboardLastPushAt = Date.now();
 
-    try {
-        await runConfirmedTaskMutation(
-            session => writeCompletionDirectly(session, id, selectedDate, completed),
-            completed ? "Conclusão da tarefa" : "Remoção do check",
-            15000
-        );
-    } catch (error) {
-        tasks = tasks.map(item => String(item.id) === String(id) ? { ...item, completed: wasCompleted } : item);
-        pendingCompletionAnimationTaskId = null;
-        renderChecklist();
-        updateProgress();
-        return false;
-    } finally {
-        pendingToggles.delete(pendingId);
-    }
-
+    // Persiste imediatamente no cache e na fila idempotente. O check não deve
+    // ser revertido só porque a resposta HTTP demorou: com internet, o envio
+    // começa agora e continua sendo repetido até o Supabase confirmar.
     let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
     localCompletions = localCompletions.filter(item => !(String(item.task_id) === String(id) && item.date === selectedDate));
     if (completed) localCompletions.push({ task_id: id, date: selectedDate, completed: true });
     localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
-
-    // A confirmação do Supabase libera a interface. O espelhamento no
-    // Dashboard acontece fora do caminho principal e pode ser repetido sem
-    // bloquear o check.
-    if (dashboardTask) {
-        queueCassolDashboardTaskSync(id, {
-            operation: "completion",
-            date: selectedDate,
-            completed
-        });
-    }
+    const completionQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+    completionQueue[`${pendingId}_${selectedDate}`] = completed;
+    localStorage.setItem("offline_completions_queue", JSON.stringify(completionQueue));
+    setSyncStatus("syncing", "Salvando…", "Check salvo neste aparelho e sendo confirmado pelo servidor");
+    syncCompletionImmediately(id, selectedDate, completed);
     return true;
 }
 
@@ -5874,7 +5853,13 @@ function syncCompletionImmediately(taskId, date, completed) {
                 { onConflict: "task_id,date" }
             )
             : supabaseClient.from("completions").delete().eq("task_id", taskId).eq("date", date);
-        const { error } = await query;
+        const { error } = await Promise.race([
+            query,
+            new Promise((_, reject) => setTimeout(
+                () => reject(new Error("Confirmação ainda pendente; será tentada novamente.")),
+                8000
+            )),
+        ]);
         if (error) throw error;
         clearQueuedEntryIfCurrent("offline_completions_queue", queueKey, queuedValue);
 
