@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.91";
+const SERVICE_WORKER_URL = "./sw.js?v=10.92";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -3736,6 +3736,13 @@ function subscribeToCollaborationUpdates() {
             await ensureCollaborationProfile(notification.actor_id);
             if (!sharedTaskNotifications.some(item => String(item.id) === String(notification.id))) {
                 sharedTaskNotifications.unshift(notification);
+            }
+            // A notificação e a tarefa são entregues por eventos Realtime
+            // independentes. Busca a tarefa pelo ID da notificação para não
+            // deixar a tela presa no cache antigo quando o evento de tasks
+            // chegar depois ou não for entregue pelo navegador.
+            if (notification.task_id) {
+                await primeTaskFromPush(notification.task_id, { navigate: false });
             }
             updateCollaborationInviteAttention();
             if (areNotificationsEnabled()) showSharedTaskAlert(notification);
@@ -7853,7 +7860,7 @@ function highlightRenderedTask(taskId) {
     return true;
 }
 
-async function primeTaskFromPush(taskId, { openCategory = false } = {}) {
+async function primeTaskFromPush(taskId, { openCategory = false, navigate = true } = {}) {
     if (!taskId) return null;
     let targetTask = (allActiveTasks || []).find(task => String(task.id) === String(taskId)) || null;
     if (supabaseClient && currentUser) {
@@ -7879,15 +7886,19 @@ async function primeTaskFromPush(taskId, { openCategory = false } = {}) {
         }
     }
 
-    selectedDate = extractDateFromTimestamp(targetTask.created_at);
-    currentFilter = openCategory && targetTask.category ? targetTask.category : "all";
+    if (navigate) {
+        selectedDate = extractDateFromTimestamp(targetTask.created_at);
+        currentFilter = openCategory && targetTask.category ? targetTask.category : "all";
+    }
     loadDataOffline();
-    updateDateDisplay();
+    if (navigate) updateDateDisplay();
     renderCategories();
     renderChecklist();
     updateProgress();
-    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    highlightRenderedTask(taskId);
+    if (navigate) {
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        highlightRenderedTask(taskId);
+    }
     return targetTask;
 }
 
