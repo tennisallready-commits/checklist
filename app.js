@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.82";
+const SERVICE_WORKER_URL = "./sw.js?v=10.83";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -44,7 +44,7 @@ const LEGACY_AUTO_SEEDED_CATEGORIES = ["Tio Nan", "Cassol", "PUCRS"];
 const CASSOL_DASHBOARD_SYNC_QUEUE_KEY = "cassol_dashboard_sync_queue";
 const CASSOL_DASHBOARD_CATEGORY_NAMES = new Set(["cassol", "leia cassol", "gc estrategias"]);
 const CASSOL_DASHBOARD_PULL_INTERVAL_MS = 15000;
-const CASSOL_DASHBOARD_LOCAL_CHANGE_GUARD_MS = 15000;
+const CASSOL_DASHBOARD_LOCAL_CHANGE_GUARD_MS = 2500;
 let cassolDashboardSyncTimer = null;
 let cassolDashboardSyncInProgress = false;
 let cassolDashboardPullTimer = null;
@@ -6472,6 +6472,39 @@ async function syncCassolDashboardTaskQueue() {
     return succeeded;
 }
 
+async function invokeCassolDashboardPullDirectly() {
+    const { data: sessionData, error: sessionError } = await supabaseClient.auth.getSession();
+    if (sessionError || !sessionData?.session?.access_token) {
+        throw sessionError || new Error("Sessão do Checklist indisponível.");
+    }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    try {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/sync-cassol-dashboard`, {
+            method: "POST",
+            headers: {
+                apikey: SUPABASE_KEY,
+                Authorization: `Bearer ${sessionData.session.access_token}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ operation: "pull" }),
+            cache: "no-store",
+            signal: controller.signal,
+        });
+        let payload = {};
+        try { payload = await response.json(); } catch (_) {}
+        if (!response.ok || payload?.error) {
+            throw new Error(payload?.error || `A sincronização respondeu HTTP ${response.status}.`);
+        }
+        return payload;
+    } catch (error) {
+        if (error?.name === "AbortError") throw new Error("A importação do Dashboard excedeu 12 segundos.");
+        throw error;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
 // Uma tarefa pode ter sido excluída localmente e, depois, atribuída novamente
 // no Dashboard. Nesse caso o servidor a reativa, mas o cache mantém a marca
 // temporária de exclusão por até 24 horas. Limpamos apenas os IDs confirmados
@@ -6506,20 +6539,14 @@ async function pullCassolDashboardTasks(force = false) {
     if (cassolDashboardPullInProgress || !supabaseClient || !currentUser || !navigator.onLine) return;
     if (document.visibilityState !== "visible" && !force) return;
     const now = Date.now();
-    const pendingDashboardPush = Object.keys(JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {}).length > 0;
-    if (pendingDashboardPush) return;
     if (!force && now - cassolDashboardLastPullAt < CASSOL_DASHBOARD_PULL_INTERVAL_MS - 500) return;
     // Dá prioridade à alteração recém-feita no Checklist, para que uma leitura
     // do dashboard ainda desatualizada nunca sobrescreva a ação do usuário.
-    if (now - cassolDashboardLastPushAt < CASSOL_DASHBOARD_LOCAL_CHANGE_GUARD_MS) return;
+    if (!force && now - cassolDashboardLastPushAt < CASSOL_DASHBOARD_LOCAL_CHANGE_GUARD_MS) return;
     cassolDashboardPullInProgress = true;
     cassolDashboardLastPullAt = now;
     try {
-        const { data, error } = await supabaseClient.functions.invoke("sync-cassol-dashboard", { body: { operation: "pull" } });
-        if (error || data?.error) {
-            console.warn("Não foi possível buscar as tarefas da Editora Cassol agora:", error?.message || data?.error);
-            return;
-        }
+        const data = await invokeCassolDashboardPullDirectly();
         const restoredLocally = restoreCassolTasksReassignedByDashboard(data?.active_task_ids);
         const changes = Number(data?.created || 0) + Number(data?.updated || 0);
         if (changes > 0 || restoredLocally) {
@@ -6596,8 +6623,7 @@ window.requestCassolDashboardRealtimePull = function requestCassolDashboardRealt
     clearTimeout(cassolDashboardRealtimePullTimer);
     cassolDashboardRealtimePullTimer = setTimeout(async () => {
         cassolDashboardRealtimePullTimer = null;
-        const pendingPushes = Object.keys(JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {}).length > 0;
-        if (cassolDashboardPullInProgress || pendingPushes) {
+        if (cassolDashboardPullInProgress) {
             window.requestCassolDashboardRealtimePull();
             return;
         }
