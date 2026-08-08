@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.99";
+const SERVICE_WORKER_URL = "./sw.js?v=11.01";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -297,31 +297,56 @@ function getCurrentReminderTime() {
     return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 }
 
-function updateTaskReminderSummary(mode, enabled, time, offsetDays) {
+function normalizeTaskReminders(value) {
+    const context = value && !Array.isArray(value) ? parseTaskContextValue(value.context || value) : {};
+    const source = Array.isArray(value) ? value : (Array.isArray(context.reminders) ? context.reminders : []);
+    const reminders = source.map(item => ({
+        time: String(item?.time || item?.reminder_time || "").slice(0, 5),
+        offset_days: [0, 1, 7].includes(Number(item?.offset_days ?? item?.offsetDays)) ? Number(item.offset_days ?? item.offsetDays) : 0,
+    })).filter(item => /^([01]\d|2[0-3]):[0-5]\d$/.test(item.time));
+    if (!reminders.length && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(context.reminder_time || "").slice(0, 5))) {
+        reminders.push({ time: String(context.reminder_time).slice(0, 5), offset_days: [1, 7].includes(Number(context.reminder_offset_days)) ? Number(context.reminder_offset_days) : 0 });
+    }
+    return [...new Map(reminders.map(item => [`${item.offset_days}:${item.time}`, item])).values()]
+        .sort((a, b) => b.offset_days - a.offset_days || a.time.localeCompare(b.time));
+}
+
+function reminderOffsetLabel(offsetDays) {
+    return Number(offsetDays) === 7 ? "7 dias antes" : Number(offsetDays) === 1 ? "1 dia antes" : "No mesmo dia";
+}
+
+function updateTaskReminderSummary(mode, enabled, reminders) {
     const element = document.getElementById(mode === "edit" ? "edit-task-reminder-summary" : "task-reminder-summary");
     if (!element) return;
-    element.textContent = enabled
-        ? `${Number(offsetDays) === 1 ? "1 dia antes" : "No mesmo dia"} às ${time}`
+    const list = normalizeTaskReminders(reminders);
+    element.textContent = enabled && list.length
+        ? (list.length === 1 ? `${reminderOffsetLabel(list[0].offset_days)} às ${list[0].time}` : `${list.length} lembretes configurados`)
         : "Lembrar sobre esta tarefa";
     element.classList.toggle("configured", enabled);
 }
 
-let addTaskReminderTime = getCurrentReminderTime();
-let editTaskReminderTime = getCurrentReminderTime();
-let addTaskReminderOffsetDays = 0;
-let editTaskReminderOffsetDays = 0;
+let addTaskReminders = [];
+let editTaskReminders = [];
 
-function chooseTaskReminderTime(currentValue = "08:00", currentOffsetDays = 0) {
+function chooseTaskReminders(currentReminders = []) {
     return new Promise(resolve => {
         const layer = document.createElement("div");
         layer.className = "reminder-picker-layer";
         const presets = [{ time: "08:00", label: "Início da manhã", icon: "sunrise" }, { time: "12:00", label: "Hora do almoço", icon: "sun" }, { time: "18:00", label: "Fim da tarde", icon: "sunset" }, { time: "21:00", label: "À noite", icon: "moon" }];
-        layer.innerHTML = `<div class="reminder-picker-backdrop"></div><div class="reminder-picker-card" role="dialog" aria-modal="true"><div class="reminder-picker-icon"><i data-lucide="alarm-clock"></i></div><h3>Quando deseja ser lembrado?</h3><p>Escolha o dia e o horário do lembrete.</p><div class="reminder-day-choice"><button type="button" data-offset="0" class="${currentOffsetDays === 0 ? "selected" : ""}">No mesmo dia</button><button type="button" data-offset="1" class="${currentOffsetDays === 1 ? "selected" : ""}">1 dia antes</button></div><div class="reminder-preset-grid">${presets.map(item => `<button type="button" data-time="${item.time}" class="${currentValue === item.time ? "selected" : ""}"><i data-lucide="${item.icon}"></i><strong>${item.time}</strong><span>${item.label}</span></button>`).join("")}</div><label class="reminder-custom-label">Outro horário<input class="reminder-custom-time" type="time" value="${escapeHTML(currentValue)}"></label><div class="reminder-picker-actions"><button type="button" class="btn reminder-cancel">Cancelar</button><button type="button" class="btn btn-primary reminder-confirm">Salvar lembrete</button></div></div>`;
+        layer.innerHTML = `<div class="reminder-picker-backdrop"></div><div class="reminder-picker-card" role="dialog" aria-modal="true"><div class="reminder-picker-icon"><i data-lucide="alarm-clock"></i></div><h3>Quando deseja ser lembrado?</h3><p>Adicione uma ou mais notificações para esta tarefa.</p><div class="reminder-configured-list"></div><div class="reminder-day-choice"><button type="button" data-offset="0" class="selected">No mesmo dia</button><button type="button" data-offset="1">1 dia antes</button><button type="button" data-offset="7">7 dias antes</button></div><div class="reminder-preset-grid">${presets.map(item => `<button type="button" data-time="${item.time}" class="${item.time === "08:00" ? "selected" : ""}"><i data-lucide="${item.icon}"></i><strong>${item.time}</strong><span>${item.label}</span></button>`).join("")}</div><label class="reminder-custom-label">Outro horário<input class="reminder-custom-time" type="time" value="08:00"></label><button type="button" class="btn reminder-add"><i data-lucide="plus"></i>Adicionar notificação</button><div class="reminder-picker-actions"><button type="button" class="btn reminder-cancel">Cancelar</button><button type="button" class="btn btn-primary reminder-confirm">Concluir</button></div></div>`;
         document.body.appendChild(layer);
         if (window.lucide) window.lucide.createIcons();
-        let selectedTime = currentValue;
-        let selectedOffsetDays = currentOffsetDays;
+        let reminders = normalizeTaskReminders(currentReminders);
+        let selectedTime = "08:00";
+        let selectedOffsetDays = 0;
         const customInput = layer.querySelector(".reminder-custom-time");
+        const list = layer.querySelector(".reminder-configured-list");
+        const renderList = () => {
+            list.innerHTML = reminders.length ? reminders.map((item, index) => `<div><span><strong>${reminderOffsetLabel(item.offset_days)}</strong><small>às ${item.time}</small></span><button type="button" data-remove-reminder="${index}" aria-label="Remover lembrete"><i data-lucide="x"></i></button></div>`).join("") : `<small class="reminder-list-empty">Nenhuma notificação adicionada</small>`;
+            list.querySelectorAll("[data-remove-reminder]").forEach(button => button.addEventListener("click", () => { reminders.splice(Number(button.dataset.removeReminder), 1); renderList(); }));
+            if (window.lucide) window.lucide.createIcons();
+        };
+        renderList();
         layer.querySelectorAll("[data-time]").forEach(button => button.addEventListener("click", () => {
             selectedTime = button.dataset.time;
             customInput.value = selectedTime;
@@ -335,7 +360,12 @@ function chooseTaskReminderTime(currentValue = "08:00", currentOffsetDays = 0) {
         const finish = value => { layer.classList.remove("visible"); setTimeout(() => layer.remove(), 240); resolve(value); };
         layer.querySelector(".reminder-cancel").addEventListener("click", () => finish(null));
         layer.querySelector(".reminder-picker-backdrop").addEventListener("click", () => finish(null));
-        layer.querySelector(".reminder-confirm").addEventListener("click", () => finish({ time: selectedTime || "08:00", offsetDays: selectedOffsetDays }));
+        layer.querySelector(".reminder-add").addEventListener("click", () => {
+            const reminder = { time: selectedTime || "08:00", offset_days: selectedOffsetDays };
+            reminders = normalizeTaskReminders([...reminders, reminder]);
+            renderList();
+        });
+        layer.querySelector(".reminder-confirm").addEventListener("click", () => finish(reminders));
         requestAnimationFrame(() => layer.classList.add("visible"));
     });
 }
@@ -2187,12 +2217,13 @@ function setupEventListeners() {
         chkImportant.addEventListener("change", async () => {
             if (chkImportant.checked) {
                 requestNotificationPermission();
-                addTaskReminderTime = getCurrentReminderTime();
-                const reminder = await chooseTaskReminderTime(addTaskReminderTime, addTaskReminderOffsetDays);
-                if (!reminder) chkImportant.checked = false;
-                else { addTaskReminderTime = reminder.time; addTaskReminderOffsetDays = reminder.offsetDays; }
+                const reminders = await chooseTaskReminders(addTaskReminders.length ? addTaskReminders : [{ time: getCurrentReminderTime(), offset_days: 0 }]);
+                if (!reminders || !reminders.length) chkImportant.checked = false;
+                else addTaskReminders = reminders;
+            } else {
+                addTaskReminders = [];
             }
-            updateTaskReminderSummary("add", chkImportant.checked, addTaskReminderTime, addTaskReminderOffsetDays);
+            updateTaskReminderSummary("add", chkImportant.checked, addTaskReminders);
         });
     }
 
@@ -2201,13 +2232,31 @@ function setupEventListeners() {
         chkEditImportant.addEventListener("change", async () => {
             if (chkEditImportant.checked) {
                 requestNotificationPermission();
-                const reminder = await chooseTaskReminderTime(editTaskReminderTime, editTaskReminderOffsetDays);
-                if (!reminder) chkEditImportant.checked = false;
-                else { editTaskReminderTime = reminder.time; editTaskReminderOffsetDays = reminder.offsetDays; }
+                const reminders = await chooseTaskReminders(editTaskReminders.length ? editTaskReminders : [{ time: getCurrentReminderTime(), offset_days: 0 }]);
+                if (!reminders || !reminders.length) chkEditImportant.checked = false;
+                else editTaskReminders = reminders;
+            } else {
+                editTaskReminders = [];
             }
-            updateTaskReminderSummary("edit", chkEditImportant.checked, editTaskReminderTime, editTaskReminderOffsetDays);
+            updateTaskReminderSummary("edit", chkEditImportant.checked, editTaskReminders);
         });
     }
+
+    const setupReminderSummaryEditor = (summaryId, checkbox, getReminders, setReminders, mode) => {
+        const summary = document.getElementById(summaryId);
+        if (!summary || !checkbox) return;
+        summary.title = "Editar notificações";
+        summary.addEventListener("click", async () => {
+            const reminders = await chooseTaskReminders(getReminders().length ? getReminders() : [{ time: getCurrentReminderTime(), offset_days: 0 }]);
+            if (reminders === null) return;
+            setReminders(reminders);
+            checkbox.checked = reminders.length > 0;
+            if (checkbox.checked) requestNotificationPermission();
+            updateTaskReminderSummary(mode, checkbox.checked, reminders);
+        });
+    };
+    setupReminderSummaryEditor("task-reminder-summary", chkImportant, () => addTaskReminders, value => { addTaskReminders = value; }, "add");
+    setupReminderSummaryEditor("edit-task-reminder-summary", chkEditImportant, () => editTaskReminders, value => { editTaskReminders = value; }, "edit");
 
     const autoResizeTextarea = (input) => {
         if (!input) return;
@@ -2287,9 +2336,8 @@ function setupEventListeners() {
             // Limpa seleção de turnos
             document.querySelectorAll("#add-shift-selector .shift-toggle-btn").forEach(b => b.classList.remove("active"));
             if (chkImp) chkImp.checked = false;
-            addTaskReminderTime = getCurrentReminderTime();
-            addTaskReminderOffsetDays = 0;
-            updateTaskReminderSummary("add", false, addTaskReminderTime, addTaskReminderOffsetDays);
+            addTaskReminders = [];
+            updateTaskReminderSummary("add", false, addTaskReminders);
             selectTaskRecurring.value = "once";
             closeModal(modalAddTask);
         } catch (error) {
@@ -2382,10 +2430,13 @@ function setupEventListeners() {
         if (chkEditImp) {
             context.important = chkEditImp.checked;
             if (chkEditImp.checked) {
-                context.reminder_time = editTaskReminderTime;
-                context.reminder_offset_days = editTaskReminderOffsetDays;
+                context.reminders = normalizeTaskReminders(editTaskReminders);
+                const firstReminder = context.reminders[0];
+                context.reminder_time = firstReminder.time;
+                context.reminder_offset_days = firstReminder.offset_days;
                 context.reminder_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
             } else {
+                delete context.reminders;
                 delete context.reminder_time;
                 delete context.reminder_offset_days;
                 delete context.reminder_timezone;
@@ -5257,18 +5308,23 @@ function updateTaskCreationOnboarding() {
     document.body.classList.toggle("task-onboarding-visible", shouldShow);
 }
 
+function getTaskReminderDateTimes(task, occurrenceDate = selectedDate) {
+    if (!occurrenceDate) return [];
+    return normalizeTaskReminders(task).map(reminder => {
+        const reminderAt = new Date(`${occurrenceDate}T${reminder.time}:00`);
+        reminderAt.setDate(reminderAt.getDate() - reminder.offset_days);
+        return reminderAt;
+    }).filter(date => !Number.isNaN(date.getTime()));
+}
+
 function getTaskReminderDateTime(task, occurrenceDate = selectedDate) {
-    const reminderTime = task?.context?.reminder_time;
-    if (!reminderTime || !occurrenceDate) return null;
-    const reminderAt = new Date(`${occurrenceDate}T${reminderTime}:00`);
-    if (Number(task.context.reminder_offset_days) === 1) reminderAt.setDate(reminderAt.getDate() - 1);
-    return Number.isNaN(reminderAt.getTime()) ? null : reminderAt;
+    const dates = getTaskReminderDateTimes(task, occurrenceDate);
+    return dates.find(date => date.getTime() > Date.now()) || dates[0] || null;
 }
 
 function hasPendingTaskReminder(task, occurrenceDate = selectedDate) {
     const important = task?.context?.important === true || task?.context?.important === "true";
-    const reminderAt = getTaskReminderDateTime(task, occurrenceDate);
-    return important && reminderAt && reminderAt.getTime() > Date.now();
+    return important && getTaskReminderDateTimes(task, occurrenceDate).some(date => date.getTime() > Date.now());
 }
 
 function refreshExpiredReminderIndicators() {
@@ -5292,6 +5348,7 @@ function createTaskDOMElement(task) {
     const taskDescription = String(task.context?.description || "").trim();
     const reminderAt = getTaskReminderDateTime(task);
     const showReminderIndicator = hasPendingTaskReminder(task);
+    const reminderCount = normalizeTaskReminders(task).length;
     
     // Exception for completing night shift tasks of the previous day during the morning (before 12 PM)
     const now = new Date();
@@ -5336,7 +5393,7 @@ function createTaskDOMElement(task) {
                     <span class="task-tag" style="${tagStyle}">${escapeHTML(task.category)}</span>
                     <span class="task-tag" style="background: rgba(255,255,255,0.02);">${getRecurrenceLabel(task)}</span>
                     ${showReminderIndicator ? `
-                        <span class="task-reminder-indicator" data-reminder-at="${reminderAt.getTime()}" title="Lembrete programado para ${escapeHTML(task.context.reminder_time)}" aria-label="Lembrete programado para ${escapeHTML(task.context.reminder_time)}">
+                        <span class="task-reminder-indicator" data-reminder-at="${reminderAt.getTime()}" title="${reminderCount} ${reminderCount === 1 ? 'notificação programada' : 'notificações programadas'}" aria-label="${reminderCount} ${reminderCount === 1 ? 'notificação programada' : 'notificações programadas'}">
                             <i data-lucide="alarm-clock"></i>
                         </span>
                     ` : ''}
@@ -6921,8 +6978,12 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
     if (description && description.trim()) context.description = description.trim();
     if (important) {
         context.important = true;
-        context.reminder_time = reminderTime || addTaskReminderTime;
-        context.reminder_offset_days = reminderTime ? (Number(reminderOffsetDays) === 1 ? 1 : 0) : addTaskReminderOffsetDays;
+        context.reminders = normalizeTaskReminders(reminderTime
+            ? [{ time: reminderTime, offset_days: reminderOffsetDays }]
+            : addTaskReminders);
+        if (!context.reminders.length) context.reminders = [{ time: getCurrentReminderTime(), offset_days: 0 }];
+        context.reminder_time = context.reminders[0].time;
+        context.reminder_offset_days = context.reminders[0].offset_days;
         context.reminder_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
     }
     if (currentUser) {
@@ -7268,10 +7329,9 @@ function openEditTaskModal(task) {
 
     const chkEditImp = document.getElementById("edit-task-important");
     if (chkEditImp) {
-        chkEditImp.checked = task.context && (task.context.important === true || task.context.important === "true");
-        editTaskReminderTime = task.context && task.context.reminder_time ? task.context.reminder_time : getCurrentReminderTime();
-        editTaskReminderOffsetDays = task.context && Number(task.context.reminder_offset_days) === 1 ? 1 : 0;
-        updateTaskReminderSummary("edit", chkEditImp.checked, editTaskReminderTime, editTaskReminderOffsetDays);
+        editTaskReminders = normalizeTaskReminders(task);
+        chkEditImp.checked = Boolean(task.context && (task.context.important === true || task.context.important === "true") && editTaskReminders.length);
+        updateTaskReminderSummary("edit", chkEditImp.checked, editTaskReminders);
     }
     
     openModal(modalEditTask);
@@ -8194,6 +8254,7 @@ async function openTaskReminderAction(taskId) {
         try {
             await updateTaskReminderContext(taskId, context => {
                 context.important = false;
+                delete context.reminders;
                 delete context.reminder_time;
                 delete context.reminder_offset_days;
                 delete context.reminder_timezone;
@@ -8231,6 +8292,7 @@ async function openTaskReminderAction(taskId) {
         try {
             await updateTaskReminderContext(taskId, context => {
                 context.important = true;
+                context.reminders = [{ time: reminderTime, offset_days: 0 }];
                 context.reminder_time = reminderTime;
                 context.reminder_offset_days = 0;
                 context.reminder_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
@@ -10241,7 +10303,40 @@ async function renderCalendarGrid() {
             btn.classList.add("today");
         }
 
-        btn.textContent = i;
+        const dayNumber = document.createElement("span");
+        dayNumber.className = "calendar-day-number";
+        dayNumber.textContent = i;
+        btn.appendChild(dayNumber);
+
+        const categoryTasks = (allActiveTasks || []).filter(task =>
+            task.is_active !== false
+            && !isTrainingCategory(task.category)
+            && taskWasPlannedOnDate(task, new Date(`${dateStr}T12:00:00`), dateStr)
+        );
+        if (categoryTasks.length) {
+            btn.classList.add("has-category-tasks");
+            const markers = document.createElement("span");
+            markers.className = "calendar-task-markers";
+            const visibleTasks = categoryTasks.slice(0, 3);
+            visibleTasks.forEach(task => {
+                const marker = document.createElement("i");
+                const categoryStyle = getCategoryColorStyle(task.category);
+                marker.className = "calendar-task-marker";
+                marker.style.setProperty("--calendar-task-color", categoryStyle.color);
+                marker.title = `${task.title} · ${task.category}`;
+                marker.setAttribute("aria-label", `${task.title}, categoria ${task.category}`);
+                markers.appendChild(marker);
+            });
+            if (categoryTasks.length > visibleTasks.length) {
+                const remainder = document.createElement("small");
+                remainder.className = "calendar-task-more";
+                remainder.textContent = `+${categoryTasks.length - visibleTasks.length}`;
+                remainder.title = `${categoryTasks.length - visibleTasks.length} tarefas adicionais`;
+                markers.appendChild(remainder);
+            }
+            btn.title = categoryTasks.map(task => `${task.title} (${task.category})`).join("\n");
+            btn.appendChild(markers);
+        }
 
         btn.addEventListener("click", async () => {
             selectedDate = dateStr;
@@ -11889,14 +11984,18 @@ async function checkImportantTaskNotifications() {
         const isImportant = task.context && (task.context.important === true || task.context.important === "true");
         if (!isImportant) return;
 
-        if (task.context.reminder_time) {
-            const reminderTime = task.context.reminder_time;
-            const offsetDays = Number(task.context.reminder_offset_days) === 1 ? 1 : 0;
-            const reminderDateTime = new Date(`${targetDateStr}T${reminderTime}:00`);
-            reminderDateTime.setDate(reminderDateTime.getDate() - offsetDays);
-            const reminderKey = `reminder-${task.id}-${targetDateStr}-${reminderTime}`;
-            if (now >= reminderDateTime && now.getTime() - reminderDateTime.getTime() < 60 * 60 * 1000 && !shownAlerts[reminderKey]) {
-                await notifyOnce(reminderKey, "⏰ Lembrete de tarefa", offsetDays === 1 ? `Amanhã: “${task.title}”.` : `Está na hora de “${task.title}”.`, task.id, "task-reminder");
+        const configuredReminders = normalizeTaskReminders(task);
+        if (configuredReminders.length) {
+            for (const reminder of configuredReminders) {
+                const reminderDateTime = new Date(`${targetDateStr}T${reminder.time}:00`);
+                reminderDateTime.setDate(reminderDateTime.getDate() - reminder.offset_days);
+                const reminderKey = `reminder-${task.id}-${targetDateStr}-${reminder.offset_days}-${reminder.time}`;
+                if (now >= reminderDateTime && now.getTime() - reminderDateTime.getTime() < 60 * 60 * 1000 && !shownAlerts[reminderKey]) {
+                    const body = reminder.offset_days === 7
+                        ? `Daqui a uma semana: “${task.title}”.`
+                        : reminder.offset_days === 1 ? `Amanhã: “${task.title}”.` : `Está na hora de “${task.title}”.`;
+                    await notifyOnce(reminderKey, "⏰ Lembrete de tarefa", body, task.id, "task-reminder");
+                }
             }
             return;
         }
