@@ -4297,6 +4297,8 @@ body.theme-girly .app-container.tomorrow-mode .history-badge {
 .input-edit-cat-color { width: 34px; height: 28px; padding: 2px; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(255,255,255,.04); cursor: pointer; }
 .input-edit-cat-color:disabled { cursor: default; opacity: .65; }
 .category-color-control small { color: var(--text-muted); font-size: .58rem; }
+.category-chip-color { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: var(--category-chip-color); box-shadow: 0 0 0 2px color-mix(in srgb,var(--category-chip-color) 18%,transparent),0 1px 5px color-mix(in srgb,var(--category-chip-color) 55%,transparent); }
+.category-chip.active .category-chip-color { box-shadow: 0 0 0 2px rgba(255,255,255,.3),0 1px 6px rgba(0,0,0,.22); }
 
 /* Custom Calendar Picker Styles */
 .calendar-day {

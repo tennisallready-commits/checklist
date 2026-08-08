@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=11.03";
+const SERVICE_WORKER_URL = "./sw.js?v=11.05";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -4442,11 +4442,13 @@ function renderCategories() {
 
     categories.forEach(cat => {
         const chip = document.createElement("button");
+        const categoryColor = getCategoryColorStyle(cat.name).color;
         chip.className = `category-chip ${activeCategory === cat.name ? 'active' : ''}`;
         chip.dataset.category = cat.name;
         chip.innerHTML = `
             <i data-lucide="map-pin" class="chip-icon"></i>
             <span>${escapeHTML(cat.name)}</span>
+            <b class="category-chip-color" style="--category-chip-color:${categoryColor}" aria-hidden="true"></b>
         `;
 
         chip.setAttribute("draggable", "true");
@@ -10339,6 +10341,7 @@ async function renderCalendarGrid() {
         const categoryTasks = (allActiveTasks || []).filter(task =>
             task.is_active !== false
             && !isTrainingCategory(task.category)
+            && getTaskRecurrenceMode(task) !== "daily"
             && taskWasPlannedOnDate(task, new Date(`${dateStr}T12:00:00`), dateStr)
         );
         if (categoryTasks.length) {
