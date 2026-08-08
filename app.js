@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=11.06";
+const SERVICE_WORKER_URL = "./sw.js?v=11.07";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -10340,6 +10340,7 @@ async function renderCalendarGrid() {
 
         const categoryTasks = (allActiveTasks || []).filter(task =>
             task.is_active !== false
+            && (!isTrainingCategory(task.category) || isTrainingTaskOwnedByCurrentUser(task, true))
             && getTaskRecurrenceMode(task) !== "daily"
             && taskWasPlannedOnDate(task, new Date(`${dateStr}T12:00:00`), dateStr)
         );
