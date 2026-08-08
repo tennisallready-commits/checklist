@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.97";
+const SERVICE_WORKER_URL = "./sw.js?v=10.98";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -112,23 +112,82 @@ function normalizeCategoryName(value) {
         .replace(/\s+/g, " ").trim().toLocaleLowerCase("pt-BR");
 }
 
+function parseTaskContextValue(value) {
+    if (!value) return {};
+    if (typeof value === "string") {
+        try { return JSON.parse(value); } catch (_) { return {}; }
+    }
+    return typeof value === "object" ? value : {};
+}
+
+function getTaskIntervalDays(task) {
+    const context = parseTaskContextValue(task?.context);
+    const interval = Number(context.recurrence_interval_days || 0);
+    return context.recurrence_type === "interval" && Number.isInteger(interval) && interval > 0 ? interval : 0;
+}
+
+function calendarDayNumber(dateStr) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || ""));
+    return match ? Math.floor(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) / 86400000) : NaN;
+}
+
+function recurringTaskOccursOnDate(task, dateStr) {
+    if (!task?.is_recurring) return false;
+    const startDate = extractDateFromTimestamp(task.created_at);
+    if (!startDate || startDate > dateStr) return false;
+    const intervalDays = getTaskIntervalDays(task);
+    if (intervalDays) {
+        const elapsedDays = calendarDayNumber(dateStr) - calendarDayNumber(startDate);
+        return Number.isFinite(elapsedDays) && elapsedDays >= 0 && elapsedDays % intervalDays === 0;
+    }
+    if (Array.isArray(task.repeat_days) && task.repeat_days.length > 0) {
+        return task.repeat_days.map(Number).includes(new Date(`${dateStr}T12:00:00`).getDay());
+    }
+    return true;
+}
+
+function getTaskRecurrenceMode(task) {
+    if (!task?.is_recurring) return "once";
+    if (getTaskIntervalDays(task) === 15) return "interval15";
+    return Array.isArray(task.repeat_days) && task.repeat_days.length > 0 && task.repeat_days.length < 7 ? "repeat" : "daily";
+}
+
+function dashboardTaskIdentity(task) {
+    const context = parseTaskContextValue(task?.context);
+    const eventId = String(context.cassol_dashboard_event_id || "").trim();
+    const source = normalizeCategoryName(context.cassol_dashboard_source || "event");
+    const contentId = String(context.cassol_dashboard_content_id || "").trim();
+    const stageKey = String(context.cassol_dashboard_stage_key || "").trim();
+    const bookId = String(context.cassol_dashboard_book_id || "").trim();
+    const bookStage = Number(context.cassol_dashboard_book_stage_index);
+    const projectId = String(context.cassol_dashboard_project_id || "").trim();
+    const projectTask = Number(context.cassol_dashboard_project_task_index);
+    const syncToken = String(context.sync_token || "").trim();
+    const imported = normalizeCategoryName(context.source) === "cassol_dashboard"
+        || context.cassol_dashboard_linked === true
+        || Boolean(eventId || contentId || bookId || projectId || syncToken.startsWith("cassol-dashboard-"));
+    if (!imported) return "";
+    if (source === "content_stage" && contentId && stageKey) return `content:${contentId}:${stageKey}`;
+    if (source === "book_stage" && bookId && Number.isInteger(bookStage) && bookStage >= 0) return `book:${bookId}:${bookStage}`;
+    if (source === "project_task" && projectId && Number.isInteger(projectTask) && projectTask >= 0) return `project:${projectId}:${projectTask}`;
+    if (eventId) return `event:${eventId}`;
+    if (syncToken.startsWith("cassol-dashboard-")) return `token:${syncToken}`;
+    // Compatibilidade com importações muito antigas, que não guardavam o ID
+    // de origem. A combinação inclui data e categoria para não unir tarefas
+    // comuns que apenas compartilham o mesmo título.
+    return `legacy:${normalizeCategoryName(task?.category)}:${normalizeCategoryName(task?.title)}:${extractDateFromTimestamp(task?.created_at)}:${normalizeCategoryName(context.cassol_dashboard_recipient)}`;
+}
+
 function dedupeDashboardTasks(list) {
     const result = [];
     const importedTaskIndexBySource = new Map();
     (Array.isArray(list) ? list : []).forEach(task => {
         if (!task) return;
-        const context = typeof task.context === "string"
-            ? (() => { try { return JSON.parse(task.context); } catch (_) { return {}; } })()
-            : (task.context || {});
-        const isDashboardImport = normalizeCategoryName(context.source) === "cassol_dashboard"
-            || context.cassol_dashboard_linked === true;
-        const dashboardEventId = String(context.cassol_dashboard_event_id || "");
-        if (!isDashboardImport || !dashboardEventId) {
+        const sourceKey = dashboardTaskIdentity(task);
+        if (!sourceKey) {
             result.push(task);
             return;
         }
-
-        const sourceKey = `${String(task.user_id || "")}::${dashboardEventId}`;
         const existingIndex = importedTaskIndexBySource.get(sourceKey);
         if (existingIndex === undefined) {
             importedTaskIndexBySource.set(sourceKey, result.length);
@@ -2265,6 +2324,13 @@ function setupEventListeners() {
             }
         }
         context.turnos = editShifts;
+        if (recMode === "interval15") {
+            context.recurrence_type = "interval";
+            context.recurrence_interval_days = 15;
+        } else {
+            delete context.recurrence_type;
+            delete context.recurrence_interval_days;
+        }
         const editedDescription = document.getElementById("edit-task-description")?.value.trim() || "";
         // O valor vazio precisa ser explícito: updateTask mescla o contexto
         // anterior para preservar lembretes e turnos, portanto apenas apagar a
@@ -4054,15 +4120,7 @@ async function loadData() {
                 const taskCreatedDate = extractDateFromTimestamp(task.created_at);
                 
                 if (task.is_recurring) {
-                    if (task.repeat_days && task.repeat_days.length > 0) {
-                        // Tarefas com dias específicos de repetição
-                        const viewDate = new Date(selectedDate + 'T12:00:00');
-                        const dayOfWeek = viewDate.getDay(); // 0=Dom, 1=Seg...
-                        const repeatDaysNum = task.repeat_days.map(Number);
-                        return taskCreatedDate <= selectedDate && repeatDaysNum.includes(dayOfWeek);
-                    }
-                    // Tarefas diárias aparecem a partir da data de criação
-                    return taskCreatedDate <= selectedDate;
+                    return recurringTaskOccursOnDate(task, selectedDate);
                 } else {
                     if (selectedDate === todayStr) {
                         return taskCreatedDate === selectedDate || (taskCreatedDate < selectedDate && !completedBeforeIds.has(String(task.id)));
@@ -4209,13 +4267,7 @@ function loadDataOffline() {
         const taskCreatedDate = extractDateFromTimestamp(task.created_at);
         
         if (task.is_recurring) {
-            if (task.repeat_days && task.repeat_days.length > 0) {
-                const viewDate = new Date(selectedDate + 'T12:00:00');
-                const dayOfWeek = viewDate.getDay();
-                const repeatDaysNum = task.repeat_days.map(Number);
-                return taskCreatedDate <= selectedDate && repeatDaysNum.includes(dayOfWeek);
-            }
-            return taskCreatedDate <= selectedDate;
+            return recurringTaskOccursOnDate(task, selectedDate);
         } else {
             if (selectedDate === todayStr) {
                 return taskCreatedDate === selectedDate || (taskCreatedDate < selectedDate && !completedBeforeIds.has(String(task.id)));
@@ -4732,7 +4784,7 @@ function setupTaskTitleAutocomplete() {
         const recurringSelect = document.getElementById("task-recurring");
         const repeatDays = Array.isArray(task.repeat_days) ? task.repeat_days.map(Number) : [];
         if (recurringSelect) {
-            recurringSelect.value = repeatDays.length > 0 ? "repeat" : (task.is_recurring ? "daily" : "once");
+            recurringSelect.value = getTaskRecurrenceMode(task);
             recurringSelect.dispatchEvent(new Event("change", { bubbles: true }));
         }
         document.querySelectorAll("#repeat-days-group .day-toggle").forEach(button => {
@@ -6796,6 +6848,10 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
     // Identificador estável permite recuperar a mesma criação se a internet
     // cair depois do insert, mas antes de o aparelho receber a resposta.
     context.sync_token = context.sync_token || `task-${currentUser?.id || "local"}-${tempId}`;
+    if (recurrenceMode === "interval15") {
+        context.recurrence_type = "interval";
+        context.recurrence_interval_days = 15;
+    }
     if (shifts && shifts.length > 0) {
         context.turnos = shifts;
     }
@@ -7059,6 +7115,8 @@ async function updateTask(id, updates) {
 // Recurrence label helper
 function getRecurrenceLabel(task) {
     if (!task.is_recurring) return 'Única';
+    const intervalDays = getTaskIntervalDays(task);
+    if (intervalDays) return `A cada ${intervalDays} dias`;
     if (task.repeat_days && task.repeat_days.length > 0) {
         const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
         if (task.repeat_days.length === 7) return 'Diária';
@@ -7104,16 +7162,8 @@ function openEditTaskModal(task) {
     const editRecurring = document.getElementById("edit-task-recurring");
     const editRepeatGroup = document.getElementById("edit-repeat-days-group");
     
-    if (!task.is_recurring) {
-        editRecurring.value = "once";
-        editRepeatGroup.style.display = "none";
-    } else if (task.repeat_days && task.repeat_days.length > 0 && task.repeat_days.length < 7) {
-        editRecurring.value = "repeat";
-        editRepeatGroup.style.display = "block";
-    } else {
-        editRecurring.value = "daily";
-        editRepeatGroup.style.display = "none";
-    }
+    editRecurring.value = getTaskRecurrenceMode(task);
+    editRepeatGroup.style.display = editRecurring.value === "repeat" ? "block" : "none";
     
     // Set day toggles
     document.querySelectorAll(".edit-day-toggle").forEach(btn => {
@@ -9089,7 +9139,9 @@ function setupAiTaskCreator() {
             const today = getLocalDateString(new Date());
             const reminderDayLabel = task.reminder_date === today ? "Hoje" : task.reminder_date ? task.reminder_date.split("-").reverse().join("/") : (task.reminder_offset_days === 1 ? "1 dia antes" : "No mesmo dia");
             const reminderLabel = task.reminder_enabled ? `Lembrete: ${reminderDayLabel} às ${task.reminder_time}` : "";
-            const meta = [task.category, task.date?.split("-").reverse().join("/"), task.recurrence === "daily" ? "Diária" : task.recurrence === "repeat" ? `Repete: ${(task.repeat_days || []).join(", ")}` : "Única", ...(task.shifts || []), task.assignee_label, reminderLabel].filter(Boolean).join(" • ");
+            const recurrenceLabel = task.recurrence === "daily" ? "Diária" : task.recurrence === "repeat"
+                ? `Repete: ${(task.repeat_days || []).join(", ")}` : task.recurrence === "interval15" ? "A cada 15 dias" : "Única";
+            const meta = [task.category, task.date?.split("-").reverse().join("/"), recurrenceLabel, ...(task.shifts || []), task.assignee_label, reminderLabel].filter(Boolean).join(" • ");
             return `<label class="ai-review-item"><input type="checkbox" data-index="${index}" checked><span><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(meta)}</small></span></label>`;
         }).join("");
         review.hidden = false;
@@ -9151,7 +9203,7 @@ function setupAiTaskCreator() {
             for (const task of selected) {
                 const validCategory = categories.find(category => category.is_active !== false && String(category.name).toLowerCase() === String(task.category).toLowerCase());
                 if (!validCategory) continue;
-                await addTask(task.title, validCategory.name, ["once", "daily", "repeat"].includes(task.recurrence) ? task.recurrence : "once", task.date || getLocalDateString(new Date()), task.recurrence === "repeat" ? task.repeat_days || [] : null, task.assigned_to || null, task.shifts || [], Boolean(task.important), task.reminder_enabled ? task.reminder_time : null, task.reminder_offset_days || 0);
+                await addTask(task.title, validCategory.name, ["once", "daily", "repeat", "interval15"].includes(task.recurrence) ? task.recurrence : "once", task.date || getLocalDateString(new Date()), task.recurrence === "repeat" ? task.repeat_days || [] : null, task.assigned_to || null, task.shifts || [], Boolean(task.important), task.reminder_enabled ? task.reminder_time : null, task.reminder_offset_days || 0);
                 created += 1;
             }
             if (!created) throw new Error("Nenhuma categoria sugerida existe mais no checklist.");
@@ -10850,11 +10902,7 @@ function taskWasPlannedOnDate(task, dateObj, dateStr) {
         return createdDate === dateStr;
     }
 
-    if (Array.isArray(task.repeat_days) && task.repeat_days.length > 0) {
-        return task.repeat_days.map(Number).includes(dateObj.getDay());
-    }
-
-    return true;
+    return recurringTaskOccursOnDate(task, dateStr);
 }
 
 function buildPlannedOccurrences(tasksList, startDate, endDate) {
@@ -11750,13 +11798,7 @@ async function checkImportantTaskNotifications() {
             const taskCreatedDate = extractDateFromTimestamp(task.created_at);
             
             if (task.is_recurring) {
-                if (task.repeat_days && task.repeat_days.length > 0) {
-                    const viewDate = new Date(dateStr + 'T12:00:00');
-                    const dayOfWeek = viewDate.getDay();
-                    const repeatDaysNum = task.repeat_days.map(Number);
-                    return taskCreatedDate <= dateStr && repeatDaysNum.includes(dayOfWeek);
-                }
-                return taskCreatedDate <= dateStr;
+                return recurringTaskOccursOnDate(task, dateStr);
             } else {
                 return taskCreatedDate === dateStr;
             }
