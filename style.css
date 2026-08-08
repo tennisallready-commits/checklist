@@ -4356,6 +4356,8 @@ body.theme-girly .app-container.tomorrow-mode .history-badge {
 .calendar-day.has-training-photo.today { border-color: #fb923c; box-shadow: 0 0 0 2px rgba(251,146,60,.2); }
 .calendar-day.has-training-photo.selected { background-position: center !important; background-size: cover !important; outline: 2px solid var(--primary); outline-offset: 1px; }
 .calendar-day.has-training-photo .calendar-fire { right: 1px; bottom: 1px; }
+.calendar-day.has-training-photo .calendar-task-markers { right: 13px; }
+.calendar-day.has-training-photo .calendar-task-marker { box-shadow: 0 0 0 1px rgba(255,255,255,.75),0 1px 4px rgba(0,0,0,.45); }
 .calendar-fire { position: absolute; right: -2px; bottom: -4px; z-index: 2; font-size: .78rem; line-height: 1; filter: drop-shadow(0 2px 3px rgba(239,68,68,.28)); }
 .calendar-day.selected .calendar-fire { transform: scale(1.12); }
 .calendar-streak-summary { margin: -7px 0 13px; padding: 10px 12px; display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center; border: 1px solid rgba(251,146,60,.24); border-radius: 12px; background: linear-gradient(135deg,rgba(251,146,60,.1),rgba(239,68,68,.05)); }
