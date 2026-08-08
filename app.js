@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=11.01";
+const SERVICE_WORKER_URL = "./sw.js?v=11.03";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -3045,7 +3045,7 @@ function getTaskRenderFingerprint(taskList = tasks) {
 
 function getCategoryRenderFingerprint(categoryList = categories) {
     return JSON.stringify(categoryList.map(category => [
-        String(category.id), category.name, category.type || "", category.is_active !== false,
+        String(category.id), category.name, category.type || "", category.color || "", category.is_active !== false,
         JSON.stringify(category.merged_category_ids || [])
     ].join("|")));
 }
@@ -3960,7 +3960,9 @@ async function loadData() {
                 sharesCollabResult,
                 sharedNotificationsResult
             ] = await Promise.all([
-                supabaseClient.from('categories').select('id,name,user_id,is_active,type,sort_order').eq('is_active', true),
+                // select('*') mantém compatibilidade com bancos que ainda não
+                // receberam a coluna opcional de cor.
+                supabaseClient.from('categories').select('*').eq('is_active', true),
                 supabaseClient.from('tasks').select('id,title,category,category_id,user_id,is_recurring,is_active,created_at,repeat_days,assigned_to,context').eq('is_active', true),
                 supabaseClient.from('completions').select('task_id,date,completed').eq('date', selectedDateAtFetchStart),
                 supabaseClient.from('completions').select('task_id,date,completed').lt('date', selectedDateAtFetchStart).eq('completed', true),
@@ -4535,6 +4537,7 @@ function renderCategories() {
             const typeOptions = ["Trabalho", "Empresa", "Faculdade/Estudos", "Projeto", "Pessoal", "Saúde", "Finanças", "Casa", "Lazer", "Outro"];
             const isCustomType = cat.type && !typeOptions.slice(0, -1).includes(cat.type);
             const selectedType = isCustomType ? "Outro" : (cat.type || "");
+            const categoryColor = getCategoryColorStyle(cat.name).color;
 
             item.innerHTML = `
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;">
@@ -4555,6 +4558,14 @@ function renderCategories() {
                         </select>
                     </div>
                 </div>
+                <label class="category-color-setting">
+                    <span>Cor da etiqueta</span>
+                    <span class="category-color-control">
+                        <i style="--category-preview-color:${categoryColor}"></i>
+                        <input type="color" class="input-edit-cat-color" value="${categoryColor}" ${isOwner ? "" : "disabled"} aria-label="Cor da etiqueta da categoria ${escapeHTML(cat.name)}">
+                        <small>${isOwner ? "Alterar" : "Definida pelo proprietário"}</small>
+                    </span>
+                </label>
                 <div class="edit-custom-type-wrapper" style="display: ${selectedType === "Outro" ? "flex" : "none"}; align-items: center; gap: 6px; width: 100%;">
                     <span style="font-size: 0.65rem; font-weight: 800; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.02em;">Custom:</span>
                     <input type="text" class="input-edit-cat-custom-type" value="${escapeHTML(isCustomType ? cat.type : "")}" ${isOwner ? "" : "readonly"} placeholder="Ex: Viagens" style="flex: 1; padding: 6px 10px; font-size: 0.78rem; background: rgba(0,0,0,0.15); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; outline: none;">
@@ -4581,6 +4592,7 @@ function renderCategories() {
             const inputName = item.querySelector(".input-edit-cat-name");
             const selectType = item.querySelector(".select-edit-cat-type");
             const inputCustom = item.querySelector(".input-edit-cat-custom-type");
+            const inputColor = item.querySelector(".input-edit-cat-color");
             const customWrapper = item.querySelector(".edit-custom-type-wrapper");
 
             const triggerUpdate = async () => {
@@ -4590,7 +4602,7 @@ function renderCategories() {
                     typeVal = inputCustom.value.trim();
                 }
                 if (!nameVal) return;
-                await updateCategoryFields(cat.id, nameVal, typeVal);
+                await updateCategoryFields(cat.id, nameVal, typeVal, inputColor.value);
             };
 
             if (isOwner) selectType.addEventListener("change", () => {
@@ -4605,6 +4617,7 @@ function renderCategories() {
             if (isOwner) {
                 inputName.addEventListener("change", triggerUpdate);
                 inputCustom.addEventListener("change", triggerUpdate);
+                inputColor.addEventListener("change", triggerUpdate);
             }
             
             manageList.appendChild(item);
@@ -8574,17 +8587,18 @@ function addCategoryOffline(name, type) {
     renderCategories();
 }
 
-async function updateCategoryFields(id, newName, newType) {
+async function updateCategoryFields(id, newName, newType, newColor = null) {
     beginOptimisticMutation();
     const oldCat = categories.find(c => String(c.id) === String(id));
     if (!oldCat) return;
     const oldName = oldCat.name;
+    const normalizedColor = /^#[0-9a-f]{6}$/i.test(String(newColor || "")) ? newColor.toLowerCase() : (oldCat.color || null);
     
     // 1. Update category local state
-    categories = categories.map(c => String(c.id) === String(id) ? { ...c, name: newName, type: newType } : c);
+    categories = categories.map(c => String(c.id) === String(id) ? { ...c, name: newName, type: newType, color: normalizedColor } : c);
     
     let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
-    localCats = localCats.map(c => String(c.id) === String(id) ? { ...c, name: newName, type: newType } : c);
+    localCats = localCats.map(c => String(c.id) === String(id) ? { ...c, name: newName, type: newType, color: normalizedColor } : c);
     localStorage.setItem("offline_categories", JSON.stringify(localCats));
 
     // 2. Update tasks associated with this category
@@ -8609,6 +8623,7 @@ async function updateCategoryFields(id, newName, newType) {
     enqueueCategoryCloudUpdate(id, {
         name: newName,
         type: newType,
+        color: normalizedColor,
         ...(oldName !== newName ? { previous_name: oldName } : {})
     }, "editar-categoria");
 }
@@ -9352,9 +9367,22 @@ function getCategoryColorStyle(categoryName) {
         hash = name.charCodeAt(i) + ((hash << 5) - hash);
     }
     const hue = Math.abs(hash) % 360;
-    const color = `hsl(${hue}, 80%, 65%)`;
-    const bg = `hsla(${hue}, 80%, 65%, 0.12)`;
+    const automaticColor = hslToHex(hue, 80, 65);
+    const category = (categories || []).find(item => normalizeCategoryName(item.name) === normalizeCategoryName(name));
+    const color = /^#[0-9a-f]{6}$/i.test(String(category?.color || "")) ? category.color : automaticColor;
+    const bg = `${color}1f`;
     return { color, bg };
+}
+
+function hslToHex(hue, saturation, lightness) {
+    const s = saturation / 100;
+    const l = lightness / 100;
+    const chroma = (1 - Math.abs(2 * l - 1)) * s;
+    const segment = hue / 60;
+    const x = chroma * (1 - Math.abs(segment % 2 - 1));
+    const [red, green, blue] = segment < 1 ? [chroma, x, 0] : segment < 2 ? [x, chroma, 0] : segment < 3 ? [0, chroma, x] : segment < 4 ? [0, x, chroma] : segment < 5 ? [x, 0, chroma] : [chroma, 0, x];
+    const match = l - chroma / 2;
+    return `#${[red, green, blue].map(channel => Math.round((channel + match) * 255).toString(16).padStart(2, "0")).join("")}`;
 }
 
 // Modal Helpers
@@ -10317,21 +10345,28 @@ async function renderCalendarGrid() {
             btn.classList.add("has-category-tasks");
             const markers = document.createElement("span");
             markers.className = "calendar-task-markers";
-            const visibleTasks = categoryTasks.slice(0, 3);
-            visibleTasks.forEach(task => {
+            const categoryGroups = [...categoryTasks.reduce((groups, task) => {
+                const key = normalizeCategoryName(task.category);
+                const group = groups.get(key) || { category: task.category, tasks: [] };
+                group.tasks.push(task);
+                groups.set(key, group);
+                return groups;
+            }, new Map()).values()];
+            const visibleCategories = categoryGroups.slice(0, 3);
+            visibleCategories.forEach(group => {
                 const marker = document.createElement("i");
-                const categoryStyle = getCategoryColorStyle(task.category);
+                const categoryStyle = getCategoryColorStyle(group.category);
                 marker.className = "calendar-task-marker";
                 marker.style.setProperty("--calendar-task-color", categoryStyle.color);
-                marker.title = `${task.title} · ${task.category}`;
-                marker.setAttribute("aria-label", `${task.title}, categoria ${task.category}`);
+                marker.title = `${group.category}: ${group.tasks.map(task => task.title).join(", ")}`;
+                marker.setAttribute("aria-label", `${group.category}, ${group.tasks.length} ${group.tasks.length === 1 ? "tarefa" : "tarefas"}`);
                 markers.appendChild(marker);
             });
-            if (categoryTasks.length > visibleTasks.length) {
+            if (categoryGroups.length > visibleCategories.length) {
                 const remainder = document.createElement("small");
                 remainder.className = "calendar-task-more";
-                remainder.textContent = `+${categoryTasks.length - visibleTasks.length}`;
-                remainder.title = `${categoryTasks.length - visibleTasks.length} tarefas adicionais`;
+                remainder.textContent = `+${categoryGroups.length - visibleCategories.length}`;
+                remainder.title = `${categoryGroups.length - visibleCategories.length} categorias adicionais`;
                 markers.appendChild(remainder);
             }
             btn.title = categoryTasks.map(task => `${task.title} (${task.category})`).join("\n");

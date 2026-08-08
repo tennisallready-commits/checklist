@@ -4291,6 +4291,12 @@ body.theme-girly .app-container.tomorrow-mode .history-badge {
     color: var(--danger) !important;
     background: var(--danger-light) !important;
 }
+.category-color-setting { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--text-secondary); font-size: .65rem; font-weight: 800; text-transform: uppercase; letter-spacing: .02em; }
+.category-color-control { display: flex; align-items: center; gap: 7px; text-transform: none; letter-spacing: 0; }
+.category-color-control > i { width: 18px; height: 8px; border-radius: 999px; background: var(--category-preview-color); box-shadow: 0 1px 5px color-mix(in srgb,var(--category-preview-color) 45%,transparent); }
+.input-edit-cat-color { width: 34px; height: 28px; padding: 2px; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(255,255,255,.04); cursor: pointer; }
+.input-edit-cat-color:disabled { cursor: default; opacity: .65; }
+.category-color-control small { color: var(--text-muted); font-size: .58rem; }
 
 /* Custom Calendar Picker Styles */
 .calendar-day {
