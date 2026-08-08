@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=10.98";
+const SERVICE_WORKER_URL = "./sw.js?v=10.99";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -123,6 +123,10 @@ function parseTaskContextValue(value) {
 function getTaskIntervalDays(task) {
     const context = parseTaskContextValue(task?.context);
     const interval = Number(context.recurrence_interval_days || 0);
+    // A primeira versão chamou a opção de "15 em 15 dias". Converte esses
+    // registros automaticamente para duas semanas, preservando o mesmo dia
+    // da semana sem exigir que a pessoa edite cada tarefa.
+    if (context.recurrence_type === "interval" && interval === 15) return 14;
     return context.recurrence_type === "interval" && Number.isInteger(interval) && interval > 0 ? interval : 0;
 }
 
@@ -148,7 +152,7 @@ function recurringTaskOccursOnDate(task, dateStr) {
 
 function getTaskRecurrenceMode(task) {
     if (!task?.is_recurring) return "once";
-    if (getTaskIntervalDays(task) === 15) return "interval15";
+    if (getTaskIntervalDays(task) === 14) return "interval14";
     return Array.isArray(task.repeat_days) && task.repeat_days.length > 0 && task.repeat_days.length < 7 ? "repeat" : "daily";
 }
 
@@ -230,6 +234,7 @@ let trainingThumbnailCacheJob = null;
 let pendingDeletes = new Set();
 let pendingToggles = new Set();
 const immediateCompletionSyncChains = new Map();
+let pendingCompletionSessionRecovery = null;
 
 // Authentication State
 let currentUser = null;
@@ -351,6 +356,40 @@ function requireOnlineTaskMutation(actionLabel = "alterar tarefas") {
     if (navigator.onLine && supabaseClient && currentUser) return true;
     showAppNotice(`Conecte-se à internet para ${actionLabel}. As tarefas continuam disponíveis apenas para consulta offline.`, "warning");
     return false;
+}
+
+function canQueueCompletionOnThisDevice() {
+    return Boolean(supabaseClient && (currentUser?.id || localPrefs.getItem("checklist_last_user_id")));
+}
+
+async function recoverSessionForPendingCompletion() {
+    if (currentUser) return true;
+    if (!supabaseClient || !navigator.onLine) return false;
+    if (pendingCompletionSessionRecovery) return pendingCompletionSessionRecovery;
+    pendingCompletionSessionRecovery = (async () => {
+        try {
+            let { data, error } = await supabaseClient.auth.getSession();
+            if (error) throw error;
+            if (!data?.session) {
+                const refreshed = await supabaseClient.auth.refreshSession();
+                if (refreshed.error) throw refreshed.error;
+                data = refreshed.data;
+            }
+            if (!data?.session?.user) return false;
+            currentUser = data.session.user;
+            localPrefs.setItem("checklist_last_user_id", currentUser.id);
+            localPrefs.setItem("checklist_last_user_email", currentUser.email || "");
+            cloudSyncRetryCount = 0;
+            scheduleCloudSync("sessão-retomada-após-check", 0);
+            return true;
+        } catch (error) {
+            console.warn("A sessão ainda não voltou; o check continuará pendente:", error?.message || error);
+            return false;
+        } finally {
+            pendingCompletionSessionRecovery = null;
+        }
+    })();
+    return pendingCompletionSessionRecovery;
 }
 
 async function runConfirmedTaskMutation(operation, actionLabel, timeoutMs = 15000) {
@@ -935,6 +974,9 @@ document.addEventListener("DOMContentLoaded", () => {
             // Não interrompe um destino aberto por push. A nova versão do
             // worker já está ativa e pode ser usada sem recarregar esta tela.
             if (modalTrainingReport?.classList.contains("active")) return;
+            // No Android, uma retomada do PWA pode coincidir com a troca do
+            // worker. Nunca recarrega enquanto um check ainda aguarda envio.
+            if (hasPendingSyncData() || pendingToggles.size > 0) return;
             reloadingForServiceWorkerUpdate = true;
             window.location.reload();
         });
@@ -1768,7 +1810,7 @@ function setupEventListeners() {
 
         const taskId = String(item.dataset.id).match(/^\d+$/) ? parseInt(item.dataset.id, 10) : item.dataset.id;
         const selectedTask = tasks.find(task => String(task.id) === String(taskId));
-        if (!canCurrentUserCheckTask(selectedTask)) {
+        if (!canCurrentUserCheckTask(selectedTask, true)) {
             if (navigator.vibrate) navigator.vibrate([18, 35, 18]);
             showTaskCheckPermissionNotice(selectedTask);
             return;
@@ -2324,9 +2366,9 @@ function setupEventListeners() {
             }
         }
         context.turnos = editShifts;
-        if (recMode === "interval15") {
+        if (recMode === "interval14") {
             context.recurrence_type = "interval";
-            context.recurrence_interval_days = 15;
+            context.recurrence_interval_days = 14;
         } else {
             delete context.recurrence_type;
             delete context.recurrence_interval_days;
@@ -5770,7 +5812,14 @@ async function restoreMovedFutureTask(id, task) {
 }
 
 async function toggleTask(id, options = {}) {
-    if (!requireOnlineTaskMutation("marcar ou desmarcar uma tarefa")) return;
+    // No Android, o PWA pode restaurar a tela do cache alguns instantes antes
+    // da sessão. O toque continua válido e será confirmado quando a sessão
+    // voltar, em vez de ser silenciosamente descartado.
+    if (!canQueueCompletionOnThisDevice()) {
+        showAppNotice("Aguarde a sessão do Checklist terminar de carregar para marcar a tarefa.", "warning");
+        recoverSessionForPendingCompletion();
+        return;
+    }
     if (pendingToggles.has(String(id))) return;
     if (options.completeAtCurrentMoment && selectedDate > getLocalDateString(new Date())) {
         const futureTask = tasks.find(item => String(item.id) === String(id)) || allActiveTasks.find(item => String(item.id) === String(id));
@@ -5802,7 +5851,7 @@ async function toggleTask(id, options = {}) {
         showAppNotice("Um treino finalizado não pode ser desmarcado.", "warning");
         return;
     }
-    if (!canCurrentUserCheckTask(task)) {
+    if (!canCurrentUserCheckTask(task, true)) {
         showTaskCheckPermissionNotice(task);
         return;
     }
@@ -5837,7 +5886,7 @@ async function toggleTask(id, options = {}) {
 
 async function commitTaskToggle(id, isPastNightShiftException = false) {
     if (isHistoryMode && !isPastNightShiftException) return;
-    if (!requireOnlineTaskMutation("marcar ou desmarcar uma tarefa") || isTemporaryId(id)) return;
+    if (!canQueueCompletionOnThisDevice() || isTemporaryId(id)) return;
     const previousTask = tasks.find(t => String(t.id) === String(id));
     if (!previousTask) return;
     const pendingId = String(id);
@@ -5891,12 +5940,26 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
 }
 
 function syncCompletionImmediately(taskId, date, completed) {
-    if (!supabaseClient || !currentUser || !navigator.onLine || isTemporaryId(taskId)) {
+    const pendingId = String(taskId);
+    if (!currentUser) {
+        recoverSessionForPendingCompletion().then(restored => {
+            pendingToggles.delete(pendingId);
+            if (restored && navigator.onLine) syncCompletionImmediately(taskId, date, completed);
+            else {
+                scheduleCloudSync("check-aguardando-sessão", 120);
+                refreshSyncStatusFromQueues();
+            }
+        });
+        return;
+    }
+    if (!supabaseClient || !navigator.onLine || isTemporaryId(taskId)) {
+        pendingToggles.delete(pendingId);
         scheduleCloudSync("check-pendente", 120);
+        refreshSyncStatusFromQueues();
         return;
     }
 
-    const id = String(taskId);
+    const id = pendingId;
     const queueKey = `${id}_${date}`;
     const queuedValue = completed;
     pendingToggles.add(id);
@@ -6848,9 +6911,9 @@ async function addTask(title, category, recurrenceMode, customDate, repeatDays, 
     // Identificador estável permite recuperar a mesma criação se a internet
     // cair depois do insert, mas antes de o aparelho receber a resposta.
     context.sync_token = context.sync_token || `task-${currentUser?.id || "local"}-${tempId}`;
-    if (recurrenceMode === "interval15") {
+    if (recurrenceMode === "interval14") {
         context.recurrence_type = "interval";
-        context.recurrence_interval_days = 15;
+        context.recurrence_interval_days = 14;
     }
     if (shifts && shifts.length > 0) {
         context.turnos = shifts;
@@ -7116,6 +7179,7 @@ async function updateTask(id, updates) {
 function getRecurrenceLabel(task) {
     if (!task.is_recurring) return 'Única';
     const intervalDays = getTaskIntervalDays(task);
+    if (intervalDays === 14) return 'A cada 2 semanas';
     if (intervalDays) return `A cada ${intervalDays} dias`;
     if (task.repeat_days && task.repeat_days.length > 0) {
         const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -9140,7 +9204,7 @@ function setupAiTaskCreator() {
             const reminderDayLabel = task.reminder_date === today ? "Hoje" : task.reminder_date ? task.reminder_date.split("-").reverse().join("/") : (task.reminder_offset_days === 1 ? "1 dia antes" : "No mesmo dia");
             const reminderLabel = task.reminder_enabled ? `Lembrete: ${reminderDayLabel} às ${task.reminder_time}` : "";
             const recurrenceLabel = task.recurrence === "daily" ? "Diária" : task.recurrence === "repeat"
-                ? `Repete: ${(task.repeat_days || []).join(", ")}` : task.recurrence === "interval15" ? "A cada 15 dias" : "Única";
+                ? `Repete: ${(task.repeat_days || []).join(", ")}` : task.recurrence === "interval14" ? "A cada 2 semanas" : "Única";
             const meta = [task.category, task.date?.split("-").reverse().join("/"), recurrenceLabel, ...(task.shifts || []), task.assignee_label, reminderLabel].filter(Boolean).join(" • ");
             return `<label class="ai-review-item"><input type="checkbox" data-index="${index}" checked><span><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(meta)}</small></span></label>`;
         }).join("");
@@ -9203,7 +9267,7 @@ function setupAiTaskCreator() {
             for (const task of selected) {
                 const validCategory = categories.find(category => category.is_active !== false && String(category.name).toLowerCase() === String(task.category).toLowerCase());
                 if (!validCategory) continue;
-                await addTask(task.title, validCategory.name, ["once", "daily", "repeat", "interval15"].includes(task.recurrence) ? task.recurrence : "once", task.date || getLocalDateString(new Date()), task.recurrence === "repeat" ? task.repeat_days || [] : null, task.assigned_to || null, task.shifts || [], Boolean(task.important), task.reminder_enabled ? task.reminder_time : null, task.reminder_offset_days || 0);
+                await addTask(task.title, validCategory.name, ["once", "daily", "repeat", "interval14"].includes(task.recurrence) ? task.recurrence : "once", task.date || getLocalDateString(new Date()), task.recurrence === "repeat" ? task.repeat_days || [] : null, task.assigned_to || null, task.shifts || [], Boolean(task.important), task.reminder_enabled ? task.reminder_time : null, task.reminder_offset_days || 0);
                 created += 1;
             }
             if (!created) throw new Error("Nenhuma categoria sugerida existe mais no checklist.");
@@ -9419,6 +9483,7 @@ function setupSupabaseAuth() {
                 currentUser = session.user;
                 learningCloudState = "idle";
                 reportsCloudState = "idle";
+                if (hasPendingSyncData()) scheduleCloudSync("token-restaurado", 0);
             }
             return;
         }
@@ -9578,6 +9643,9 @@ function setupSupabaseAuth() {
                         if (data?.session) {
                             // A sessão existe — dispara o fluxo normal de login.
                             currentUser = data.session.user;
+                            localPrefs.setItem("checklist_last_user_id", currentUser.id);
+                            localPrefs.setItem("checklist_last_user_email", currentUser.email || "");
+                            if (hasPendingSyncData()) scheduleCloudSync("sessão-restaurada-no-android", 0);
                             return;
                         }
                     } catch (_) { /* sem rede ou falha silenciosa */ }
