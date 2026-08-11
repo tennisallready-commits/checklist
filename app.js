@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=11.07";
+const SERVICE_WORKER_URL = "./sw.js?v=11.08";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -166,6 +166,7 @@ function dashboardTaskIdentity(task) {
     const bookStage = Number(context.cassol_dashboard_book_stage_index);
     const projectId = String(context.cassol_dashboard_project_id || "").trim();
     const projectTask = Number(context.cassol_dashboard_project_task_index);
+    const projectTaskKey = String(context.cassol_dashboard_project_task_key || "").trim();
     const syncToken = String(context.sync_token || "").trim();
     const imported = normalizeCategoryName(context.source) === "cassol_dashboard"
         || context.cassol_dashboard_linked === true
@@ -173,6 +174,7 @@ function dashboardTaskIdentity(task) {
     if (!imported) return "";
     if (source === "content_stage" && contentId && stageKey) return `content:${contentId}:${stageKey}`;
     if (source === "book_stage" && bookId && Number.isInteger(bookStage) && bookStage >= 0) return `book:${bookId}:${bookStage}`;
+    if (source === "project_task" && projectId && projectTaskKey) return `project:${projectId}:${projectTaskKey}`;
     if (source === "project_task" && projectId && Number.isInteger(projectTask) && projectTask >= 0) return `project:${projectId}:${projectTask}`;
     if (eventId) return `event:${eventId}`;
     if (syncToken.startsWith("cassol-dashboard-")) return `token:${syncToken}`;
