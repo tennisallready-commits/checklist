@@ -62,7 +62,7 @@ Deno.serve(async (request) => {
 Categorias permitidas: ${JSON.stringify(availableCategories)}.
 Pessoas permitidas para atribuição: ${JSON.stringify(people)}.
 ${existingTasks.length ? `Tarefas já sugeridas que devem ser atualizadas: ${JSON.stringify(existingTasks)}. O novo pedido é complementar: devolva a lista completa revisada, preservando o que não foi solicitado mudar e sem duplicar tarefas.` : ""}
-Interprete o pedido em português do Brasil. Crie no máximo 10 tarefas. Use exatamente o nome de uma categoria permitida. Só atribua alguém quando a pessoa for citada claramente e use o email correspondente. Em categoria não colaborativa, assigned_to deve ser null. Para recorrência semanal use repeat e dias 0=domingo até 6=sábado. Para tarefa única ou diária, repeat_days deve ser vazio. Datas devem ser YYYY-MM-DD. Turnos permitidos: Manhã, Tarde, Noite. Quando a pessoa disser "me lembre", "me avise", "notifique" ou equivalente, defina reminder_enabled=true. Extraia reminder_date em YYYY-MM-DD separadamente da data da tarefa: por exemplo, tarefa amanhã e "me lembre hoje" significa reminder_date=hoje; "me lembre amanhã" significa reminder_date=amanhã. No contexto do lembrete, períodos do dia representam horários: "de manhã"=09:00, "à tarde"=15:00 e "à noite"=20:00. Não confunda o período do lembrete com o turno da tarefa. Extraia reminder_time em HH:MM; se não houver horário nem período, use ${defaultReminderTime} para hoje e 09:00 para datas futuras. reminder_offset_days deve refletir a diferença entre a data da tarefa e reminder_date, limitado a 0 ou 1. Não invente pessoas ou categorias. Retorne também a transcrição fiel do áudio.`;
+Interprete o pedido em português do Brasil. Crie no máximo 10 tarefas. Use exatamente o nome de uma categoria permitida. Só atribua alguém quando a pessoa for citada claramente e use o email correspondente. Em categoria não colaborativa, assigned_to deve ser null. Para recorrência semanal use repeat e dias 0=domingo até 6=sábado. Quando a pessoa pedir "a cada duas semanas", "de 14 em 14 dias" ou "quinzenal" no sentido de repetir no mesmo dia da semana, use interval14. Para tarefa única, diária ou interval14, repeat_days deve ser vazio. Datas devem ser YYYY-MM-DD. Turnos permitidos: Manhã, Tarde, Noite. Quando a pessoa disser "me lembre", "me avise", "notifique" ou equivalente, defina reminder_enabled=true. Extraia reminder_date em YYYY-MM-DD separadamente da data da tarefa: por exemplo, tarefa amanhã e "me lembre hoje" significa reminder_date=hoje; "me lembre amanhã" significa reminder_date=amanhã. No contexto do lembrete, períodos do dia representam horários: "de manhã"=09:00, "à tarde"=15:00 e "à noite"=20:00. Não confunda o período do lembrete com o turno da tarefa. Extraia reminder_time em HH:MM; se não houver horário nem período, use ${defaultReminderTime} para hoje e 09:00 para datas futuras. reminder_offset_days deve refletir a diferença entre a data da tarefa e reminder_date, limitado a 0, 1 ou 7. Não invente pessoas ou categorias. Retorne também a transcrição fiel do áudio.`;
     const parts: Record<string, unknown>[] = [{ text: contextText }];
     if (prompt) parts.push({ text: `Pedido digitado: ${prompt}` });
     if (audioBase64) parts.push({ inline_data: { mime_type: audioMimeType, data: audioBase64 } });
@@ -73,7 +73,7 @@ Interprete o pedido em português do Brasil. Crie no máximo 10 tarefas. Use exa
         transcript: { type: "STRING" },
         tasks: { type: "ARRAY", maxItems: 10, items: { type: "OBJECT", properties: {
           title: { type: "STRING" }, category: { type: "STRING" }, date: { type: "STRING" },
-          recurrence: { type: "STRING", enum: ["once", "daily", "repeat"] },
+          recurrence: { type: "STRING", enum: ["once", "daily", "repeat", "interval14"] },
           repeat_days: { type: "ARRAY", items: { type: "INTEGER" } },
           shifts: { type: "ARRAY", items: { type: "STRING", enum: ["Manhã", "Tarde", "Noite"] } },
           assigned_to: { type: "STRING", nullable: true }, important: { type: "BOOLEAN" },
@@ -112,11 +112,11 @@ Interprete o pedido em português do Brasil. Crie no máximo 10 tarefas. Use exa
       if (!category) return null;
       const assignedEmail = task.assigned_to ? String(task.assigned_to).toLowerCase() : "";
       const validAssignee = category.collaborative && allowedPeople.has(assignedEmail) ? assignedEmail : null;
-      const recurrence = ["once", "daily", "repeat"].includes(String(task.recurrence)) ? String(task.recurrence) : "once";
+      const recurrence = ["once", "daily", "repeat", "interval14"].includes(String(task.recurrence)) ? String(task.recurrence) : "once";
       const taskDate = /^\d{4}-\d{2}-\d{2}$/.test(String(task.date || "")) ? String(task.date) : today;
       const reminderDate = remindTonight ? today : (/^\d{4}-\d{2}-\d{2}$/.test(String(task.reminder_date || "")) ? String(task.reminder_date) : taskDate);
       const dateDifference = Math.round((Date.parse(`${taskDate}T12:00:00Z`) - Date.parse(`${reminderDate}T12:00:00Z`)) / 86400000);
-      const reminderOffsetDays = Boolean(task.reminder_enabled) && dateDifference === 1 ? 1 : 0;
+      const reminderOffsetDays = Boolean(task.reminder_enabled) && [1, 7].includes(dateDifference) ? dateDifference : 0;
       return {
         title: String(task.title || "").trim().slice(0, 180), category: category.name,
         date: taskDate,

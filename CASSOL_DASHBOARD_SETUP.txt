@@ -1,0 +1,84 @@
+INTEGRAÇÃO CHECKLIST → DASHBOARD GRUPO CASSOL
+
+Regra configurada
+- Somente tarefas da categoria Cassol.
+- Somente a conta do Luiggi.
+- No dashboard, elas entram em Editora Cassol (editora), responsáveis por Luiggi.
+- Criar, editar, concluir, desmarcar e excluir no Checklist atualiza o dashboard.
+- Tarefas criadas no dashboard em Editora Cassol, com responsável Luiggi,
+  entram no Checklist na categoria Cassol. Enquanto o Checklist estiver aberto,
+  essa busca ocorre em até 15 segundos.
+- Em um conteúdo do Dashboard, cada etapa atribuída a Luiggi também entra no
+  Checklist com o nome "[Conteúdo] Etapa". Check e desmarcação ficam ligados
+  nos dois sistemas.
+- Ao excluir uma dessas etapas no Checklist, ela deixa de ser atribuída ao
+  Luiggi no Dashboard e o prazo é limpo. A etapa do conteúdo é preservada.
+- Se uma etapa for atribuída novamente a Luiggi no Dashboard, ela reaparece no
+  Checklist, mesmo que tenha sido excluída anteriormente por lá.
+- Excluir no Dashboard uma tarefa que esteja vinculada ao Checklist também a
+  remove do Checklist. Tarefas sem vínculo nunca são afetadas.
+
+IMPORTANTE
+O arquivo JSON da credencial do Firebase é secreto. Não envie por WhatsApp,
+e-mail ou Git e não cole no Checklist. Ele ficará apenas nos Segredos das Edge
+Functions do Supabase.
+
+1. Criar a credencial no Firebase
+
+1. Abra https://console.firebase.google.com/ e entre no projeto grupo-cassol-2.
+2. Clique na engrenagem ao lado de "Visão geral do projeto" → Configurações
+   do projeto.
+3. Abra a guia "Contas de serviço".
+4. Na seção "Firebase Admin SDK", clique em "Gerar nova chave privada".
+5. Confirme em "Gerar chave". O navegador baixa um arquivo JSON.
+
+Não é necessário criar uma conta manualmente no Google Cloud: o Firebase já
+mantém a conta Firebase Admin SDK para este projeto. Se o botão não aparecer,
+a conta Google conectada não tem permissão de proprietário do projeto.
+
+2. Salvar os dois segredos no Supabase
+
+No projeto do Checklist, abra Edge Functions → Secrets e crie:
+
+FIREBASE_SERVICE_ACCOUNT_JSON
+Valor: cole o CONTEÚDO INTEIRO do arquivo JSON baixado no passo anterior.
+
+CASSOL_DASHBOARD_LUIGGI_USER_ID
+Valor: o UUID da conta do Luiggi no Checklist.
+Para achar: Supabase → Authentication → Users → abra o usuário Luiggi e copie
+o campo "User UID".
+
+3. Publicar as funções
+
+No Supabase, abra Edge Functions → Functions → Deploy a new function → Via
+Editor. Crie a função com o nome exato sync-cassol-dashboard, mantenha a
+verificação de JWT ativada e cole o conteúdo de:
+
+supabase/functions/sync-cassol-dashboard/index.ts
+
+Depois clique em Deploy function.
+
+4. Publicar o app Checklist
+
+Publique os arquivos app.js, index.html e sw.js atualizados junto com a nova
+função.
+
+5. Teste final
+
+1. Entre no Checklist com a conta do Luiggi.
+2. Crie uma tarefa na categoria Cassol para hoje.
+3. Abra o dashboard → Tarefas → Editora Cassol.
+4. A tarefa deve aparecer com responsável Luiggi.
+5. Marque e desmarque o check no Checklist: o item deve ser arquivado e
+   restaurado no dashboard.
+6. Crie no dashboard uma tarefa de Editora Cassol atribuída a Luiggi: ela deve
+   aparecer no Checklist em até 15 segundos, ou ao reabrir o Checklist.
+7. Exclua essa mesma tarefa no dashboard: ela deve sumir do Checklist em até
+   15 segundos.
+8. Crie um conteúdo da Editora, atribua uma etapa a Luiggi e defina o prazo:
+   ela deve aparecer no Checklist em até 15 segundos.
+
+Limite desta primeira versão
+
+Tarefas recorrentes não vão ao dashboard, porque o dashboard ainda não possui
+uma estrutura de recorrência compatível. Tarefas únicas funcionam normalmente.

@@ -1,0 +1,16 @@
+{
+  "version": "4",
+  "redirects": {
+    "https://esm.sh/@supabase/supabase-js@2": "https://esm.sh/@supabase/supabase-js@2.112.1"
+  },
+  "remote": {
+    "https://esm.sh/@supabase/supabase-js@2.112.1": "497e1884f2e760ee816b6081f8e9497f453d35d0b5fb10c0bb898b0debeee58d"
+  },
+  "workspace": {
+    "packageJson": {
+      "dependencies": [
+        "npm:playwright@^1.61.1"
+      ]
+    }
+  }
+}

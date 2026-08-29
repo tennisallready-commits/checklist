@@ -8,6 +8,29 @@ function localParts(date: Date, timeZone: string) {
   return { date:`${p.year}-${p.month}-${p.day}`, time:`${p.hour}:${p.minute}`, weekday:({Sun:0,Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6} as Record<string,number>)[p.weekday] };
 }
 
+function normalizeReminders(context: Record<string, unknown>) {
+  const list = Array.isArray(context.reminders) ? context.reminders : [];
+  const reminders = list.map(item => {
+    const value = item as Record<string, unknown>;
+    return { time: String(value.time || value.reminder_time || "").slice(0, 5), offsetDays: [0, 1, 7].includes(Number(value.offset_days)) ? Number(value.offset_days) : 0 };
+  }).filter(item => /^([01]\d|2[0-3]):[0-5]\d$/.test(item.time));
+  const legacyTime = String(context.reminder_time || "").slice(0, 5);
+  if (!reminders.length && /^([01]\d|2[0-3]):[0-5]\d$/.test(legacyTime)) reminders.push({ time: legacyTime, offsetDays: [1, 7].includes(Number(context.reminder_offset_days)) ? Number(context.reminder_offset_days) : 0 });
+  return [...new Map(reminders.map(item => [`${item.offsetDays}:${item.time}`, item])).values()];
+}
+
+function taskOccursOnDate(task: Record<string, unknown>, context: Record<string, unknown>, occurrenceDate: string, createdDate: string) {
+  if (createdDate > occurrenceDate) return false;
+  if (!task.is_recurring) return createdDate === occurrenceDate;
+  const interval = Number(context.recurrence_interval_days) === 15 ? 14 : Number(context.recurrence_interval_days);
+  if (interval > 0) {
+    const elapsed = Math.round((new Date(`${occurrenceDate}T12:00:00Z`).getTime() - new Date(`${createdDate}T12:00:00Z`).getTime()) / 86400000);
+    return elapsed >= 0 && elapsed % interval === 0;
+  }
+  const days = Array.isArray(task.repeat_days) ? task.repeat_days.map(Number) : [];
+  return !days.length || days.includes(new Date(`${occurrenceDate}T12:00:00Z`).getUTCDay());
+}
+
 type PushSubscription = { id: string; user_id: string; endpoint: string; p256dh: string; auth: string };
 
 async function sendDailyCheckinPushes(admin: ReturnType<typeof createClient>) {
@@ -96,7 +119,7 @@ Deno.serve(async request => {
       console.error("daily-checkin error", dailyError instanceof Error ? dailyError.message : String(dailyError));
       daily = { error: dailyError instanceof Error ? dailyError.message : String(dailyError) };
     }
-    const { data: tasks, error } = await admin.from("tasks").select("id,title,user_id,assigned_to,created_at,is_recurring,repeat_days,context").eq("is_active",true).not("context->>reminder_time","is",null);
+    const { data: tasks, error } = await admin.from("tasks").select("id,title,user_id,assigned_to,created_at,is_recurring,repeat_days,context").eq("is_active",true);
     if (error) throw error;
     const { data: page, error: usersError } = await admin.auth.admin.listUsers({page:1,perPage:1000});
     if (usersError) throw usersError;
@@ -105,31 +128,29 @@ Deno.serve(async request => {
     for (const task of tasks || []) {
       const c = typeof task.context === "string" ? JSON.parse(task.context) : task.context || {};
       if (c.important !== true && c.important !== "true") continue;
-      const time = String(c.reminder_time || "").slice(0,5), tz = String(c.reminder_timezone || "America/Sao_Paulo");
+      const reminders = normalizeReminders(c), tz = String(c.reminder_timezone || "America/Sao_Paulo");
       let now; try { now = localParts(new Date(),tz); } catch { now = localParts(new Date(),"America/Sao_Paulo"); }
-      const [nowHour, nowMinute] = now.time.split(":").map(Number);
-      const [targetHour, targetMinute] = time.split(":").map(Number);
-      const delayMinutes = (nowHour * 60 + nowMinute) - (targetHour * 60 + targetMinute);
-      // O cron pode iniciar alguns minutos depois do horário exato. A tabela de
-      // entregas continua impedindo notificações duplicadas dentro desta janela.
-      if (delayMinutes < 0 || delayMinutes > 10) continue;
-      const offsetDays = Number(c.reminder_offset_days) === 1 ? 1 : 0;
-      const occurrenceDateObject = new Date(`${now.date}T12:00:00Z`);
-      occurrenceDateObject.setUTCDate(occurrenceDateObject.getUTCDate() + offsetDays);
-      const occurrenceDate = occurrenceDateObject.toISOString().slice(0,10);
-      const occurrenceWeekday = occurrenceDateObject.getUTCDay();
       const created = localParts(new Date(task.created_at),tz).date;
-      const days = Array.isArray(task.repeat_days) ? task.repeat_days.map(Number) : [];
-      if (created > occurrenceDate || (task.is_recurring ? (days.length && !days.includes(occurrenceWeekday)) : created !== occurrenceDate)) continue;
-      const { data: completionRecord } = await admin.from("completions").select("task_id").eq("task_id",task.id).eq("date",occurrenceDate).eq("completed",true).maybeSingle();
-      if (completionRecord) continue;
-      const recipient = String((task.assigned_to && byEmail.get(normalize(task.assigned_to))?.id) || task.user_id);
-      const { data: claim, error: claimError } = await admin.from("task_reminder_deliveries").insert({task_id:String(task.id),recipient_id:recipient,reminder_date:occurrenceDate,reminder_time:`${time}:00`}).select("id").maybeSingle();
-      if (claimError || !claim) continue;
-      const { data: subscriptions } = await admin.from("push_subscriptions").select("id,endpoint,p256dh,auth").eq("user_id",recipient);
-      const payload = JSON.stringify({title:"⏰ Lembrete de tarefa",body:offsetDays === 1 ? `Amanhã: “${task.title}”.` : `Está na hora de “${task.title}”.`,task_id:String(task.id),notification_type:"task-reminder",tag:`reminder-${task.id}-${occurrenceDate}-${time}`,url:`./?reminder_task=${encodeURIComponent(String(task.id))}`});
-      let taskSent = 0;
-      await Promise.all((subscriptions || []).map(async s => {
+      for (const { time, offsetDays } of reminders) {
+        const [nowHour, nowMinute] = now.time.split(":").map(Number);
+        const [targetHour, targetMinute] = time.split(":").map(Number);
+        const delayMinutes = (nowHour * 60 + nowMinute) - (targetHour * 60 + targetMinute);
+        if (delayMinutes < 0 || delayMinutes > 10) continue;
+        const occurrenceDateObject = new Date(`${now.date}T12:00:00Z`);
+        occurrenceDateObject.setUTCDate(occurrenceDateObject.getUTCDate() + offsetDays);
+        const occurrenceDate = occurrenceDateObject.toISOString().slice(0,10);
+        if (!taskOccursOnDate(task, c, occurrenceDate, created)) continue;
+        const { data: completionRecord } = await admin.from("completions").select("task_id").eq("task_id",task.id).eq("date",occurrenceDate).eq("completed",true).maybeSingle();
+        if (completionRecord) continue;
+        const recipient = String((task.assigned_to && byEmail.get(normalize(task.assigned_to))?.id) || task.user_id);
+        const deliveryTime = `${time}:${String(offsetDays).padStart(2,"0")}`;
+        const { data: claim, error: claimError } = await admin.from("task_reminder_deliveries").insert({task_id:String(task.id),recipient_id:recipient,reminder_date:occurrenceDate,reminder_time:deliveryTime}).select("id").maybeSingle();
+        if (claimError || !claim) continue;
+        const { data: subscriptions } = await admin.from("push_subscriptions").select("id,endpoint,p256dh,auth").eq("user_id",recipient);
+        const body = offsetDays === 7 ? `Daqui a uma semana: “${task.title}”.` : offsetDays === 1 ? `Amanhã: “${task.title}”.` : `Está na hora de “${task.title}”.`;
+        const payload = JSON.stringify({title:"⏰ Lembrete de tarefa",body,task_id:String(task.id),notification_type:"task-reminder",tag:`reminder-${task.id}-${occurrenceDate}-${offsetDays}-${time}`,url:`./?reminder_task=${encodeURIComponent(String(task.id))}`});
+        let taskSent = 0;
+        await Promise.all((subscriptions || []).map(async s => {
         try {
           await webpush.sendNotification({endpoint:s.endpoint,keys:{p256dh:s.p256dh,auth:s.auth}},payload,{TTL:3600,urgency:"high"});
           taskSent++;
@@ -138,12 +159,13 @@ Deno.serve(async request => {
           console.error("Falha ao enviar lembrete", { taskId: task.id, subscriptionId: s.id, status, message: e instanceof Error ? e.message : String(e) });
           if(status===404||status===410) await admin.from("push_subscriptions").delete().eq("id",s.id);
         }
-      }));
-      if (taskSent === 0) {
+        }));
+        if (taskSent === 0) {
         // Sem confirmação de entrega, libera a tentativa para a próxima execução do cron.
         await admin.from("task_reminder_deliveries").delete().eq("id",claim.id);
-      } else {
-        sent += taskSent;
+        } else {
+          sent += taskSent;
+        }
       }
     }
     const result = { checked: tasks?.length || 0, sent, daily };

@@ -196,7 +196,13 @@ const resolveSpokenDate = (value: unknown, today: string) => {
           creator_user_id: tokenRow.user_id,
           sync_token: `siri-${crypto.randomUUID()}`,
           ...(shifts.length ? { turnos: shifts } : {}),
-          ...(reminderEnabled ? { important: true, reminder_time: reminderTime, reminder_offset_days: dateDifference === 1 ? 1 : 0, reminder_timezone: "America/Sao_Paulo" } : {}),
+          ...(reminderEnabled ? {
+            important: true,
+            reminders: [{ time: reminderTime, offset_days: [1, 7].includes(dateDifference) ? dateDifference : 0 }],
+            reminder_time: reminderTime,
+            reminder_offset_days: [1, 7].includes(dateDifference) ? dateDifference : 0,
+            reminder_timezone: "America/Sao_Paulo",
+          } : {}),
         },
       };
       let result = await admin.from("tasks").insert(taskPayload).select("id,title,category,created_at").single();

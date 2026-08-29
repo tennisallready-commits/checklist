@@ -1,0 +1,283 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const corsHeaders={"Access-Control-Allow-Origin":"*","Access-Control-Allow-Headers":"authorization, apikey, content-type, x-client-info, x-siri-token"};
+const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...corsHeaders,"Content-Type":"application/json; charset=utf-8"}});
+const cleanToken=(val:unknown)=>String(val||"").trim().replace(/^["']|["']$/g,"").replace(/^chk_siri_/i,"chk_siri_");
+const hashToken=async(value:string)=>[...new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(cleanToken(value))))].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+const createToken=()=>{const bytes=crypto.getRandomValues(new Uint8Array(32));return `chk_siri_${btoa(String.fromCharCode(...bytes)).replaceAll("+","-").replaceAll("/","_").replaceAll("=","")}`};
+const norm=(s:string)=>s.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
+
+const findCategory=(name:string,rows:{id:string;name:string}[])=>{
+  if(!name)return null;
+  const n=norm(name);
+  // 1. Exact match (case+accent insensitive)
+  const exact=rows.find(c=>norm(c.name)===n);
+  if(exact)return exact;
+  // 2. Starts-with match
+  const starts=rows.find(c=>norm(c.name).startsWith(n)||n.startsWith(norm(c.name)));
+  if(starts)return starts;
+  // 3. Contains match
+  const contains=rows.find(c=>norm(c.name).includes(n)||n.includes(norm(c.name)));
+  if(contains)return contains;
+  return null;
+};
+
+const resolveSpokenDate=(value:unknown,today:string)=>{
+  const raw=String(value||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
+  if(!raw||raw==="hoje")return today;
+  if(/^\d{4}-\d{2}-\d{2}$/.test(raw))return raw;
+  const base=new Date(`${today}T12:00:00Z`);
+  if(raw==="amanha"){base.setUTCDate(base.getUTCDate()+1);return base.toISOString().slice(0,10);}
+  if(raw==="depois de amanha"){base.setUTCDate(base.getUTCDate()+2);return base.toISOString().slice(0,10);}
+  const weekdays:Record<string,number>={domingo:0,segunda:1,terca:2,quarta:3,quinta:4,sexta:5,sabado:6};
+  const cleanWeekday=raw.replace(/-feira|\s+feira/g,"");
+  if(weekdays[cleanWeekday]!==undefined){
+    const targetDay=weekdays[cleanWeekday];
+    const currentDay=base.getUTCDay();
+    let diff=targetDay-currentDay;
+    if(diff<=0)diff+=7;
+    base.setUTCDate(base.getUTCDate()+diff);
+    return base.toISOString().slice(0,10);
+  }
+  const months:Record<string,number>={janeiro:1,fevereiro:2,marco:3,abril:4,maio:5,junho:6,julho:7,agosto:8,setembro:9,outubro:10,novembro:11,dezembro:12};
+  const numeric=raw.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/);
+  const written=raw.match(/(?:dia\s+)?(\d{1,2})(?:\s+de)?\s+(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)(?:\s+de\s+(\d{4}))?/);
+  const day=numeric?Number(numeric[1]):written?Number(written[1]):0;
+  const month=numeric?Number(numeric[2]):written?months[written[2]]:0;
+  let year=numeric?.[3]?Number(numeric[3]):written?.[3]?Number(written[3]):base.getUTCFullYear();
+  if(year<100)year+=2000;
+  if(!day||!month||month>12||day>31)return today;
+  const candidate=new Date(Date.UTC(year,month-1,day,12));
+  if(!numeric?.[3]&&!written?.[3]&&candidate<base)candidate.setUTCFullYear(year+1);
+  return candidate.toISOString().slice(0,10);
+};
+
+const interpretRequest=async(prompt:string,categories:{id:string;name:string}[],today:string)=>{
+  const categoryNames=categories.map(c=>c.name);
+  const fallback={tasks:[{title:prompt,category:categoryNames[0]||"",date:today,shifts:[],reminder_enabled:false,reminder_time:""}]};
+  const geminiKey=Deno.env.get("GEMINI_API_KEY");
+  if(!geminiKey)return fallback;
+  const instruction=`Hoje e ${today}, fuso America/Sao_Paulo. Interprete o pedido falado para criar tarefas.
+
+Categorias: ${JSON.stringify(categoryNames)}.
+
+REGRAS POR TAREFA:
+1. title: preserve nomes/marcas/produtos inteiros. Nunca remova.
+2. category: escolha da lista acima a que melhor combina com o texto.
+3. date: YYYY-MM-DD. "hoje"->${today}, "amanha"->+1 dia, dias da semana->proxima ocorrencia.
+4. shifts: turno INDIVIDUAL da tarefa. "de noite"->["Noite"], "de tarde"->["Tarde"], "de manha"->["Manhã"]. Se nao citado, [].
+5. reminder_enabled/reminder_time: se houver horario (ex "as 8h") ou "lembrete"/"me lembre", true + HH:MM. Atribua cada horario a sua tarefa na ordem (1o horario->1a tarefa, 2o->2a).
+6. Multiplas tarefas: separe por conectores "e", ",", "para", "depois".
+7. HERANCA DE CONTEXTO: quando a 2a tarefa em diante NAO menciona o sujeito/produto/marca, HERDE da tarefa anterior. Exemplo: "envasar cachaça pai amanha e entregar quarta" -> 1a: "Envasar cachaça pai", 2a: "Entregar cachaça pai". O sujeito "cachaça pai" deve ser repetido no titulo da 2a tarefa.
+
+Retorne JSON: {"tasks":[{title,category,date,shifts,reminder_enabled,reminder_time}]}.
+Pedido: ${prompt}`;
+  const response=await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":geminiKey},body:JSON.stringify({contents:[{role:"user",parts:[{text:instruction}]}],generationConfig:{temperature:0,responseMimeType:"application/json"}})});
+  if(!response.ok)return fallback;
+  const payload=await response.json();
+  const raw=payload?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if(!raw)return fallback;
+  try{
+    const parsed=JSON.parse(raw);
+    let tasks=Array.isArray(parsed.tasks)&&parsed.tasks.length?parsed.tasks:parsed.title?[parsed]:fallback.tasks;
+
+    // POST-PROCESSING: Context inheritance
+    if(tasks.length>1){
+      const firstTitle=String(tasks[0].title||"").trim();
+      const firstWords=firstTitle.split(/\s+/);
+      if(firstWords.length>=2){
+        const subject=firstWords.slice(1).join(" ");
+        const subjectLower=norm(subject);
+        for(let i=1;i<tasks.length;i++){
+          const t=String(tasks[i].title||"").trim();
+          if(!norm(t).includes(subjectLower)){
+            tasks[i].title=`${t} ${subject}`;
+          }
+        }
+      }
+    }
+
+    return{tasks};
+  }catch(_){return fallback}
+};
+
+Deno.serve(async request=>{
+  if(request.method==="OPTIONS")return new Response("ok",{headers:corsHeaders});
+  if(request.method!=="POST")return json({error:"Metodo nao permitido."},405);
+  try{
+    const supabaseUrl=Deno.env.get("SUPABASE_URL")!;
+    const anonKey=Deno.env.get("SUPABASE_ANON_KEY")!;
+    const admin=createClient(supabaseUrl,Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const input=await request.json().catch(()=>({}));
+    const rawToken=request.headers.get("x-siri-token")||input.token||input.chave||"";
+    const siriToken=cleanToken(rawToken);
+
+    // --- Auth via session (app web) ---
+    if(!siriToken){
+      const authorization=request.headers.get("Authorization");
+      if(!authorization)return json({error:"Sessao ausente."},401);
+      const authClient=createClient(supabaseUrl,anonKey,{global:{headers:{Authorization:authorization}}});
+      const{data:userData,error:userError}=await authClient.auth.getUser();
+      if(userError||!userData.user)return json({error:"Sessao invalida."},401);
+      const userId=userData.user.id;
+      const action=String(input.action||"status");
+      if(action==="issue_token"){
+        const token=createToken();
+        const{error}=await admin.from("siri_shortcut_tokens").upsert({user_id:userId,token_hash:await hashToken(token),created_at:new Date().toISOString(),last_used_at:null});
+        if(error)throw error;
+        return json({configured:true,token});
+      }
+      if(action==="revoke_token"){
+        const{error}=await admin.from("siri_shortcut_tokens").delete().eq("user_id",userId);
+        if(error)throw error;
+        return json({configured:false});
+      }
+      const{data}=await admin.from("siri_shortcut_tokens").select("created_at,last_used_at").eq("user_id",userId).maybeSingle();
+      return json({configured:Boolean(data),created_at:data?.created_at||null,last_used_at:data?.last_used_at||null});
+    }
+
+    // --- Auth via Siri token ---
+    const tokenHash=await hashToken(siriToken);
+    const{data:tokenRow}=await admin.from("siri_shortcut_tokens").select("user_id").eq("token_hash",tokenHash).maybeSingle();
+    if(!tokenRow?.user_id)return json({error:"Chave da Siri invalida ou revogada."},401);
+
+    const siriAction=String(input.action||"").toLowerCase().trim();
+    const today=new Intl.DateTimeFormat("en-CA",{timeZone:"America/Sao_Paulo"}).format(new Date());
+    const{data:categoryRows,error:categoryError}=await admin.from("categories").select("id,name,user_id").eq("user_id",tokenRow.user_id).eq("is_active",true).order("created_at",{ascending:true});
+    if(categoryError)throw categoryError;
+    if(!categoryRows?.length)return json({error:"Crie uma categoria no app primeiro."},400);
+
+    // =============================================
+    // MODE: CREATE (2nd call) - UPDATE recently created tasks
+    // =============================================
+    if(siriAction==="create"){
+      // Find tasks created by Siri recently using inserted_at stored in context
+      const threeMinAgo=new Date(Date.now()-3*60*1000).toISOString();
+      const{data:recentTasks}=await admin.from("tasks")
+        .select("id,title,context")
+        .eq("user_id",tokenRow.user_id)
+        .filter("context->>source","eq","siri_shortcut")
+        .filter("context->>inserted_at","gte",threeMinAgo);
+
+      if(recentTasks&&recentTasks.length>0){
+        const inputCategoria=String(input.categoria||input.category||"").trim();
+        const inputTurno=String(input.turno||input.shift||"").trim();
+        const inputHorario=String(input.horario||input.hora||"").trim();
+        const inputLembrete=String(input.lembrete||"").trim().toLowerCase();
+        const inputData=String(input.data||input.date||"").trim();
+
+        const targetCategory=findCategory(inputCategoria,categoryRows);
+
+        const shiftClean=norm(inputTurno).replace(/^a\s+|^de\s+/i,"");
+        const shiftNorm=shiftClean?shiftClean.charAt(0).toUpperCase()+shiftClean.slice(1):"";
+        const validShift=["Manha","Tarde","Noite"].includes(shiftNorm)?(shiftNorm==="Manha"?"Manhã":shiftNorm):null;
+
+        const timeMatch=inputHorario.match(/(\d{1,2})(?::(\d{2}))?/);
+        const reminderTime=timeMatch?`${timeMatch[1].padStart(2,"0")}:${timeMatch[2]||"00"}`:null;
+        const hasReminder=inputLembrete==="true"||inputLembrete==="1"||inputLembrete==="sim"||(reminderTime!==null);
+
+        const newDate=inputData?resolveSpokenDate(inputData,today):null;
+
+        for(const task of recentTasks){
+          const updates:Record<string,unknown>={};
+          const ctx=typeof task.context==="object"&&task.context?{...task.context}:{};
+
+          if(targetCategory){updates.category=targetCategory.name;updates.category_id=targetCategory.id;}
+          if(newDate){updates.created_at=new Date(`${newDate}T12:00:00-03:00`).toISOString();}
+          if(validShift){ctx.turnos=[validShift];}
+          if(hasReminder&&reminderTime){ctx.important=true;ctx.reminder_time=reminderTime;ctx.reminder_offset_days=0;ctx.reminder_timezone="America/Sao_Paulo";}
+
+          if(Object.keys(updates).length>0||validShift||hasReminder){
+            updates.context=ctx;
+            await admin.from("tasks").update(updates).eq("id",task.id);
+          }
+        }
+
+        await admin.from("siri_shortcut_tokens").update({last_used_at:new Date().toISOString()}).eq("user_id",tokenRow.user_id);
+        return json({ok:true,action:"updated",message:`${recentTasks.length} tarefa(s) atualizada(s).`,tasks:recentTasks.map(t=>({id:t.id,title:t.title}))});
+      }
+      // If no recent tasks found, fall through to create
+    }
+
+    // =============================================
+    // ANALYZE (1st call) or fallback - SAVE tasks + return analysis
+    // =============================================
+    const fallbackRequestValue=Object.entries(input).find(([key,value])=>!["action","token","chave","data","turno","categoria","lembrete","horario"].includes(String(key).toLowerCase())&&typeof value==="string"&&value.trim())?.[1];
+    const siriRequestText=String(input.title||input.tarefa||input.prompt||input.pedido||input.Pedido||fallbackRequestValue||"").trim().slice(0,1000);
+    if(!siriRequestText)return json({error:"Informe a tarefa."},400);
+
+    const normalizedSpokenRequest=norm(siriRequestText);
+    const interpretedPayload=await interpretRequest(siriRequestText,categoryRows,today);
+    const rawTasks=Array.isArray(interpretedPayload.tasks)&&interpretedPayload.tasks.length?interpretedPayload.tasks:[interpretedPayload];
+
+    // The REAL insertion timestamp (not the task date)
+    const insertedAtNow=new Date().toISOString();
+
+    const insertedTasks=[];
+    for(const item of rawTasks){
+      const taskTitle=String(item.title||siriRequestText).trim().slice(0,180);
+      const aiCategory=String(item.category||"").trim();
+      const category=findCategory(aiCategory,categoryRows)||categoryRows.find(c=>normalizedSpokenRequest.includes(norm(c.name)))||categoryRows[0];
+      const date=resolveSpokenDate(item.date||today,today);
+      const itemShifts=Array.isArray(item.shifts)&&item.shifts.length?item.shifts:[];
+      const shifts=[...new Set(itemShifts.map((s:unknown)=>norm(String(s)).replace(/^a\s+|^de\s+/i,"")).map((s:string)=>s.charAt(0).toUpperCase()+s.slice(1)).filter((s:string)=>["Manha","Tarde","Noite"].includes(s)).map((s:string)=>s==="Manha"?"Manhã":s))];
+      const rawTime=String(item.reminder_time||"").trim();
+      const reminderEnabled=Boolean(item.reminder_enabled||(rawTime&&/\d/.test(rawTime)));
+      const timeMatch=rawTime.match(/(\d{1,2})(?::(\d{2}))?/);
+      const reminderTime=timeMatch?`${timeMatch[1].padStart(2,"0")}:${timeMatch[2]||"00"}`:"09:00";
+      const createdAt=new Date(`${date}T12:00:00-03:00`).toISOString();
+
+      const taskPayload={
+        title:taskTitle,category:category.name,category_id:category.id,user_id:tokenRow.user_id,
+        is_recurring:false,is_active:true,created_at:createdAt,
+        context:{source:"siri_shortcut",inserted_at:insertedAtNow,creator_user_id:tokenRow.user_id,sync_token:`siri-${crypto.randomUUID()}`,...(shifts.length?{turnos:shifts}:{}),...(reminderEnabled?{important:true,reminder_time:reminderTime,reminder_offset_days:0,reminder_timezone:"America/Sao_Paulo"}:{})}
+      };
+
+      let result=await admin.from("tasks").insert(taskPayload).select("id,title,category,created_at").single();
+      if(result.error&&/category_id|schema cache/i.test(result.error.message||"")){
+        const{category_id:_,...lp}=taskPayload;
+        result=await admin.from("tasks").insert(lp).select("id,title,category,created_at").single();
+      }
+      if(result.error)throw result.error;
+      insertedTasks.push({id:result.data.id,title:taskTitle,category:category.name,date,turnos:shifts,reminderTime:reminderEnabled?reminderTime:null});
+    }
+
+    await admin.from("siri_shortcut_tokens").update({last_used_at:new Date().toISOString()}).eq("user_id",tokenRow.user_id);
+
+    // Build analysis fields for Atalho question boxes
+    const isDatePresent=/\b(hoje|amanha|depois de amanha|segunda|terca|quarta|quinta|sexta|sabado|domingo|\d{1,2}[\/\-]\d{1,2})\b/.test(normalizedSpokenRequest);
+    const hasSpokenShift=/\b(manha|tarde|noite)\b/.test(normalizedSpokenRequest);
+    const mentionedCategory=categoryRows.find(c=>normalizedSpokenRequest.includes(norm(c.name)));
+    const hasSpokenReminder=/\b(lembrete|me lembre|me avise|\d{1,2}\s*h)\b/.test(normalizedSpokenRequest);
+
+    const firstDate=insertedTasks[0]?.date||today;
+    const resolvedTurno=hasSpokenShift?(rawTasks[0]?.shifts?.[0]||null):null;
+    const resolvedCategoria=mentionedCategory?mentionedCategory.name:null;
+    const resolvedLembrete=hasSpokenReminder?true:null;
+    const resolvedHorario=hasSpokenReminder&&rawTasks[0]?.reminder_time?rawTasks[0].reminder_time:null;
+    const taskTitles=insertedTasks.map(t=>t.title).join(" e ");
+
+    const taskSummaries=insertedTasks.map(t=>{
+      const sd=new Intl.DateTimeFormat("pt-BR",{day:"numeric",month:"long",timeZone:"UTC"}).format(new Date(`${t.date}T12:00:00Z`));
+      return `${t.title} (${sd}${t.turnos?.length?" - "+t.turnos[0]:""})`;
+    }).join(" e ");
+
+    return json({
+      ok:true,action:"analyze",
+      message:`${insertedTasks.length} tarefa(s) criada(s): ${taskSummaries}.`,
+      resolved:{
+        title:taskTitles,
+        data:isDatePresent?firstDate:null,date:isDatePresent?firstDate:null,dia:isDatePresent?firstDate:null,
+        turno:resolvedTurno,
+        categoria:resolvedCategoria,
+        lembrete:resolvedLembrete,
+        horario:resolvedHorario
+      },
+      title:taskTitles,
+      data:isDatePresent?firstDate:null,date:isDatePresent?firstDate:null,dia:isDatePresent?firstDate:null,
+      turno:resolvedTurno,categoria:resolvedCategoria,lembrete:resolvedLembrete,horario:resolvedHorario,
+      tasks:insertedTasks,task:insertedTasks[0],
+      categories:categoryRows.map(c=>c.name)
+    });
+  }catch(error){return json({error:error instanceof Error?error.message:String(error)},500)}
+});

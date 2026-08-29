@@ -1,1073 +1,1116 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>Central · Grupo Cassol</title>
-<link rel="stylesheet" href="style.css">
-<!-- Firebase (ES module) — exposes fbSave, fbGet, fbLoadAll, fbListen on window -->
-<script type="module" src="firebase.js"></script>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Checklist Diário Organizacional</title>
+    <script>
+        if (localStorage.getItem("checklist_device_cache_ready") === "true") {
+            document.documentElement.classList.add("checklist-device-ready");
+        }
+    </script>
+
+    <!-- Global Error Catcher for Debugging -->
+    <script>
+        window.addEventListener('error', function(e) {
+            const showError = () => {
+                const errorDiv = document.createElement('div');
+                errorDiv.style.position = 'fixed';
+                errorDiv.style.top = '10px';
+                errorDiv.style.left = '10px';
+                errorDiv.style.right = '10px';
+                errorDiv.style.background = '#ef4444';
+                errorDiv.style.color = '#fff';
+                errorDiv.style.padding = '16px';
+                errorDiv.style.borderRadius = '8px';
+                errorDiv.style.zIndex = '99999';
+                errorDiv.style.fontSize = '12px';
+                errorDiv.style.fontFamily = 'monospace';
+                errorDiv.style.whiteSpace = 'pre-wrap';
+                errorDiv.style.boxShadow = '0 10px 30px rgba(0,0,0,0.5)';
+                errorDiv.innerHTML = '<strong>Erro de JavaScript detectado:</strong><br><br>' + 
+                    e.message + '<br>Arquivo: ' + e.filename + '<br>Linha: ' + e.lineno + ':' + e.colno +
+                    '<br><br><button onclick="this.parentElement.remove()" style="background:#fff;color:#ef4444;border:none;padding:6px 12px;border-radius:4px;font-weight:bold;cursor:pointer;">Fechar</button>';
+                document.body.appendChild(errorDiv);
+            };
+            if (document.body) {
+                showError();
+            } else {
+                document.addEventListener('DOMContentLoaded', showError);
+            }
+        });
+    </script>
+    <link rel="stylesheet" href="style.css?v=8.42">
+    
+    <!-- iOS / PWA Support -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Checklist">
+    <link rel="apple-touch-icon" href="./icons/icon-192.png">
+    <link rel="manifest" href="manifest.json">
+
+    <!-- Google Fonts: Plus Jakarta Sans for premium typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Lucide Icons for modern, clean icons -->
+    <script src="./vendor/lucide.min.js?v=1.24.0"></script>
+    <!-- Supabase JS Client library CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
-
-<div id="login-screen" style="display:none;">
-  <div class="login-box">
-    <div class="login-logo">Grupo Cassol</div>
-    <div class="login-sub">Central de Controle</div>
-    <div class="login-pass-wrap">
-      <div class="login-pass-label">Nome</div>
-      <input class="login-pass-input" id="login-name" type="text" placeholder="Seu nome"
-        onkeydown="if(event.key==='Enter')document.getElementById('login-pass').focus()">
+    <div id="app-session-loader" class="app-session-loader" aria-live="polite">
+        <div class="session-loader-card"><span class="session-loader-icon"><i data-lucide="list-checks"></i></span><strong>Preparando seu checklist</strong><small>Carregando suas categorias e tarefas…</small><span class="session-loader-bar"><i></i></span></div>
     </div>
-    <div class="login-pass-wrap">
-      <div class="login-pass-label">Senha</div>
-      <input class="login-pass-input" id="login-pass" type="password" placeholder="••••••••"
-        onkeydown="if(event.key==='Enter')doLogin()">
-    </div>
-    <button class="login-btn" onclick="doLogin()">Entrar</button>
-    <div class="login-error" id="login-error"></div>
-  </div>
-</div>
-
-<!-- Mobile nav overlay (always in DOM) -->
-<div id="mobile-nav-overlay" onclick="closeMobileNav()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:499;"></div>
-<!-- Hamburger button (always in DOM, hidden until mobile+logged in) -->
-<button id="mobile-hamburger" onclick="toggleMobileNav()" style="display:none;position:fixed;top:12px;right:12px;z-index:501;width:42px;height:42px;border-radius:10px;background:var(--surface);border:1px solid var(--border);cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.1);flex-direction:column;align-items:center;justify-content:center;gap:5px;padding:10px;">
-  <span style="display:block;width:20px;height:2px;background:var(--text);border-radius:2px;"></span>
-  <span style="display:block;width:20px;height:2px;background:var(--text);border-radius:2px;"></span>
-  <span style="display:block;width:20px;height:2px;background:var(--text);border-radius:2px;"></span>
-</button>
-
-<!-- BOTTOM NAV BAR (mobile) -->
-<div id="bottom-nav">
-  <button class="bottom-nav-btn active" id="bnav-tarefas" onclick="bottomNav('tarefas',this)" title="Tarefas">
-    <span class="bottom-nav-icon">✓</span>
-    <span class="bottom-nav-label">Tarefas</span>
-  </button>
-  <button class="bottom-nav-btn" id="bnav-add" onclick="bottomNavAdd()" title="Adicionar">
-    <span class="bottom-nav-icon" style="width:38px;height:38px;border-radius:50%;background:var(--text);color:var(--surface);display:flex;align-items:center;justify-content:center;font-size:22px;box-shadow:0 2px 10px rgba(28,20,16,0.2);">+</span>
-    <span class="bottom-nav-label" style="opacity:0;">·</span>
-  </button>
-  <button class="bottom-nav-btn" id="bnav-notas" onclick="bottomNav('colab-self',this)" title="Notas" style="position:relative;">
-    <span class="bottom-nav-icon">✏️</span>
-    <span class="bottom-nav-label">Notas</span>
-  </button>
-  <button class="bottom-nav-btn" id="bnav-notif" onclick="openNotifPanel()" title="Notificações" style="position:relative;">
-    <span class="bottom-nav-icon">🔔</span>
-    <span class="bottom-nav-label">Alertas</span>
-    <span class="bottom-nav-badge" id="notif-badge"></span>
-  </button>
-  <button class="bottom-nav-btn" id="bnav-chat" onclick="openChatPanel()" title="Chat">
-    <span class="bottom-nav-icon">💬</span>
-    <span class="bottom-nav-label">Chat</span>
-    <span class="bottom-nav-badge" id="chat-badge"></span>
-  </button>
-</div>
-
-<!-- NOTIFICATIONS PANEL -->
-<div id="notif-panel">
-  <div id="notif-panel-inner">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.8rem;">
-      <div style="font-family:'DM Serif Display',serif;font-size:16px;">Notificações</div>
-      <button onclick="closeNotifPanel()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text-soft);">×</button>
-    </div>
-    <div id="notif-list"><div style="text-align:center;color:var(--text-soft);padding:1.5rem;font-size:13px;">Nenhuma notificação</div></div>
-  </div>
-</div>
-
-<!-- CHAT OVERLAY (mobile) -->
-<div id="chat-overlay" onclick="closeChatPanel()"></div>
-
-<!-- CHAT DRAWER -->
-<div id="chat-panel">
-  <div class="chat-panel-header">
-    <div style="font-family:'DM Serif Display',serif;font-size:18px;">Chat da equipe</div>
-    <button onclick="closeChatPanel()" style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--text-soft);line-height:1;">×</button>
-  </div>
-  <div class="chat-panel-messages" id="chat-panel-messages"></div>
-  <div class="chat-panel-input-row">
-    <textarea id="chat-panel-input" placeholder="Mensagem..." rows="1"
-      style="flex:1;padding:9px 12px;border:1px solid var(--border-mid);border-radius:20px;font-family:'DM Sans',sans-serif;font-size:14px;background:var(--bg);color:var(--text);resize:none;outline:none;max-height:80px;"
-      onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChatMessage();}"></textarea>
-    <button onclick="sendChatMessage()" style="background:var(--text);color:var(--surface);border:none;border-radius:50%;width:40px;height:40px;cursor:pointer;font-size:18px;flex-shrink:0;display:flex;align-items:center;justify-content:center;">↑</button>
-  </div>
-</div>
-
-<div class="shell" id="app-shell" style="display:none;">
-<aside class="sidebar">
-  <div class="sidebar-logo">
-    <div class="logo-name" onclick="showPage('visao', document.querySelector('.nav-item.active'))">Grupo Cassol</div>
-    <div class="logo-sub">Central de Controle</div>
-  </div>
-  <div class="nav-section">
-    <div class="nav-label">Visão</div>
-    <button class="nav-item active" onclick="showPage('visao',this)"><span style="font-size:15px;opacity:0.6;">◈</span> Visão Geral</button>
-  </div>
-  <div class="nav-section">
-    <div class="nav-label">Sessões</div>
-    <button class="nav-item" onclick="showPage('tarefas',this)"><span style="font-size:13px;">✓</span> Tarefas</button>
-    <button class="nav-item" onclick="showPage('conteudo-menu',this)"><span style="font-size:13px;">✍</span> Conteúdo</button>
-    <button class="nav-item" onclick="showPage('eventos',this)"><span style="font-size:13px;">📅</span> Eventos</button>
-    <button class="nav-item" onclick="showPage('projetos',this)"><span style="font-size:13px;">◆</span> Projetos</button>
-    <button class="nav-item" onclick="showPage('livros',this)"><span style="font-size:13px;">📖</span> Livros</button>
-  </div>
-  <div class="nav-section">
-    <div class="nav-label">Colaboradores</div>
-    <button class="nav-item" onclick="showPage('colab-gisella',this)"><span class="avatar" style="width:20px;height:20px;font-size:9px;background:var(--gisella-bg);color:var(--gisella);">G</span> Gisella</button>
-    <button class="nav-item" onclick="showPage('colab-milena',this)"><span class="avatar" style="width:20px;height:20px;font-size:9px;background:var(--leia-bg);color:var(--leia);">M</span> Milena</button>
-    <button class="nav-item" onclick="showPage('colab-luiggi',this)"><span class="avatar" style="width:20px;height:20px;font-size:9px;background:var(--editora-bg);color:var(--editora);">L</span> Luiggi</button>
-  </div>
-
-  <div class="sidebar-footer">Dados salvos localmente<br><span id="last-saved" style="opacity:0.7;">—</span></div>
-  <div style="padding:4px 1rem 8px;font-size:10px;color:var(--text-soft);opacity:0.45;letter-spacing:0.03em;">v1.0.0</div>
-  <div id="sync-indicator" style="display:none;align-items:center;gap:6px;padding:6px 1rem;font-size:11px;color:var(--gisella);">
-    <span style="width:6px;height:6px;border-radius:50%;background:var(--gisella);display:inline-block;"></span>
-    Sincronizado com a nuvem
-  </div>
-
-
-</aside>
-<main class="main">
-
-<!-- VISÃO GERAL -->
-<div class="page active" id="page-visao">
-
-  <!-- ALERTAS DE PRAZO -->
-  <div id="home-alertas" style="margin-bottom:2rem;display:none;">
-    <div class="section-title">⚠️ Atenção — prazos próximos</div>
-    <div id="home-alertas-lista" style="display:flex;flex-direction:column;gap:6px;"></div>
-  </div>
-
-  <div class="section">
-    <div class="section-title">Calendário — todas as empresas</div>
-    <div class="cal-wrap" id="cal-visao"></div>
-  </div>
-  <div class="section">
-    <div class="section-title">Prioridade</div>
-    <div id="prioridades-container"></div>
-    <div style="margin-top:8px;">
-      <button class="archived-toggle" id="prio-arq-btn" onclick="togglePrioridadesArquivadas()" style="display:none;"><span id="prio-arq-arrow">▸</span> Arquivados (<span id="prio-arq-count">0</span>)</button>
-      <div id="prioridades-arquivados" style="display:none;margin-top:8px;"></div>
-    </div>
-  </div>
-
-  <div class="section">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-  </div>
-  <div class="section">
-    <div class="section-title section-title-semana">Tarefas da semana</div>
-    <div id="cal-visao-semana-wrap"></div>
-    <div id="visao-tarefas-lista" style="margin-top:12px;"></div>
-  </div>
-  <div class="section">
-    <div class="section-title">Conteúdos da semana</div>
-    <div id="visao-conteudos"></div>
-  </div>
-  <div class="section">
-      <div class="section-title" style="margin-bottom:0;">Livros em produção</div>
-    </div>
-    <div id="livros-visao"></div>
-    <div style="margin-top:8px;">
-      <button class="archived-toggle" id="livros-visao-arq-btn" onclick="toggleLivrosArquivadosVisao()" style="display:none;"><span id="livros-visao-arq-arrow">▸</span> Arquivados (<span id="livros-visao-arq-count">0</span>)</button>
-      <div id="livros-visao-arquivados" style="display:none;margin-top:8px;"></div>
-    </div>
-  </div>
-
-</div>
-
-
-<!-- EVENTOS -->
-<div class="page" id="page-eventos">
-  <div class="page-header">
-    <div class="page-title">Eventos</div>
-    <div class="page-subtitle">Calendário de eventos das três empresas</div>
-  </div>
-  <div class="filter-bar" id="filter-bar-eventos">
-    <button class="filter-btn active" onclick="setFilter('eventos','all',this)">Todas</button>
-    <button class="filter-btn f-editora" onclick="setFilter('eventos','editora',this)">Editora Cassol</button>
-    <button class="filter-btn f-leia" onclick="setFilter('eventos','leia',this)">Léia Cassol</button>
-    <button class="filter-btn f-gisella" onclick="setFilter('eventos','gisella',this)">GC Estratégias</button>
-  </div>
-
-  <div class="section">
-    <div class="cal-wrap" id="cal-eventos"></div>
-  </div>
-  <div class="section">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-      <div class="section-title" style="margin-bottom:0;">Lista de eventos</div>
-      <button class="add-btn" style="margin:0;" onclick="openQuickAdd();setTimeout(()=>{document.getElementById('qa-tipo').value='evento';updateQaFields();},50)">+ novo evento</button>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-      <div>
-        <div id="eventos-proximos-label" style="font-size:11px;font-weight:600;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;">Próximos</div>
-        <div id="eventos-lista-proximos"></div>
-      </div>
-      <div>
-        <div style="font-size:11px;font-weight:600;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;">Passados (este mês)</div>
-        <div id="eventos-lista-passados"></div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- CONTEUDO MENU -->
-<div class="page" id="page-conteudo-menu">
-  <div class="page-header">
-    <div class="page-title">Criação de Conteúdo</div>
-    <div class="page-subtitle">Calendário e lista de conteúdos das três empresas</div>
-  </div>
-  <div class="filter-bar" id="filter-bar-conteudo-menu">
-    <button class="filter-btn active" onclick="setFilter('conteudo-menu','all',this)">Todas</button>
-    <button class="filter-btn f-editora" onclick="setFilter('conteudo-menu','editora',this)">Editora Cassol</button>
-    <button class="filter-btn f-leia" onclick="setFilter('conteudo-menu','leia',this)">Léia Cassol</button>
-    <button class="filter-btn f-gisella" onclick="setFilter('conteudo-menu','gisella',this)">GC Estratégias</button>
-  </div>
-
-  <div class="section">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-      <div class="section-title" style="margin-bottom:0;">Calendário</div>
-      <div style="display:flex;gap:4px;">
-        <button id="btn-cal-semana" onclick="setConteudoCalView('semana')" class="filter-btn active" style="font-size:11px;padding:4px 12px;">Semana</button>
-        <button id="btn-cal-mes" onclick="setConteudoCalView('mes')" class="filter-btn" style="font-size:11px;padding:4px 12px;">Mês</button>
-      </div>
-    </div>
-    <div id="cal-conteudo-wrap">
-      <div id="cal-conteudo-semana"></div>
-    </div>
-  </div>
-  <div class="section">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-      <div class="section-title" style="margin-bottom:0;">Todos os conteúdos</div>
-      <button class="add-btn" style="margin:0;" onclick="openQuickAdd();setTimeout(()=>{document.getElementById('qa-tipo').value='conteudo';updateQaFields();},50)">+ novo conteúdo</button>
-    </div>
-    <div id="conteudo-tbody-menu"></div>
-    <div style="margin-top:1rem;">
-      <button class="archived-toggle" onclick="toggleArchivedMenu()"><span id="archived-arrow-menu">▸</span> Arquivados (<span id="archived-count-menu">0</span>)</button>
-      <div id="archived-section-menu" style="display:none;margin-top:8px;">
-        <div id="archived-tbody-menu"></div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- PROJETOS -->
-<div class="page" id="page-projetos">
-  <div class="page-header">
-    <div class="page-title">Projetos</div>
-    <div class="page-subtitle">Todos os projetos das três empresas</div>
-  </div>
-  <div class="filter-bar" id="filter-bar-projetos">
-    <button class="filter-btn active" onclick="setFilter('projetos','all',this)">Todas</button>
-    <button class="filter-btn f-editora" onclick="setFilter('projetos','editora',this)">Editora Cassol</button>
-    <button class="filter-btn f-leia" onclick="setFilter('projetos','leia',this)">Léia Cassol</button>
-    <button class="filter-btn f-gisella" onclick="setFilter('projetos','gisella',this)">GC Estratégias</button>
-  </div>
-
-
-  <div id="projetos-todos"></div>
-  <div style="margin-top:1.5rem;">
-    <button class="archived-toggle" onclick="toggleProjetosArquivadosTodos()"><span id="parq-arrow-todos">▸</span> Arquivados (<span id="parq-count-todos">0</span>)</button>
-    <div id="projetos-arquivados-todos" style="display:none;margin-top:8px;"></div>
-  </div>
-</div>
-
-<!-- TAREFAS -->
-<div class="page" id="page-tarefas">
-  <div class="page-header"><div class="page-title">Tarefas</div><div class="page-subtitle">Todas as tarefas abertas, ordenadas por prazo</div></div>
-  <div class="filter-bar" id="filter-bar-tarefas" style="margin-bottom:8px;">
-    <button class="filter-btn active" onclick="setFilter('tarefas','all',this)">Todas</button>
-    <button class="filter-btn f-editora" onclick="setFilter('tarefas','editora',this)">Editora Cassol</button>
-    <button class="filter-btn f-leia" onclick="setFilter('tarefas','leia',this)">Léia Cassol</button>
-    <button class="filter-btn f-gisella" onclick="setFilter('tarefas','gisella',this)">GC Estratégias</button>
-  </div>
-  <div class="filter-bar" id="filter-bar-tarefas-colab">
-    <button class="filter-btn active" onclick="setFilterColab('tarefas','all',this)">Todos os colaboradores</button>
-    <button class="filter-btn" onclick="setFilterColab('tarefas','Gisella',this)">Gisella</button>
-    <button class="filter-btn" onclick="setFilterColab('tarefas','Milena',this)">Milena</button>
-    <button class="filter-btn" onclick="setFilterColab('tarefas','Luiggi',this)">Luiggi</button>
-  </div>
-
-  <div class="section">
-    <div class="section-title section-title-semana">Calendário semanal</div>
-    <div id="cal-tarefas-semana-wrap"></div>
-  </div>
-
-  <div id="tarefas-container"></div>
-</div>
-
-
-<!-- LIVROS -->
-<div class="page" id="page-livros">
-  <div class="page-header">
-    <div><div class="page-title">Livros</div><div class="page-subtitle">Todos os livros em produção</div></div>
-    <button class="btn btn-primary" onclick="openAddLivroTodos()">+ Novo livro</button>
-  </div>
-  <div class="filter-bar" id="filter-bar-livros">
-    <button class="filter-btn active" onclick="setFilter('livros','all',this)">Todas</button>
-    <button class="filter-btn f-editora" onclick="setFilter('livros','editora',this)">Editora Cassol</button>
-    <button class="filter-btn f-leia" onclick="setFilter('livros','leia',this)">Léia Cassol</button>
-    <button class="filter-btn f-gisella" onclick="setFilter('livros','gisella',this)">GC Estratégias</button>
-  </div>
-
-  <div class="section">
-    <div class="section-title">Calendário semanal de tarefas</div>
-    <div id="cal-livros-semana-wrap"></div>
-  </div>
-
-  <div id="livros-todos"></div>
-  <div id="livros-arquivados-section" style="margin-top:1.5rem;display:none;">
-    <div class="section-title">Arquivados (100% concluídos)</div>
-    <div id="livros-arquivados-todos"></div>
-  </div>
-  <button class="archived-toggle" id="livros-arq-btn" onclick="toggleLivrosArquivados()" style="display:none;"><span id="livros-arq-arrow">▸</span> Arquivados (<span id="livros-arq-count">0</span>)</button>
-  <div id="livros-arquivados-wrap" style="display:none;margin-top:8px;"><div id="livros-arquivados-list"></div></div>
-</div>
-
-<!-- COLABORADOR: GISELLA -->
-<div class="page" id="page-colab-gisella">
-  <div class="page-header">
-    <div class="page-title">Gisella</div>
-    <div class="page-subtitle">Agenda &middot; Semana &middot; Tarefas</div>
-  </div>
-  <div class="section">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <div class="section-title" style="margin-bottom:0;">Agenda Google</div>
-      <div style="display:flex;gap:8px;align-items:center;">
-        <button onclick="gcalPrevMonth()" style="background:none;border:1px solid var(--border-mid);border-radius:6px;padding:4px 10px;cursor:pointer;color:var(--text);">&#8249;</button>
-        <span id="gcal-month-label" style="font-size:13px;font-weight:500;min-width:130px;text-align:center;"></span>
-        <button onclick="gcalNextMonth()" style="background:none;border:1px solid var(--border-mid);border-radius:6px;padding:4px 10px;cursor:pointer;color:var(--text);">&#8250;</button>
-      </div>
-    </div>
-    <div id="gcal-container">
-      <div style="padding:2rem;text-align:center;color:var(--text-soft);font-size:13px;">Carregando agenda...</div>
-    </div>
-    <div id="mentorias-semana-colab" style="margin-top:10px;font-size:13px;"></div>
-  </div>
-  <div class="section section-title-semana">
-    <div class="section-title">📅 Semana</div>
-    <div id="colab-cal-semana-gisella"></div>
-  </div>
-  <div class="section">
-    <div class="section-title">Tarefas</div>
-    <div id="colab-tarefas-gisella"></div>
-  </div>
-  <div class="section">
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;max-width:420px;">
-      <div style="font-size:11px;font-weight:600;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;">Notas Rápidas</div>
-      <div id="gisella-notas-lista"></div>
-      <button onclick="addNotaRapida('gisella')" style="margin-top:8px;font-size:11px;background:none;border:1px dashed var(--border-mid);border-radius:6px;padding:4px 8px;color:var(--text-soft);cursor:pointer;width:100%;">+ nota</button>
-    </div>
-  </div>
-</div>
-
-<!-- COLABORADOR: MILENA -->
-<div class="page" id="page-colab-milena">
-  <div class="page-header">
-    <div class="page-title">Milena</div>
-    <div class="page-subtitle">Semana &middot; Tarefas</div>
-  </div>
-  <div class="section section-title-semana">
-    <div class="section-title">📅 Semana</div>
-    <div id="colab-cal-semana-milena"></div>
-  </div>
-  <div class="section">
-    <div class="section-title">Tarefas</div>
-    <div id="colab-tarefas-milena"></div>
-  </div>
-  <div class="section">
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;max-width:420px;">
-      <div style="font-size:11px;font-weight:600;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;">Notas Rápidas</div>
-      <div id="milena-notas-lista"></div>
-      <button onclick="addNotaRapida('milena')" style="margin-top:8px;font-size:11px;background:none;border:1px dashed var(--border-mid);border-radius:6px;padding:4px 8px;color:var(--text-soft);cursor:pointer;width:100%;">+ nota</button>
-    </div>
-  </div>
-</div>
-
-<!-- COLABORADOR: LUIGGI -->
-<div class="page" id="page-colab-luiggi">
-  <div class="page-header">
-    <div class="page-title">Luiggi</div>
-    <div class="page-subtitle">Semana &middot; Tarefas</div>
-  </div>
-  <div class="section section-title-semana">
-    <div class="section-title">📅 Semana</div>
-    <div id="colab-cal-semana-luiggi"></div>
-  </div>
-  <div class="section">
-    <div class="section-title">Tarefas</div>
-    <div id="colab-tarefas-luiggi"></div>
-  </div>
-  <div class="section">
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;max-width:420px;">
-      <div style="font-size:11px;font-weight:600;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;">Notas Rápidas</div>
-      <div id="luiggi-notas-lista"></div>
-      <button onclick="addNotaRapida('luiggi')" style="margin-top:8px;font-size:11px;background:none;border:1px dashed var(--border-mid);border-radius:6px;padding:4px 8px;color:var(--text-soft);cursor:pointer;width:100%;">+ nota</button>
-    </div>
-  </div>
-</div>
-
-<!-- BANCO DE LINKS -->
-<div class="page" id="page-links">
-  <div class="page-header">
-    <div class="page-title">Banco de Links</div>
-    <div class="page-subtitle">Ferramentas, docs e planilhas</div>
-  </div>
-  <div class="section">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
-      <div class="section-title" style="margin-bottom:0;">Links salvos</div>
-      <button class="add-btn" style="margin:0;" onclick="openAddLink()">+ adicionar link</button>
-    </div>
-    <div id="links-grid"></div>
-  </div>
-</div>
-
-<!-- MODAL LINK -->
-
-<!-- MODAL BANCO DE LINKS EMPRESA -->
-<div class="modal-overlay" id="modal-links-empresa" onclick="if(event.target===this)closeModal('modal-links-empresa')">
-  <div class="modal" style="width:560px;max-height:80vh;display:flex;flex-direction:column;">
-    <button class="modal-close" onclick="closeModal('modal-links-empresa')">×</button>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
-      <div class="modal-title" id="modal-links-emp-title" style="margin:0;">Banco de Links</div>
-      <button class="add-btn" style="margin:0;" onclick="openAddLinkEmpresaFromModal()">+ adicionar</button>
-    </div>
-    <div id="modal-links-emp-content" style="overflow-y:auto;flex:1;"></div>
-  </div>
-</div>
-
-<div class="modal-overlay" id="modal-link" onclick="if(event.target===this)closeModal('modal-link')">
-  <div class="modal" style="width:420px;">
-    <button class="modal-close" onclick="closeModal('modal-link')">×</button>
-    <div class="modal-title" id="modal-link-title">Novo link</div>
-    <div style="display:flex;flex-direction:column;gap:12px;margin-top:1rem;">
-      <div class="form-group"><label class="form-label">Nome *</label><input class="form-input" id="link-nome" type="text" placeholder="Ex: Planilha de Métricas"></div>
-      <div class="form-group"><label class="form-label">URL *</label><input class="form-input" id="link-url" type="url" placeholder="https://..."></div>
-      <div class="form-group"><label class="form-label">Categoria</label>
-        <select class="form-select" id="link-categoria">
-          <option value="ferramenta">🛠 Ferramenta</option>
-          <option value="planilha">📊 Planilha</option>
-          <option value="doc">📄 Documento</option>
-          <option value="outro">🔗 Outro</option>
-        </select>
-      </div>
-    </div>
-    <div class="btn-row" style="margin-top:1.5rem;">
-      <button class="btn" onclick="closeModal('modal-link')">Cancelar</button>
-      <button class="btn btn-primary" onclick="saveLink()">Salvar</button>
-    </div>
-  </div>
-</div>
-
-</main>
-</div>
-
-<!-- POMODORO WIDGET — topmost floating button -->
-<div id="pomodoro-widget" style="position:fixed;bottom:18rem;right:1rem;z-index:150;">
-  <!-- Display expandido -->
-  <div id="pomodoro-expanded" style="display:none;position:absolute;bottom:0;right:62px;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:12px 14px;box-shadow:0 4px 20px rgba(28,20,16,0.18);width:170px;text-align:center;">
-    <!-- Modo label -->
-    <div id="pom-mode-label" style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-soft);margin-bottom:8px;">Foco</div>
-    <!-- Timer display -->
-    <div id="pom-display" style="font-family:'DM Serif Display',serif;font-size:36px;color:var(--text);line-height:1;margin-bottom:10px;letter-spacing:2px;">25:00</div>
-    <!-- Progresso -->
-    <div style="height:3px;background:var(--bg);border-radius:4px;overflow:hidden;margin-bottom:12px;">
-      <div id="pom-progress" style="height:100%;border-radius:4px;background:var(--gisella);width:100%;transition:width 1s linear;"></div>
-    </div>
-    <!-- Controles -->
-    <div style="display:flex;gap:6px;justify-content:center;margin-bottom:10px;">
-      <button id="pom-btn-start" onclick="pomToggle()" style="flex:1;padding:6px 0;border-radius:8px;border:none;background:var(--gisella);color:white;font-size:12px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;">▶ Iniciar</button>
-      <button onclick="pomReset()" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:none;color:var(--text-soft);font-size:12px;cursor:pointer;">↺</button>
-    </div>
-    <!-- Seletor de modo -->
-    <div style="display:flex;gap:4px;justify-content:center;">
-      <button onclick="pomSetMode('foco')" id="pom-tab-foco" style="flex:1;font-size:10px;padding:4px 0;border-radius:6px;border:none;background:var(--gisella-bg);color:var(--gisella);cursor:pointer;font-weight:600;">Foco</button>
-      <button onclick="pomSetMode('curta')" id="pom-tab-curta" style="flex:1;font-size:10px;padding:4px 0;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text-soft);cursor:pointer;">Pausa</button>
-      <button onclick="pomSetMode('longa')" id="pom-tab-longa" style="flex:1;font-size:10px;padding:4px 0;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text-soft);cursor:pointer;">Longa</button>
-    </div>
-    <!-- Contador de pomodoros -->
-    <div id="pom-ciclos" style="font-size:10px;color:var(--text-soft);margin-top:8px;">🍅 0 pomodoros hoje</div>
-  </div>
-  <!-- Botão compacto -->
-  <div style="position:relative;width:52px;height:52px;" onclick="pomHandleClick(event)" ondblclick="pomHandleDouble(event)" title="Clique para pausar · Duplo clique para abrir">
-    <canvas id="pom-ring-canvas" width="52" height="52" style="position:absolute;top:0;left:0;border-radius:50%;"></canvas>
-    <button id="pom-toggle-btn" style="position:absolute;top:3px;left:3px;width:46px;height:46px;border-radius:50%;background:var(--surface);border:none;font-size:20px;cursor:pointer;box-shadow:0 2px 12px rgba(28,20,16,0.12);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:1px;">
-      <span style="font-size:18px;line-height:1;">🍅</span>
-      <span id="pom-mini-display" style="font-size:9px;font-weight:600;color:var(--text-soft);font-family:'DM Sans',sans-serif;line-height:1;">25:00</span>
-    </button>
-  </div>
-</div>
-
-<!-- BOTÕES FLUTUANTES — todos à direita, espaçamento igual de 4.5rem entre eles -->
-<button onclick="openChatPanel()" title="Chat da equipe" id="chat-float-btn" style="position:fixed;bottom:13.5rem;right:1rem;width:52px;height:52px;border-radius:50%;background:var(--text);color:var(--surface);border:none;font-size:22px;cursor:pointer;z-index:150;box-shadow:0 4px 20px rgba(28,20,16,0.25);display:flex;align-items:center;justify-content:center;">💬<span id="chat-float-badge" class="chat-float-btn-badge"></span></button>
-<button onclick="openNotifPanel()" title="Notificações" id="notif-float-btn" style="position:fixed;bottom:9rem;right:1rem;width:52px;height:52px;border-radius:50%;background:var(--text);color:var(--surface);border:none;font-size:22px;cursor:pointer;z-index:150;box-shadow:0 4px 20px rgba(28,20,16,0.25);display:flex;align-items:center;justify-content:center;">🔔<span id="notif-float-badge" style="display:none;position:absolute;top:4px;right:4px;width:10px;height:10px;border-radius:50%;background:#e74c3c;border:2px solid var(--text);"></span></button>
-<button onclick="openNotaRapidaFlutuante()" title="Nova nota rápida" style="position:fixed;bottom:4.5rem;right:1rem;width:52px;height:52px;border-radius:50%;background:var(--text);color:var(--surface);border:none;font-size:22px;cursor:pointer;z-index:150;box-shadow:0 4px 20px rgba(28,20,16,0.25);display:flex;align-items:center;justify-content:center;">✏️</button>
-<button onclick="openQuickAdd()" title="Adicionar" style="position:fixed;bottom:0rem;right:1rem;width:52px;height:52px;border-radius:50%;background:var(--text);color:var(--surface);border:none;font-size:26px;cursor:pointer;z-index:150;box-shadow:0 4px 20px rgba(28,20,16,0.25);display:flex;align-items:center;justify-content:center;margin-bottom:1rem;">+</button>
-
-<!-- MODAL QUICK ADD -->
-<div id="undo-toast">
-  <span id="undo-msg">Item excluído</span>
-  <button onclick="undoDelete()">Desfazer</button>
-</div>
-
-<div class="modal-overlay" id="modal-quickadd">
-  <div class="modal" style="width:520px;">
-    <button class="modal-close" onclick="closeModal('modal-quickadd')">×</button>
-    <div class="modal-title" id="qa-modal-title">Adicionar item</div>
-    <form onsubmit="event.preventDefault();submitQuickAdd();">
-      <div class="form-group"><label class="form-label">Empresa(s)</label>
-        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:4px;">
-          <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="qa-emp-editora" style="accent-color:var(--editora);"> <span style="color:var(--editora);">Editora Cassol</span></label>
-          <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="qa-emp-leia" style="accent-color:var(--leia);"> <span style="color:var(--leia);">Léia Cassol</span></label>
-          <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="qa-emp-gisella" style="accent-color:var(--gisella);"> <span style="color:var(--gisella);">GC Estratégias</span></label>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
-        <div class="form-group"><label class="form-label">Tipo</label>
-          <select class="form-select" id="qa-tipo" onchange="updateQaFields()">
-            <option value="tarefa" selected>Tarefa</option>
-            <option value="evento">Evento</option>
-            <option value="projeto">Projeto</option>
-            <option value="conteudo">Conteúdo</option>
-            <option value="livro">Livro</option>
-          </select></div>
-      </div>
-      <div class="form-group"><label class="form-label">Título *</label><input class="form-input" id="qa-titulo" type="text" placeholder="Descreva..."></div>
-
-      <!-- TAREFA FIELDS -->
-      <div id="qa-fields-tarefa">
-        <div class="form-group"><label class="form-label">Data de entrega</label><input class="form-input" id="qa-prazo" type="date"></div>
-        <div class="form-group"><label class="form-label">Recorrência</label>
-          <select class="form-select" id="qa-recorrencia" onchange="updateQaRecorrenciaFields()">
-            <option value="none">Não repetir</option>
-            <option value="interval15">A cada 15 dias</option>
-            <option value="weekdays">Dias específicos da semana</option>
-            <option value="googleMentoring">Quando houver mentoria no Google Calendar</option>
-          </select>
-        </div>
-        <div id="qa-recorrencia-weekdays" class="form-group" style="display:none;"><label class="form-label">Repetir em</label>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <label><input type="checkbox" value="1" class="qa-recorrencia-day"> Seg</label><label><input type="checkbox" value="2" class="qa-recorrencia-day"> Ter</label><label><input type="checkbox" value="3" class="qa-recorrencia-day"> Qua</label><label><input type="checkbox" value="4" class="qa-recorrencia-day"> Qui</label><label><input type="checkbox" value="5" class="qa-recorrencia-day"> Sex</label><label><input type="checkbox" value="6" class="qa-recorrencia-day"> Sáb</label><label><input type="checkbox" value="0" class="qa-recorrencia-day"> Dom</label>
-          </div>
-        </div>
-        <div id="qa-recorrencia-mentoring" class="form-group" style="display:none;"><label class="form-label">Quando criar em relação à mentoria</label>
-          <select class="form-select" id="qa-mentoring-offset"><option value="-1">1 dia antes</option><option value="0">No mesmo dia</option><option value="1" selected>1 dia depois</option></select>
-        </div>
-        <div class="form-group" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-          <div style="flex:1;"><label class="form-label">Responsável</label>
-          <select class="form-select" id="qa-responsavel">
-            <option value="">— nenhum —</option><option value="Gisella">Gisella</option><option value="Milena">Milena</option><option value="Luiggi">Luiggi</option>
-          </select></div>
-          <div style="padding-top:18px;">
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;user-select:none;">
-              <input type="checkbox" id="qa-urgente" style="accent-color:var(--danger);width:16px;height:16px;"> <span style="font-size:16px;">❗</span> <span style="color:var(--danger);font-weight:500;">Urgente</span>
-            </label>
-          </div>
-        </div>
-        <div class="form-group"><label class="form-label">Observação</label>
-          <textarea class="notes-area" id="qa-observacao" placeholder="Notas adicionais..." style="min-height:60px;"></textarea></div>
-        <!-- COMENTÁRIOS -->
-        <div id="qa-comentarios-wrap" style="display:none;margin-top:4px;">
-          <div style="font-size:11px;font-weight:500;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;">Comentários</div>
-          <div id="qa-comentarios-lista" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px;max-height:180px;overflow-y:auto;"></div>
-          <div style="display:flex;gap:8px;align-items:flex-end;">
-            <div style="flex:1;">
-              <select class="form-select" id="qa-comentario-autor" style="margin-bottom:6px;font-size:12px;">
-                <option value="Gisella">Gisella</option>
-                <option value="Milena">Milena</option>
-                <option value="Luiggi">Luiggi</option>
-              </select>
-              <textarea class="notes-area" id="qa-comentario-texto" placeholder="Escreva um comentário..." style="min-height:48px;font-size:13px;resize:none;"></textarea>
+    <!-- Auth Container (Login / Register Screen) -->
+    <div id="auth-container" class="auth-container" style="display: none;">
+        <div class="auth-card">
+            <div class="auth-header">
+                <div class="auth-logo-bg">
+                    <i data-lucide="shield-check" class="auth-logo-icon"></i>
+                </div>
+                <h1 id="auth-title">Checklist Nuvem</h1>
+                <p id="auth-subtitle">Entre com seus dados para sincronizar suas tarefas e locais com segurança.</p>
             </div>
-            <button type="button" onclick="addComentarioTarefa()" style="background:var(--text);color:var(--surface);border:none;border-radius:8px;padding:8px 14px;font-size:13px;cursor:pointer;font-family:'DM Sans',sans-serif;white-space:nowrap;height:48px;">Enviar</button>
-          </div>
+            
+            <form id="form-auth" autocomplete="on">
+                <div class="form-group">
+                    <label for="auth-email" id="auth-identity-label">E-mail ou ID</label>
+                    <input type="text" id="auth-email" placeholder="seu_id ou nome@exemplo.com" required autocomplete="username">
+                </div>
+                
+                <div class="form-group" style="margin-top: 16px;">
+                    <label for="auth-password">Senha</label>
+                    <input type="password" id="auth-password" placeholder="Sua senha" required autocomplete="current-password">
+                </div>
+
+                <div id="auth-error-msg" class="auth-error-msg" style="display: none;"></div>
+                
+                <button type="submit" id="btn-auth-submit" class="btn btn-primary" style="width: 100%; margin-top: 24px; padding: 14px; font-weight: 700;">
+                    Entrar
+                </button>
+            </form>
+            
+            <div class="auth-toggle">
+                <span id="auth-toggle-text">Não tem uma conta?</span>
+                <button id="btn-auth-toggle" class="btn-link" style="background: transparent; border: none; font-weight: 700; color: var(--primary); cursor: pointer; text-decoration: underline; margin-left: 4px; font-size: 0.88rem;">Cadastre-se</button>
+            </div>
         </div>
-      </div>
+    </div>
 
-      <!-- EVENTO FIELDS -->
-      <div id="qa-fields-evento" style="display:none;">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <div class="form-group"><label class="form-label">Data de início</label><input class="form-input" id="qa-evento-inicio" type="date"></div>
-          <div class="form-group"><label class="form-label">Horário de início</label><input class="form-input" id="qa-hora-inicio" type="time"></div>
+    <div id="modal-create-identifier" class="modal identifier-modal" aria-hidden="true">
+        <div class="modal-overlay"></div>
+        <div class="modal-content identifier-modal-content" role="dialog" aria-modal="true" aria-labelledby="identifier-title">
+            <div class="identifier-icon"><i data-lucide="at-sign"></i></div>
+            <span class="identifier-kicker">Sua identidade no Checklist</span>
+            <h2 id="identifier-title">Crie seu ID</h2>
+            <p>Ele será usado para entrar na conta e aparecer em convites, tarefas e colaborações.</p>
+            <form id="form-create-identifier">
+                <label for="input-user-identifier">ID único</label>
+                <div class="identifier-input-shell"><span>@</span><input id="input-user-identifier" type="text" minlength="3" maxlength="24" placeholder="crie_seu_id_aqui" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>
+                <small>Crie um ID pessoal seu — não copie o exemplo. Use de 3 a 24 caracteres: letras minúsculas, números, ponto, hífen ou _ — sem espaços.</small>
+                <div id="identifier-error" class="identifier-error" role="alert"></div>
+                <button id="btn-confirm-identifier" type="submit" class="btn btn-primary">Confirmar meu ID</button>
+            </form>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <div class="form-group"><label class="form-label">Data de término</label><input class="form-input" id="qa-data-fim" type="date"></div>
-          <div class="form-group"><label class="form-label">Horário de término</label><input class="form-input" id="qa-hora-fim" type="time"></div>
+    </div>
+
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-info">
+                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                    <span class="organization-tag" id="org-tag">Checklist Organizacional</span>
+                    <span id="sync-status" class="sync-status" data-state="synced" role="button" tabindex="0" aria-live="polite" title="Todos os dados estão sincronizados">
+                        <span class="sync-status-dot" aria-hidden="true"></span>
+                        <span id="sync-status-label">Sincronizado</span>
+                    </span>
+                </div>
+                <h1 id="app-title" style="margin: 0;">Checklist Diário</h1>
+            </div>
+            <div class="header-actions">
+                <button id="btn-toggle-summary" class="icon-button" title="Mostrar/Ocultar Resumo">
+                    <i data-lucide="eye"></i>
+                </button>
+                <button id="btn-smart-report" class="icon-button smart-report-button" title="Relatório Inteligente" aria-label="Relatório Inteligente" style="display: none;">
+                    <i data-lucide="file-chart-column"></i>
+                    <span id="smart-report-ready-label" class="smart-report-ready-label" aria-hidden="true">Seu relatório semanal já está pronto!</span>
+                </button>
+                <button id="btn-notifications" class="icon-button notifications-button" title="Notificações" style="position: relative;">
+                    <i data-lucide="bell"></i>
+                    <span id="collab-invite-ready-label" class="collab-invite-ready-label" aria-hidden="true">Você recebeu uma notificação</span>
+                    <span id="notifications-badge" aria-hidden="true" style="display: none; position: absolute; top: 5px; right: 5px; width: 8px; height: 8px; background: #ef4444; border-radius: 50%; border: 1.5px solid var(--bg-surface-solid);"></span>
+                </button>
+                <button id="btn-manage-tasks" class="icon-button" title="Configurações">
+                    <i data-lucide="settings"></i>
+                </button>
+            </div>
+        </header>
+
+        <div id="header-mini-date-container" style="display: none; align-items: center; justify-content: space-between; margin-top: -2px; margin-bottom: 10px; width: 100%; min-height: 24px;">
+            <span id="header-mini-date-text" style="font-size: 0.82rem; font-weight: 700; color: var(--text-secondary); white-space: nowrap;"></span>
+            <span id="header-mini-date-badge" class="history-badge">Hoje</span>
         </div>
-        <div class="form-group"><label class="form-label">Responsável</label>
-          <select class="form-select" id="qa-responsavel-evento">
-            <option value="">— nenhum —</option><option value="Gisella">Gisella</option><option value="Milena">Milena</option><option value="Luiggi">Luiggi</option>
-          </select></div>
-        <div class="form-group"><label class="form-label">Observação</label>
-          <textarea class="notes-area" id="qa-observacao-evento" placeholder="Notas adicionais..." style="min-height:60px;"></textarea></div>
-      </div>
 
-      <!-- PROJETO FIELDS -->
-      <div id="qa-fields-projeto" style="display:none;">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <div class="form-group"><label class="form-label">Status</label>
-            <select class="form-select" id="qa-proj-status">
-              <option value="pendente">Pendente</option><option value="execucao">Em execução</option><option value="finalizado">Finalizado</option>
-            </select></div>
-          <div class="form-group"><label class="form-label">Responsável</label>
-            <select class="form-select" id="qa-responsavel-projeto">
-              <option value="">— nenhum —</option><option value="Gisella">Gisella</option><option value="Milena">Milena</option><option value="Luiggi">Luiggi</option>
-            </select></div>
+        <!-- Compact Top Redesign (Square side-by-side blocks) -->
+        <section class="progress-card-container compact-header-section">
+            <!-- Left Square: Progress -->
+            <div class="compact-progress-block">
+                <span class="square-label">Progresso</span>
+                
+                <!-- Circular Progress Ring (with percentage text inside) -->
+                <div class="progress-ring-wrapper">
+                    <svg class="progress-ring" viewBox="0 0 80 80">
+                        <circle class="progress-ring-bg" stroke="rgba(255,255,255,0.06)" stroke-width="8" fill="transparent" r="32" cx="40" cy="40"/>
+                        <circle class="progress-ring-circle" id="progress-circle" stroke="url(#gradient)" stroke-width="8" fill="transparent" r="32" cx="40" cy="40"/>
+                        <defs>
+                            <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#a855f7" />
+                                <stop offset="100%" stop-color="#3b82f6" />
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                    <!-- Percentage centered inside the ring -->
+                    <div class="progress-ring-content">
+                        <span id="progress-percentage">0%</span>
+                    </div>
+                    <!-- Success icon overlays when completed -->
+                    <div class="progress-ring-icon">
+                        <i data-lucide="check-check" class="success-icon"></i>
+                    </div>
+                </div>
+
+                <span id="progress-tasks-count" class="square-count">0 de 0<br>concluídos</span>
+                <div class="training-report-shortcut" aria-hidden="true">
+                    <button id="btn-open-training-calendar" type="button" class="training-calendar-main-button">
+                        <i data-lucide="calendar-heart"></i>
+                        <span>Calendário de treinos</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Right Square: Date & Navigation -->
+            <div class="date-picker-wrapper compact-date-block">
+                <span class="history-badge" id="history-badge">Hoje</span>
+                
+                <!-- This hidden span is updated by app.js so it doesn't break -->
+                <span id="current-date" style="display: none;">Carregando data...</span>
+                
+                <div class="square-date-display">
+                    <span id="current-date-day-weekday" class="date-weekday">---</span>
+                    <span id="current-date-day-num" class="date-day-num">--</span>
+                    <span id="current-date-day-month" class="date-month">---</span>
+                </div>
+
+                <!-- Calendar trigger button -->
+                <button id="btn-open-calendar" class="calendar-btn-inline" title="Abrir Calendário">
+                    <i data-lucide="calendar"></i> Calendário
+                </button>
+
+                <!-- Navigation Chevrons inside the card, positioned on the left/right sides -->
+                <button id="btn-prev-day" class="compact-nav-btn lateral-arrow prev" title="Dia Anterior">
+                    <i data-lucide="chevron-left"></i>
+                </button>
+                <button id="btn-next-day" class="compact-nav-btn lateral-arrow next" title="Próximo Dia">
+                    <i data-lucide="chevron-right"></i>
+                </button>
+            </div>
+
+            <!-- Hidden progress-bar-fill so app.js doesn't crash -->
+            <div style="display: none;">
+                <div id="progress-bar-fill" class="progress-bar-fill"></div>
+            </div>
+        </section>
+
+        <!-- Categories Filters (Horizontal scroll on mobile) -->
+        <section class="categories-bar" id="categories-bar">
+            <button class="category-chip active" data-category="all">
+                <i data-lucide="layers" class="chip-icon"></i>
+                <span>Todos</span>
+            </button>
+        </section>
+
+        <!-- Task List Container -->
+        <main class="tasks-section">
+            <div id="tasks-list" class="tasks-list">
+                <!-- Javascript will inject tasks here -->
+            </div>
+            
+            <!-- Empty state -->
+            <div id="empty-state" class="empty-state hidden">
+                <div class="standard-empty-content">
+                    <div class="empty-state-icon">
+                        <i data-lucide="clipboard-list"></i>
+                    </div>
+                    <h3>Nenhuma tarefa cadastrada</h3>
+                    <p>Toque no botão abaixo ou nas configurações para adicionar tarefas ao seu checklist.</p>
+                </div>
+
+                <section class="category-onboarding" aria-labelledby="category-onboarding-title">
+                    <div class="category-onboarding-icon"><i data-lucide="sparkles"></i></div>
+                    <span class="category-onboarding-kicker">COMECE POR AQUI</span>
+                    <h3 id="category-onboarding-title">Organize sua primeira área</h3>
+                    <p class="category-onboarding-intro">Crie uma categoria como Trabalho, Estudos, Casa ou Treino. Leva menos de um minuto.</p>
+                    <div class="category-onboarding-benefits" aria-label="Como começar">
+                        <span><i data-lucide="folder-plus"></i><b>1</b> Dê um nome para a área</span>
+                        <span><i data-lucide="list-plus"></i><b>2</b> Adicione sua primeira tarefa</span>
+                        <span><i data-lucide="check-circle-2"></i><b>3</b> Marque conforme realizar</span>
+                    </div>
+                    <button type="button" id="btn-onboarding-create-category" class="btn btn-primary category-onboarding-action">
+                        <i data-lucide="plus"></i> Criar primeira categoria
+                    </button>
+                    <small class="category-onboarding-hint">Você poderá mudar tudo depois.</small>
+                </section>
+            </div>
+        </main>
+
+        <aside id="task-creation-onboarding" class="task-creation-onboarding" aria-live="polite" hidden>
+            <div class="task-creation-onboarding-icon"><i data-lucide="list-plus"></i></div>
+            <div>
+                <strong>Agora, crie sua primeira tarefa</strong>
+                <span>Toque no botão <b>+</b> e depois em <b>Nova tarefa</b>.</span>
+            </div>
+            <span class="task-creation-onboarding-arrow" aria-hidden="true"><i data-lucide="arrow-down-right"></i></span>
+        </aside>
+
+        <!-- Bottom Actions (Floating Stacked FAB Menu at Bottom-Left) -->
+        <div class="fab-menu-container" id="fab-menu">
+            <button id="btn-share-report" class="fab-btn fab-share" title="Compartilhar checklist">
+                <i data-lucide="share-2" style="width: 24px; height: 24px;"></i>
+                <span class="fab-label">Compartilhar checklist</span>
+            </button>
+            <button id="btn-open-ai-tasks-fab" class="fab-btn fab-ai" title="Criar tarefas com IA">
+                <i data-lucide="sparkles" style="width: 24px; height: 24px;"></i>
+                <span class="fab-label">Criar tarefas com IA</span>
+            </button>
+            <button id="btn-add-task-modal" class="fab-btn fab-menu-trigger" title="Nova Tarefa">
+                <i data-lucide="plus" style="width: 24px; height: 24px;"></i>
+                <span class="fab-label">Nova Tarefa</span>
+            </button>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <div class="form-group"><label class="form-label">Data de início</label><input class="form-input" id="qa-proj-inicio" type="date"></div>
-          <div class="form-group"><label class="form-label">Data de fim</label><input class="form-input" id="qa-proj-fim" type="date"></div>
+    </div>
+
+    <!-- Modal: Add Task -->
+    <div id="modal-add-task" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Nova Tarefa</h2>
+                <button class="modal-close" id="btn-close-add-modal"><i data-lucide="x"></i></button>
+            </div>
+            <form id="form-add-task">
+                <div class="form-group">
+                    <label for="task-title">Nome da tarefa</label>
+                    <div class="task-title-autocomplete-wrapper">
+                        <input type="text" id="task-title" required placeholder="Ex: Verificar temperatura do freezer" autocomplete="off" aria-autocomplete="list" aria-controls="task-title-autocomplete" aria-expanded="false">
+                        <div id="task-title-autocomplete" class="task-title-autocomplete" role="listbox" aria-label="Tarefas já utilizadas"></div>
+                        <div id="task-autofill-offer" class="task-autofill-offer" aria-live="polite">
+                            <span class="task-autofill-message">
+                                <strong>Tarefa reconhecida</strong>
+                                <small>Reutilizar categoria, turno e recorrência?</small>
+                            </span>
+                            <div>
+                                <button type="button" id="btn-autofill-title-only">Só título</button>
+                                <button type="button" id="btn-autofill-details">Preencher detalhes</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <button type="button" id="btn-add-task-description" class="task-description-form-toggle"><i data-lucide="align-left"></i><span>Adicionar descrição</span></button>
+                <div class="form-group task-description-form-group" id="task-description-group" hidden>
+                    <label for="task-description">Descrição</label>
+                    <textarea id="task-description" rows="4" maxlength="4000" placeholder="Adicione detalhes, instruções ou observações."></textarea>
+                </div>
+                <div class="form-group" style="margin-top: 10px;">
+                    <label>Turno</label>
+                    <div class="shift-selector" id="add-shift-selector">
+                        <button type="button" class="shift-toggle-btn" data-shift="Manhã">
+                            <i data-lucide="sunrise" style="width: 14px; height: 14px; margin-right: 4px;"></i> Manhã
+                        </button>
+                        <button type="button" class="shift-toggle-btn" data-shift="Tarde">
+                            <i data-lucide="sun" style="width: 14px; height: 14px; margin-right: 4px;"></i> Tarde
+                        </button>
+                        <button type="button" class="shift-toggle-btn" data-shift="Noite">
+                            <i data-lucide="moon" style="width: 14px; height: 14px; margin-right: 4px;"></i> Noite
+                        </button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="task-category">Categoria</label>
+                    <select id="task-category" required>
+                        <option value="abertura">Abertura</option>
+                        <option value="operacao">Operação</option>
+                        <option value="limpeza">Limpeza</option>
+                        <option value="fechamento">Fechamento</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="task-recurring">Recorrência</label>
+                    <select id="task-recurring" required>
+                        <option value="once">Única (Apenas na data)</option>
+                        <option value="daily">Diária (Todo dia)</option>
+                        <option value="interval14">A cada 2 semanas</option>
+                        <option value="repeat">Repetir (Dias específicos)</option>
+                    </select>
+                </div>
+                <div class="form-group repeat-days-group" id="repeat-days-group" style="display: none;">
+                    <label>Dias da semana</label>
+                    <div class="repeat-days-selector">
+                        <button type="button" class="day-toggle" data-day="0">Dom</button>
+                        <button type="button" class="day-toggle" data-day="1">Seg</button>
+                        <button type="button" class="day-toggle" data-day="2">Ter</button>
+                        <button type="button" class="day-toggle" data-day="3">Qua</button>
+                        <button type="button" class="day-toggle" data-day="4">Qui</button>
+                        <button type="button" class="day-toggle" data-day="5">Sex</button>
+                        <button type="button" class="day-toggle" data-day="6">Sáb</button>
+                    </div>
+                </div>
+                <div class="form-group" id="task-assignee-group" style="display: none; margin-top: 16px;">
+                    <label for="task-assigned-to">Atribuído a</label>
+                    <select id="task-assigned-to">
+                        <option value="">Todos (Sem atribuição)</option>
+                    </select>
+                </div>
+                <div class="form-group" style="margin-top: 16px; margin-bottom: 12px;">
+                    <label for="task-date">Data da Tarefa</label>
+                    <input type="date" id="task-date" required>
+                </div>
+                <div class="task-notification-setting">
+                    <div class="task-notification-copy"><strong>Notificar</strong><small id="task-reminder-summary">Lembrar sobre esta tarefa</small></div>
+                    <button type="button" class="btn-notification-info" style="background: transparent; border: none; padding: 2px; color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;">
+                        <i data-lucide="clock-3" style="width: 14px; height: 14px;"></i>
+                    </button>
+                    <input type="checkbox" id="task-important" class="task-notification-checkbox">
+                    <label for="task-important" class="task-notification-toggle" aria-label="Ativar notificação"><span></span></label>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">Adicionar Tarefa</button>
+            </form>
         </div>
-        <div class="form-group"><label class="form-label">Observação</label>
-          <textarea class="notes-area" id="qa-observacao-projeto" placeholder="Notas adicionais..." style="min-height:60px;"></textarea></div>
-      </div>
+    </div>
 
-      <!-- LIVRO FIELDS -->
-      <div id="qa-fields-livro" style="display:none;">
-        <div class="form-group"><label class="form-label">Tipo de publicação</label>
-          <div style="display:flex;gap:16px;margin-top:4px;">
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="radio" name="qa-l-tipopub" value="lancamento" checked onchange="updateLivroTipo()"> Lançamento</label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="radio" name="qa-l-tipopub" value="reimpressao" onchange="updateLivroTipo()"> Reimpressão</label>
-          </div>
+    <!-- Modal: criar tarefas por voz com IA -->
+    <div id="modal-ai-tasks" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content ai-tasks-modal-content">
+            <div class="modal-header">
+                <div><h2>Criar tarefas com IA</h2><p class="ai-tasks-subtitle">Fale naturalmente. Você revisa tudo antes de salvar.</p></div>
+                <button class="modal-close" id="btn-close-ai-tasks"><i data-lucide="x"></i></button>
+            </div>
+            <div class="ai-tasks-body">
+                <button type="button" id="btn-ai-record" class="ai-record-button">
+                    <span class="ai-record-icon"><i data-lucide="mic"></i></span>
+                    <span><strong id="ai-record-title">Toque para falar</strong><small id="ai-record-status">Até 60 segundos</small></span>
+                </button>
+                <div class="ai-tasks-divider"><span>ou digite</span></div>
+                <textarea id="ai-task-prompt" rows="3" maxlength="1000" placeholder="Ex.: Crie uma tarefa para conferir o estoque amanhã de manhã e atribua ao João."></textarea>
+                <button type="button" id="btn-ai-generate" class="btn btn-primary btn-block"><i data-lucide="sparkles"></i> Interpretar pedido</button>
+                <div id="ai-tasks-review" class="ai-tasks-review" hidden>
+                    <div class="ai-review-heading"><strong>Tarefas encontradas</strong><small>Desmarque o que não quiser criar.</small></div>
+                    <div id="ai-tasks-review-list"></div>
+                    <button type="button" id="btn-ai-confirm" class="btn btn-primary btn-block">Criar tarefas selecionadas</button>
+                </div>
+            </div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <div class="form-group"><label class="form-label">Autor</label><input class="form-input" id="qa-l-autor" type="text"></div>
-          <div class="form-group"><label class="form-label">Ilustrador</label><input class="form-input" id="qa-l-ilustrador" type="text"></div>
-          <div class="form-group"><label class="form-label">Público-alvo</label><input class="form-input" id="qa-l-publico" type="text"></div>
-          <div class="form-group"><label class="form-label">Faixa etária</label><input class="form-input" id="qa-l-faixa" type="text"></div>
-          <div class="form-group"><label class="form-label">Nº de páginas</label><input class="form-input" id="qa-l-paginas" type="text"></div>
-          <div class="form-group"><label class="form-label">Tiragem</label><input class="form-input" id="qa-l-tiragem" type="text"></div>
-          <div class="form-group"><label class="form-label">ISBN</label><input class="form-input" id="qa-l-isbn" type="text"></div>
-          <div class="form-group"><label class="form-label">Formato</label><input class="form-input" id="qa-l-formato" type="text"></div>
-          <div class="form-group"><label class="form-label">Coleção</label><input class="form-input" id="qa-l-colecao" type="text"></div>
-          <div class="form-group"><label class="form-label">Editora responsável</label><input class="form-input" id="qa-l-editora" type="text"></div>
-          <div class="form-group"><label class="form-label">OS</label><input class="form-input" id="qa-l-os" type="text" placeholder="Número da OS"></div>
-          <div class="form-group"><label class="form-label">Ano</label><input class="form-input" id="qa-l-ano" type="text" placeholder="Ex: 2026"></div>
-          <div class="form-group"><label class="form-label">Data de lançamento</label><input class="form-input" id="qa-l-lancamento" type="date"></div>
+    </div>
+
+    <!-- Modal: Settings -->
+    <div id="modal-manage-tasks" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content manage-modal-content">
+            <div class="modal-header">
+                <h2>Configurações</h2>
+                <button class="modal-close" id="btn-close-manage-modal"><i data-lucide="x"></i></button>
+            </div>
+            <div class="manage-tasks-body">
+                <section class="settings-section">
+                    <div class="settings-section-heading">
+                        <div class="settings-section-icon"><i data-lucide="palette"></i></div>
+                        <div><strong>Aparência</strong><span>Personalize como o checklist é apresentado.</span></div>
+                    </div>
+                    <div class="form-group settings-field">
+                        <label for="input-org-name">Nome da organização</label>
+                        <input type="text" id="input-org-name" placeholder="Ex: Minha Empresa" autocomplete="off">
+                    </div>
+                    <div>
+                        <label class="settings-control-label">Tema do aplicativo</label>
+                        <div class="settings-theme-grid">
+                        <button class="btn theme-selector-btn active" data-theme="default" style="padding: 10px; font-size: 0.75rem; font-weight: 700; border: 1px solid rgba(255,255,255,0.15); border-radius: var(--radius-sm); background: #161e31; color: #e2e8f0;">
+                            🌙 Escuro
+                        </button>
+                        <button class="btn theme-selector-btn" data-theme="light" style="padding: 10px; font-size: 0.75rem; font-weight: 700; border: 1px solid rgba(0,0,0,0.15); border-radius: var(--radius-sm); background: #ffffff; color: #0f172a;">
+                            ☀️ Claro
+                        </button>
+                        <button class="btn theme-selector-btn" data-theme="girly" style="padding: 10px; font-size: 0.75rem; font-weight: 700; border: 1px solid rgba(219,39,119,0.3); border-radius: var(--radius-sm); background: #ffe4e6; color: #9d174d;">
+                            🩷 Rosa
+                        </button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="settings-section">
+                    <div class="settings-section-heading">
+                        <div class="settings-section-icon"><i data-lucide="bell-ring"></i></div>
+                        <div><strong>Notificações</strong><span>Escolha se o aparelho pode exibir avisos e tarefas compartilhadas.</span></div>
+                    </div>
+                    <div class="settings-notification-row">
+                        <span><strong>Notificações push</strong><small>Permitir que este aparelho exiba avisos do checklist</small></span>
+                        <button id="notifications-enabled-toggle" class="settings-toggle is-on" type="button" role="switch" aria-checked="true" aria-label="Ativar notificações">
+                            <span></span>
+                        </button>
+                    </div>
+                    <p id="notifications-permission-status" class="settings-notification-status"></p>
+                    <button id="btn-repair-test-push" type="button" class="btn settings-notification-test-btn">
+                        <i data-lucide="wrench"></i>
+                        <span><strong>Reparar e testar</strong><small>Configurar este aparelho automaticamente</small></span>
+                    </button>
+                </section>
+
+                <section class="settings-section">
+                    <div class="settings-section-heading">
+                        <div class="settings-section-icon"><i data-lucide="layout-grid"></i></div>
+                        <div><strong>Organização</strong><span>Configure as áreas usadas nas suas tarefas.</span></div>
+                    </div>
+                    <button id="btn-open-manage-categories" class="settings-action-row">
+                        <span class="settings-action-icon primary"><i data-lucide="folders"></i></span>
+                        <span><strong>Gerenciar categorias</strong><small>Criar, editar, classificar e compartilhar</small></span>
+                        <i data-lucide="chevron-right" class="settings-action-chevron"></i>
+                    </button>
+                </section>
+
+                <section class="settings-section">
+                    <div class="settings-section-heading">
+                        <div class="settings-section-icon"><i data-lucide="notebook-pen"></i></div>
+                        <div><strong>Ferramentas pessoais</strong><span>Anotações rápidas que ficam separadas das tarefas.</span></div>
+                    </div>
+                    <button id="btn-open-manual-checklist" class="settings-action-row">
+                        <span class="settings-action-icon primary"><i data-lucide="clipboard-list"></i></span>
+                        <span><strong>Checklist manual e notas</strong><small>Abra seu checklist livre e bloco de notas</small></span>
+                        <i data-lucide="chevron-right" class="settings-action-chevron"></i>
+                    </button>
+                </section>
+
+                <section class="settings-section">
+                    <div class="settings-section-heading">
+                        <div class="settings-section-icon"><i data-lucide="audio-lines"></i></div>
+                        <div><strong>Siri e Atalhos</strong><span>Crie tarefas falando com a Siri no iPhone.</span></div>
+                    </div>
+                    <div class="siri-settings-card">
+                        <p id="siri-shortcut-status">Verificando configuracao…</p>
+                        <div id="siri-shortcut-credentials" hidden>
+                            <label>URL da automacao</label>
+                            <div class="siri-copy-row"><input id="siri-shortcut-url" readonly><button id="btn-copy-siri-url" type="button" class="btn">Copiar</button></div>
+                            <label>Chave pessoal</label>
+                            <div class="siri-copy-row"><input id="siri-shortcut-token" type="password" readonly placeholder="Gere uma nova chave"><button id="btn-copy-siri-token" type="button" class="btn">Copiar</button></div>
+                            <small style="color: var(--text-secondary); margin-bottom: 10px; display: block;">A chave aparece apenas quando e gerada. Copie e guarde com seguranca.</small>
+
+                            <div class="siri-setup-guide" style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 12px; padding: 12px; margin: 12px 0;">
+                                <strong style="font-size: 0.8rem; color: var(--text-primary); display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+                                    <i data-lucide="sparkles" style="width: 14px; height: 14px; color: var(--primary);"></i> Como configurar no app Atalhos do iPhone:
+                                </strong>
+                                <ol style="margin: 0; padding-left: 18px; font-size: 0.76rem; color: var(--text-secondary); line-height: 1.6;">
+                                    <li>Abra o app <b>Atalhos</b> no iPhone e toque em <b>+</b> (Nome: <b>Criar tarefa no Checklist</b>).</li>
+                                    <li>Adicione a acao <b>Pedir Entrada</b> (Texto) com a pergunta <i>"Qual tarefa?"</i>.</li>
+                                    <li>Adicione a acao <b>Obter Conteudo de URL</b> (Metodo: <b>POST</b>, Corpo: <b>JSON</b>) informando os campos <code>title</code> (resultado do passo 1) e <code>token</code> (sua chave acima).</li>
+                                    <li>Adicione <b>Obter valor do dicionario</b> para a chave <code>message</code> e finalize com <b>Falar Texto</b>.</li>
+                                </ol>
+                            </div>
+                        </div>
+                        <div class="siri-settings-actions" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                            <button id="btn-generate-siri-token" type="button" class="btn btn-primary"><i data-lucide="key-round"></i> Gerar chave</button>
+                            <button id="btn-revoke-siri-token" type="button" class="btn" hidden><i data-lucide="shield-x"></i> Revogar</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="settings-section">
+                    <div class="settings-section-heading">
+                        <div class="settings-section-icon"><i data-lucide="circle-help"></i></div>
+                        <div><strong>Ajuda</strong><span>Conheça os atalhos disponíveis no aplicativo.</span></div>
+                    </div>
+                    <button id="btn-open-gestures-tutorial" class="settings-action-row">
+                        <span class="settings-action-icon"><i data-lucide="hand"></i></span>
+                        <span><strong>Tutorial de gestos</strong><small>Veja como tocar, deslizar e navegar</small></span>
+                        <i data-lucide="chevron-right" class="settings-action-chevron"></i>
+                    </button>
+                </section>
+
+                <section class="settings-section settings-account-section">
+                    <div class="settings-section-heading">
+                        <div class="settings-section-icon"><i data-lucide="user-round"></i></div>
+                        <div><strong>Conta e dados</strong><span>Controle sua sessão e as tarefas armazenadas.</span></div>
+                    </div>
+                    <div class="settings-avatar-row">
+                        <div id="settings-profile-avatar" class="settings-profile-avatar" aria-hidden="true"><i data-lucide="user-round"></i></div>
+                        <div class="settings-avatar-copy"><strong>Foto do perfil</strong><small>Ela aparece em atribuições de categorias colaborativas.</small></div>
+                        <label class="btn settings-avatar-button" for="input-profile-avatar">Escolher foto</label>
+                        <input id="input-profile-avatar" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+                    </div>
+                    <button id="btn-logout" class="settings-action-row">
+                        <span class="settings-action-icon"><i data-lucide="log-out"></i></span>
+                        <span><strong>Sair da conta</strong><small>Encerrar a sessão neste aparelho</small></span>
+                        <i data-lucide="chevron-right" class="settings-action-chevron"></i>
+                    </button>
+                </section>
+
+                <div class="settings-version">
+                    <span>Checklist</span>
+                        <strong>Versão 11.08</strong>
+                </div>
+            </div>
         </div>
-        <div class="form-group"><label class="form-label">Sinopse</label><textarea class="notes-area" id="qa-l-sinopse" style="min-height:70px;"></textarea></div>
-      </div>
+    </div>
 
-      <!-- CONTEUDO FIELDS -->
-      <div id="qa-fields-conteudo" style="display:none;">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <div class="form-group"><label class="form-label">Rede social</label>
-            <select class="form-select" id="qa-c-rede" onchange="updateQaConteudoRede()">
-              <option value="instagram">Instagram</option><option value="tiktok">TikTok</option><option value="youtube">YouTube</option><option value="substack">Substack</option><option value="emanda">Emanda</option>
-            </select></div>
-          <div class="form-group" id="qa-c-organico-wrap"><label class="form-label">Tipo (Orgânico / Anúncio)</label>
-            <select class="form-select" id="qa-c-organico">
-              <option value="organico">Orgânico</option>
-              <option value="anuncio">Anúncio</option>
-            </select></div>
-          <div class="form-group" id="qa-c-tipo-wrap"><label class="form-label">Formato de conteúdo</label>
-            <select class="form-select" id="qa-c-tipo">
-              <option value="reel">Reel</option><option value="foto">Foto</option><option value="dump">Dump</option><option value="card">Card</option><option value="carrossel">Carrossel</option><option value="story">Story</option><option value="emailmkt">Email mkt</option><option value="video">Vídeo</option>
-            </select></div>
+    <!-- Modal: Gestures Tutorial -->
+    <div id="modal-training-photo" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content training-photo-modal" role="dialog" aria-modal="true" aria-labelledby="training-photo-title">
+            <button class="modal-close training-photo-close" id="btn-skip-training-photo" aria-label="Fechar e desmarcar treino"><i data-lucide="x"></i></button>
+            <span class="training-photo-hero"><i data-lucide="camera"></i></span>
+            <span class="training-photo-kicker">TREINO CONCLUÍDO</span>
+            <h2 id="training-photo-title">Registrar esse momento?</h2>
+            <p>Sua foto ficará salva apenas no relatório de treinos.</p>
+            <label class="btn btn-primary training-photo-action" for="input-training-photo"><i data-lucide="camera"></i> Tirar uma foto</label>
+            <input id="input-training-photo" type="file" accept="image/*" capture="environment" hidden>
+            <button id="btn-complete-without-photo" class="training-photo-skip" type="button">Concluir sem foto</button>
+            <button id="btn-cancel-training-completion" class="training-photo-undo" type="button"><i data-lucide="undo-2"></i> Cliquei sem querer</button>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <div class="form-group"><label class="form-label">Data de postagem</label><input class="form-input" id="qa-c-datapost" type="date"></div>
-          <div class="form-group"><label class="form-label">Horário</label><input class="form-input" id="qa-c-hora" type="time"></div>
+    </div>
+
+    <div id="modal-training-report" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content training-report-modal" role="dialog" aria-modal="true" aria-labelledby="training-report-title">
+            <div class="modal-header">
+                <div><span class="training-report-kicker">HISTÓRICO VISUAL</span><h2 id="training-report-title">Calendário de treinos</h2></div>
+                <button class="modal-close" id="btn-close-training-report"><i data-lucide="x"></i></button>
+            </div>
+            <div class="training-calendar-nav">
+                <button id="btn-training-calendar-prev" type="button" aria-label="Mês anterior"><i data-lucide="chevron-left"></i></button>
+                <strong id="training-calendar-month-year">Mês</strong>
+                <button id="btn-training-calendar-next" type="button" aria-label="Próximo mês"><i data-lucide="chevron-right"></i></button>
+            </div>
+            <div class="training-calendar-weekdays"><span>Dom</span><span>Seg</span><span>Ter</span><span>Qua</span><span>Qui</span><span>Sex</span><span>Sáb</span></div>
+            <div id="training-calendar-grid" class="training-calendar-grid"></div>
+            <div id="training-selected-day-info" class="training-selected-day-info" hidden></div>
+            <div id="training-report-summary" class="training-calendar-days-summary"></div>
+            <section class="training-day-gallery" aria-live="polite">
+                <div id="training-day-gallery-heading" class="training-day-gallery-heading"></div>
+                <div id="training-report-list" class="training-report-list"></div>
+            </section>
         </div>
-        <div class="form-group"><label class="form-label">Link</label><input class="form-input" id="qa-c-link" type="url" placeholder="https://..."></div>
-        <div class="form-group" id="qa-c-copy-wrap"><label class="form-label">Copy</label><textarea class="notes-area" id="qa-c-copy" style="min-height:60px;"></textarea></div>
-        <div class="form-group"><label class="form-label">Observação</label><textarea class="notes-area" id="qa-observacao-conteudo" style="min-height:40px;"></textarea></div>
+    </div>
 
-        <input type="hidden" id="qa-c-dataprod"><input type="hidden" id="qa-c-legenda"><input type="hidden" id="qa-c-status" value="copy"><input type="hidden" id="qa-responsavel-conteudo" value="">
-      </div>
+    <!-- Modal: Gestures Tutorial -->
+    <div id="modal-gestures-tutorial" class="modal">
+        <div class="modal-overlay" id="overlay-gestures-tutorial"></div>
+        <div class="modal-content gestures-tutorial-content" role="dialog" aria-modal="true" aria-labelledby="gestures-tutorial-title">
+            <div class="modal-header gestures-tutorial-header">
+                <div>
+                    <h2 id="gestures-tutorial-title">Tutorial de Gestos</h2>
+                    <p>Descubra os atalhos do checklist</p>
+                </div>
+                <button class="modal-close" id="btn-close-gestures-tutorial" aria-label="Fechar tutorial"><i data-lucide="x"></i></button>
+            </div>
 
-      <div class="btn-row">
-        <button type="button" class="btn" id="qa-delete-btn" onclick="deleteCurrentEvent()" style="display:none;color:var(--danger);border-color:var(--danger);">Excluir</button>
-        <button type="button" class="btn" onclick="closeModal('modal-quickadd')">Cancelar</button>
-        <button type="submit" class="btn btn-primary" id="qa-submit-btn">Adicionar</button>
-      </div>
-    </form>
-  </div>
-</div>
+            <div class="gestures-carousel" id="gestures-carousel">
+                <div class="gestures-carousel-track" id="gestures-carousel-track">
+                    <article class="gesture-slide">
+                        <div class="gesture-visual"><i data-lucide="mouse-pointer-click"></i><span class="gesture-tap-ring"></span></div>
+                        <span class="gesture-kicker">CONCLUIR</span>
+                        <h3>Toque em uma tarefa</h3>
+                        <p>Um toque no cartão marca ou desmarca a tarefa imediatamente.</p>
+                    </article>
+                    <article class="gesture-slide">
+                        <div class="gesture-visual"><i data-lucide="list-checks"></i><span class="gesture-motion horizontal-left"><i data-lucide="arrow-left"></i></span></div>
+                        <span class="gesture-kicker">EDITAR OU EXCLUIR</span>
+                        <h3>Deslize a tarefa</h3>
+                        <p>Arraste uma tarefa para a esquerda para revelar as ações de editar e excluir.</p>
+                    </article>
+                    <article class="gesture-slide">
+                        <div class="gesture-visual"><i data-lucide="calendar-days"></i><span class="gesture-motion horizontal-both"><i data-lucide="move-horizontal"></i></span></div>
+                        <span class="gesture-kicker">TROCAR O DIA</span>
+                        <h3>Deslize os blocos</h3>
+                        <p>Arraste os blocos de progresso e data para avançar ou retornar um dia.</p>
+                    </article>
+                    <article class="gesture-slide">
+                        <div class="gesture-visual gesture-edge-visual"><i data-lucide="panel-left-right"></i><span class="gesture-edge-line left"></span><span class="gesture-edge-line right"></span></div>
+                        <span class="gesture-kicker">ATALHO LATERAL</span>
+                        <h3>Use as margens vazias</h3>
+                        <p>Comece o deslize bem na lateral para trocar a data sem interferir nas tarefas.</p>
+                    </article>
+                    <article class="gesture-slide">
+                        <div class="gesture-visual"><i data-lucide="panels-top-left"></i><span class="gesture-motion vertical-down"><i data-lucide="arrow-down"></i></span></div>
+                        <span class="gesture-kicker">FECHAR JANELAS</span>
+                        <h3>Deslize o modal para baixo</h3>
+                        <p>Arraste pelo topo de qualquer janela para fechá-la de forma rápida.</p>
+                    </article>
+                </div>
+            </div>
 
-<!-- MODAL NOVO PROJETO -->
-<div class="modal-overlay" id="modal-projeto">
-  <div class="modal" style="width:480px;">
-    <button class="modal-close" onclick="closeModal('modal-projeto')">×</button>
-    <div class="modal-title" id="mp-title">Novo projeto</div>
-    <form onsubmit="event.preventDefault();submitProjeto();">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Nome do projeto *</label><input class="form-input" id="mp-nome" type="text" placeholder="Ex: Lançamento coleção 2027"></div>
-        <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Empresa(s)</label>
-          <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:4px;">
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="mp-emp-editora" style="accent-color:var(--editora);"> <span style="color:var(--editora);">Editora Cassol</span></label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="mp-emp-leia" style="accent-color:var(--leia);"> <span style="color:var(--leia);">Léia Cassol</span></label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="mp-emp-gisella" style="accent-color:var(--gisella);"> <span style="color:var(--gisella);">GC Estratégias</span></label>
-          </div></div>
-        <div class="form-group"><label class="form-label">Status</label>
-          <select class="form-select" id="mp-status" onchange="checkProjetoFinalizado()">
-            <option value="pendente">Pendente</option>
-            <option value="execucao">Em execução</option>
-            <option value="finalizado">Finalizado</option>
-          </select></div>
-        <div class="form-group"><label class="form-label">Responsável</label>
-          <select class="form-select" id="mp-resp">
-            <option value="">— nenhum —</option>
-            <option value="Gisella">Gisella</option>
-            <option value="Milena">Milena</option>
-            <option value="Luiggi">Luiggi</option>
-          </select></div>
-        <div class="form-group"><label class="form-label">Data de início</label><input class="form-input" id="mp-inicio" type="date"></div>
-        <div class="form-group"><label class="form-label">Data de fim</label><input class="form-input" id="mp-fim" type="date"></div>
-      </div>
-      <div class="form-group"><label class="form-label">Observação</label>
-        <textarea class="notes-area" id="mp-observacao" placeholder="Notas sobre o projeto..." style="min-height:70px;"></textarea></div>
-      <div class="btn-row">
-        <button type="button" class="btn" id="mp-delete-btn" onclick="deleteCurrentProjeto()" style="display:none;color:var(--danger);border-color:var(--danger);">Excluir projeto</button>
-        <button type="button" class="btn" onclick="closeModal('modal-projeto')">Cancelar</button>
-        <button type="submit" class="btn btn-primary">Salvar</button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<!-- MODAL NOVO LIVRO -->
-<div class="modal-overlay" id="modal-livro">
-  <div class="modal" style="width:580px;">
-    <button class="modal-close" onclick="closeModal('modal-livro')">×</button>
-    <div class="modal-title">Novo livro · Ficha Técnica</div>
-    <p style="font-size:12px;color:var(--text-soft);margin-bottom:1rem;">Preencha o que souber — pode completar depois.</p>
-    <form onsubmit="event.preventDefault();submitAddLivro();">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Tipo de publicação</label>
-          <div style="display:flex;gap:16px;margin-top:4px;">
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="radio" name="nl-tipopub" id="nl-tipopub-lanc" value="lancamento" checked onchange="updateNlTipo()"> Lançamento</label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="radio" name="nl-tipopub" id="nl-tipopub-reimp" value="reimpressao" onchange="updateNlTipo()"> Reimpressão</label>
-          </div>
+            <div class="gestures-carousel-dots" id="gestures-carousel-dots" aria-label="Etapas do tutorial"></div>
+            <div class="gestures-carousel-footer">
+                <button id="btn-gesture-prev" class="gesture-nav-btn" aria-label="Gesto anterior"><i data-lucide="arrow-left"></i></button>
+                <span id="gesture-slide-counter" aria-live="polite">1 de 5</span>
+                <button id="btn-gesture-next" class="gesture-nav-btn primary" aria-label="Próximo gesto"><i data-lucide="arrow-right"></i></button>
+            </div>
         </div>
-        <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Título *</label><input class="form-input" id="nl-titulo" type="text" placeholder="Título do livro" required></div>
-        <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Tipo de autoria</label>
-          <select class="form-select" id="nl-tipo-autoria">
-            <option value="">Não se aplica</option>
-          </select>
+    </div>
+
+    <!-- Modal: Calendar -->
+    <div id="modal-calendar" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content calendar-modal-content" style="max-width: 380px;">
+            <div class="modal-header" style="margin-bottom: 16px;">
+                <h2>Selecionar Data</h2>
+                <button class="modal-close" id="btn-close-calendar"><i data-lucide="x"></i></button>
+            </div>
+            <div class="calendar-body">
+                <!-- Navigation -->
+                <div class="calendar-nav" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; background: rgba(255,255,255,0.02); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+                    <button id="btn-prev-month" class="icon-button" style="padding: 6px; background: transparent; border: none; color: var(--text-primary); cursor: pointer;"><i data-lucide="chevron-left" style="width: 18px; height: 18px;"></i></button>
+                    <span id="calendar-month-year" style="font-weight: 700; font-size: 0.95rem; color: var(--text-primary);">Carregando...</span>
+                    <button id="btn-next-month" class="icon-button" style="padding: 6px; background: transparent; border: none; color: var(--text-primary); cursor: pointer;"><i data-lucide="chevron-right" style="width: 18px; height: 18px;"></i></button>
+                </div>
+                <!-- Weekdays -->
+                <div class="calendar-weekdays" style="display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 10px; letter-spacing: 0.05em;">
+                    <span>Dom</span><span>Seg</span><span>Ter</span><span>Qua</span><span>Qui</span><span>Sex</span><span>Sáb</span>
+                </div>
+                <!-- Days grid -->
+                <div class="calendar-days-grid" id="calendar-days-grid" style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; text-align: center;">
+                    <!-- Javascript will inject days buttons here -->
+                </div>
+            </div>
         </div>
-        <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Empresas</label>
-          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px;">
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="nl-emp-editora" value="editora" style="accent-color:var(--editora);"> <span style="color:var(--editora);">Editora Cassol</span></label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="nl-emp-leia" value="leia" style="accent-color:var(--leia);"> <span style="color:var(--leia);">Léia Cassol</span></label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="nl-emp-gisella" value="gisella" style="accent-color:var(--gisella);"> <span style="color:var(--gisella);">GC Estratégias</span></label>
-          </div>
+    </div>
+    <!-- Modal: Edit Task -->
+    <div id="modal-edit-task" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Editar Tarefa</h3>
+                <button id="btn-close-edit-modal" class="icon-button" style="padding: 6px;"><i data-lucide="x"></i></button>
+            </div>
+            <form id="form-edit-task">
+                <input type="hidden" id="edit-task-id">
+                <div class="form-group">
+                    <label for="edit-task-title">Nome da tarefa</label>
+                    <input type="text" id="edit-task-title" required autocomplete="off">
+                </div>
+                <button type="button" id="btn-edit-task-description" class="task-description-form-toggle"><i data-lucide="align-left"></i><span>Adicionar descrição</span></button>
+                <div class="form-group task-description-form-group" id="edit-task-description-group" hidden>
+                    <label for="edit-task-description">Descrição</label>
+                    <textarea id="edit-task-description" rows="4" maxlength="4000" placeholder="Adicione detalhes, instruções ou observações."></textarea>
+                </div>
+                <div class="form-group" style="margin-top: 10px;">
+                    <label>Turno</label>
+                    <div class="shift-selector" id="edit-shift-selector">
+                        <button type="button" class="shift-toggle-btn" data-shift="Manhã">
+                            <i data-lucide="sun" style="width: 14px; height: 14px; margin-right: 4px;"></i> Manhã
+                        </button>
+                        <button type="button" class="shift-toggle-btn" data-shift="Tarde">
+                            <i data-lucide="sunset" style="width: 14px; height: 14px; margin-right: 4px;"></i> Tarde
+                        </button>
+                        <button type="button" class="shift-toggle-btn" data-shift="Noite">
+                            <i data-lucide="moon" style="width: 14px; height: 14px; margin-right: 4px;"></i> Noite
+                        </button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="edit-task-category">Categoria / Local</label>
+                    <select id="edit-task-category" required>
+                        <!-- Javascript will inject categories here -->
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="edit-task-recurring">Recorrência</label>
+                    <select id="edit-task-recurring" required>
+                        <option value="daily">Diária (Todo dia)</option>
+                        <option value="once">Única (Apenas na data)</option>
+                        <option value="interval14">A cada 2 semanas</option>
+                        <option value="repeat">Repetir (Dias específicos)</option>
+                    </select>
+                </div>
+                <div class="form-group" id="edit-repeat-days-group" style="display: none;">
+                    <label>Dias da semana</label>
+                    <div class="repeat-days-selector" id="edit-repeat-days-selector">
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="0">Dom</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="1">Seg</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="2">Ter</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="3">Qua</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="4">Qui</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="5">Sex</button>
+                        <button type="button" class="day-toggle edit-day-toggle" data-day="6">Sáb</button>
+                    </div>
+                </div>
+                <div class="form-group" id="edit-task-assignee-group" style="display: none; margin-top: 16px;">
+                    <label for="edit-task-assigned-to">Atribuído a</label>
+                    <select id="edit-task-assigned-to">
+                        <option value="">Todos (Sem atribuição)</option>
+                    </select>
+                </div>
+                <div class="form-group" style="margin-top: 16px; margin-bottom: 12px;">
+                    <label for="edit-task-date">Data da Tarefa</label>
+                    <input type="date" id="edit-task-date" required>
+                </div>
+                <div class="task-notification-setting">
+                    <div class="task-notification-copy"><strong>Notificar</strong><small id="edit-task-reminder-summary">Lembrar sobre esta tarefa</small></div>
+                    <button type="button" class="btn-notification-info" style="background: transparent; border: none; padding: 2px; color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;">
+                        <i data-lucide="clock-3" style="width: 14px; height: 14px;"></i>
+                    </button>
+                    <input type="checkbox" id="edit-task-important" class="task-notification-checkbox">
+                    <label for="edit-task-important" class="task-notification-toggle" aria-label="Ativar notificação"><span></span></label>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">Salvar Alterações</button>
+            </form>
         </div>
-        <div class="form-group"><label class="form-label">Autor *</label><input class="form-input" id="nl-autor" type="text" required></div>
-        <div class="form-group"><label class="form-label">Ilustrador</label><input class="form-input" id="nl-ilustrador" type="text"></div>
-        <div class="form-group"><label class="form-label">Público-alvo</label><input class="form-input" id="nl-publico" type="text"></div>
-        <div class="form-group"><label class="form-label">Faixa etária</label><input class="form-input" id="nl-faixa" type="text"></div>
-        <div class="form-group"><label class="form-label">Nº de páginas</label><input class="form-input" id="nl-paginas" type="text"></div>
-        <div class="form-group"><label class="form-label">Tiragem</label><input class="form-input" id="nl-tiragem" type="text"></div>
-        <div class="form-group"><label class="form-label">Valor</label><input class="form-input" id="nl-valor" type="text" inputmode="decimal" placeholder="Ex: R$ 49,90"></div>
-        <div class="form-group"><label class="form-label">ISBN</label><input class="form-input" id="nl-isbn" type="text"></div>
-        <div class="form-group"><label class="form-label">Formato</label><input class="form-input" id="nl-formato" type="text"></div>
-        <div class="form-group"><label class="form-label">Coleção</label><input class="form-input" id="nl-colecao" type="text"></div>
-        <div class="form-group"><label class="form-label">Editora responsável</label><input class="form-input" id="nl-editora" type="text"></div>
-        <div class="form-group"><label class="form-label">OS</label><input class="form-input" id="nl-os" type="text" placeholder="Número da OS"></div>
-        <div class="form-group"><label class="form-label">Ano *</label><input class="form-input" id="nl-ano" type="number" min="1900" max="2200" placeholder="Ex: 2026" required></div>
-        <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Data de lançamento *</label><input class="form-input" id="nl-lancamento" type="date" required></div>
-        <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Sinopse</label><textarea class="notes-area" id="nl-sinopse" style="min-height:70px;"></textarea></div>
-      </div>
-      <div class="btn-row"><button type="button" class="btn" onclick="closeModal('modal-livro')">Cancelar</button><button type="submit" class="btn btn-primary">Criar livro</button></div>
-    </form>
-  </div>
-</div>
+    </div>
 
-<!-- MODAL CADASTRAR MENTORADA -->
-<div class="modal-overlay" id="modal-add-mentee">
-  <div class="modal" style="width:460px;">
-    <button class="modal-close" onclick="closeModal('modal-add-mentee')">×</button>
-    <div class="modal-title">Cadastrar mentorada</div>
-    <form onsubmit="event.preventDefault();submitAddMentee();" style="margin-top:1rem;">
-      <div class="form-group">
-        <label class="form-label">Nome *</label>
-        <input class="form-input" id="new-mentee-name" type="text" placeholder="Nome completo da mentorada" autocomplete="off">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Link do Google Docs</label>
-        <input class="form-input" id="new-mentee-docs" type="url" placeholder="https://docs.google.com/...">
-      </div>
-      <div class="btn-row">
-        <button type="button" class="btn" onclick="closeModal('modal-add-mentee')">Cancelar</button>
-        <button type="submit" class="btn btn-primary">Cadastrar</button>
-      </div>
-    </form>
-  </div>
-</div>
+    <!-- Modal: Smart Report -->
+    <div id="modal-smart-report" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content modal-large" style="padding: 24px;">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="background: rgba(139, 92, 246, 0.1); color: var(--primary); padding: 8px; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+                        <i data-lucide="file-chart-column"></i>
+                    </div>
+                    <div>
+                        <h3 id="smart-report-modal-title" style="margin: 0; font-size: 1.15rem; font-weight: 800;">Seu relatório</h3>
+                        <p style="margin: 0; font-size: 0.75rem; color: var(--text-secondary);">O essencial do que você realizou</p>
+                    </div>
+                </div>
+                <button id="btn-close-smart-report-modal" class="icon-button" style="padding: 6px;"><i data-lucide="x"></i></button>
+            </div>
 
-<!-- MODAL MENTORADA -->
-<div class="modal-overlay" id="modal-mentee">
-  <div class="modal" style="width:580px;">
-    <button class="modal-close" onclick="closeModal('modal-mentee')">×</button>
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:1rem;">
-      <div class="avatar" id="mm-avatar" style="width:40px;height:40px;font-size:14px;">GC</div>
-      <div style="flex:1;">
-        <div class="modal-title" id="mm-name" style="margin:0;">Mentorada</div>
-        <div style="display:flex;align-items:center;gap:6px;margin-top:6px;">
-          <input class="form-input" id="mm-docs" type="url" placeholder="Link do Google Docs..." style="font-size:12px;padding:4px 8px;" oninput="saveMenteeField();updateDocsLink()">
-          <a id="mm-docs-open" href="#" target="_blank" style="font-size:12px;color:var(--gisella);white-space:nowrap;display:none;">abrir →</a>
+            <!-- Tabs selector for report periods -->
+            <div class="report-tabs-bar" style="display: flex; gap: 8px; border-bottom: 1px solid var(--border-color); padding: 12px 0;">
+                <button id="tab-report-weekly" class="category-chip active" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 12px;">7 dias</button>
+                <button id="tab-report-monthly" class="category-chip" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 12px;">30 dias</button>
+                <button id="tab-report-yearly" class="category-chip" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 12px;">Ano</button>
+                <button id="tab-report-history" class="category-chip" style="flex: 1; justify-content: center; font-size: 0.8rem; font-weight: 700; padding: 8px 10px;">Histórico</button>
+            </div>
+
+            <div class="modal-body" style="padding-top: 20px; max-height: 60vh; overflow-y: auto;">
+                <!-- Summary Card -->
+                <div style="background: rgba(139, 92, 246, 0.04); padding: 20px; border-radius: 12px; border: 1px dashed rgba(139, 92, 246, 0.25); margin-bottom: 16px;">
+                    <h4 id="report-summary-title" style="margin: 0 0 12px 0; font-size: 0.88rem; font-weight: 800; text-transform: uppercase; color: var(--primary); letter-spacing: 0.05em; display: flex; align-items: center; gap: 6px;">
+                        <i data-lucide="sparkles" style="width: 16px; height: 16px;"></i>
+                        Resumo Semanal
+                    </h4>
+                    <div id="report-summary-content" style="font-size: 0.9rem; color: var(--text-primary); line-height: 1.6;">
+                        Carregando resumo...
+                    </div>
+                </div>
+            </div>
+            <div class="smart-report-footer">
+                <button id="btn-save-smart-report" class="btn btn-primary smart-report-save-button">
+                    <i data-lucide="image-down"></i>
+                    Salvar como imagem
+                </button>
+            </div>
         </div>
-      </div>
     </div>
-    <div class="modal-tabs">
-      <button class="modal-tab active" onclick="switchMenteeTab('notas',this)">Notas gerais</button>
-      <button class="modal-tab" onclick="switchMenteeTab('sessoes',this)">Sessões</button>
-      <button class="modal-tab" onclick="switchMenteeTab('livros',this)">Livros</button>
-    </div>
-    <div class="modal-tab-content active" id="mtab-notas">
-      <textarea class="notes-area" id="mm-notes" placeholder="Anotações livres sobre a mentorada..." oninput="saveMenteeField()" style="min-height:180px;"></textarea>
-    </div>
-    <div class="modal-tab-content" id="mtab-sessoes">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
-        <input class="form-input" type="date" id="mm-sdate">
-        <button class="btn btn-primary" onclick="addMenteeSession()">+ Salvar sessão</button>
-      </div>
-      <textarea class="notes-area" id="mm-snotes" placeholder="O que foi discutido..." style="min-height:80px;margin-bottom:12px;"></textarea>
-      <div id="mm-sessions-list"></div>
-    </div>
-    <div class="modal-tab-content" id="mtab-livros">
-      <div id="mm-livros-list"></div>
-    </div>
-    <div class="btn-row" style="margin-top:1rem;"><button class="btn btn-primary" onclick="closeModal('modal-mentee')">Fechar</button></div>
-  </div>
-</div>
 
-<!-- MODAL CONTEUDO DETALHE (Status/Responsável/Etapas) -->
-<div class="modal-overlay" id="modal-conteudo-detalhe" onclick="if(event.target===this)closeModal('modal-conteudo-detalhe')">
-  <div class="modal" style="width:520px;">
-    <button class="modal-close" onclick="closeModal('modal-conteudo-detalhe')">×</button>
-    <div id="mcd-title" class="modal-title" style="margin-bottom:4px;"></div>
-    <div id="mcd-subtitulo" style="font-size:12px;color:var(--text-soft);margin-bottom:1rem;"></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:1rem;">
-      <div>
-        <div class="form-label">Status</div>
-        <select class="form-select" id="mcd-status" onchange="saveConteudoDetalhe()">
-          <option value="copy">Para criar a copy</option><option value="gravado">Para gravar</option>
-          <option value="edicao">Para editar</option><option value="aprovado">Para aprovar</option>
-          <option value="agendado">Para agendar</option><option value="postado">Para postar</option>
-          <option value="turbinar">Para turbinar</option><option value="metricas">Para analisar métricas</option>
-        </select>
-      </div>
-      <div>
-        <div class="form-label">Responsável</div>
-        <select class="form-select" id="mcd-responsavel" onchange="saveConteudoDetalhe()">
-          <option value="">— nenhum —</option><option value="Gisella">Gisella</option>
-          <option value="Milena">Milena</option><option value="Luiggi">Luiggi</option>
-        </select>
-      </div>
-      <div>
-        <div class="form-label">Data de produção</div>
-        <input class="form-input" type="date" id="mcd-dataprod" onchange="saveConteudoDetalhe()">
-      </div>
-      <div>
-        <div class="form-label">Data de postagem</div>
-        <input class="form-input" type="date" id="mcd-datapost" onchange="saveConteudoDetalhe()">
-      </div>
-    </div>
-    <div class="form-label" style="margin-bottom:8px;">Etapas</div>
-    <div id="mcd-etapas-lista" style="max-height:260px;overflow-y:auto;margin-bottom:10px;"></div>
-    <div style="display:flex;gap:8px;margin-bottom:1rem;">
-      <input class="form-input" id="mcd-nova-etapa" type="text" placeholder="Nova etapa..." style="flex:1;" onkeydown="if(event.key==='Enter')addConteudoEtapa()">
-      <button class="btn btn-primary" onclick="addConteudoEtapa()">+ Etapa</button>
-    </div>
-    <div class="form-label" style="margin-bottom:6px;">Legenda</div>
-    <textarea class="notes-area" id="mcd-legenda" placeholder="Legenda para redes sociais..." style="min-height:70px;margin-bottom:12px;" onchange="saveConteudoDetalhe()"></textarea>
-    <div class="btn-row"><button class="btn btn-primary" onclick="closeModal('modal-conteudo-detalhe')">Fechar</button></div>
-  </div>
-</div>
-
-<!-- MODAL ETAPAS PRAZOS CONTEÚDO -->
-<div class="modal-overlay" id="modal-conteudo-etapas-prazos" onclick="if(event.target===this)closeModal('modal-conteudo-etapas-prazos')">
-  <div class="modal" style="width:520px;">
-    <button class="modal-close" onclick="closeModal('modal-conteudo-etapas-prazos')">×</button>
-    <div class="modal-title">📅 Prazos do conteúdo</div>
-    <div id="modal-cep-subtitulo" style="font-size:12px;color:var(--text-soft);margin-bottom:1rem;"></div>
-    <div id="modal-cep-lista" style="max-height:380px;overflow-y:auto;margin-bottom:12px;"></div>
-    <div class="btn-row"><button class="btn btn-primary" onclick="closeModal('modal-conteudo-etapas-prazos')">Fechar</button></div>
-  </div>
-</div>
-
-<!-- MODAL CONTEUDO -->
-<div class="modal-overlay" id="modal-conteudo">
-  <div class="modal" style="width:560px;">
-    <button class="modal-close" onclick="closeModal('modal-conteudo')">×</button>
-    <div class="modal-title" id="mc-title">Novo conteúdo</div>
-    <form onsubmit="event.preventDefault();saveConteudo();">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Nome do conteúdo</label><input class="form-input" id="mc-nome" type="text" placeholder="Ex: Reels sobre estratégia literária"></div>
-        <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Empresa(s)</label>
-          <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:4px;">
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="mc-emp-editora" style="accent-color:var(--editora);"> <span style="color:var(--editora);">Editora Cassol</span></label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="mc-emp-leia" style="accent-color:var(--leia);"> <span style="color:var(--leia);">Léia Cassol</span></label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="mc-emp-gisella" style="accent-color:var(--gisella);"> <span style="color:var(--gisella);">GC Estratégias</span></label>
-          </div></div>
-        <div class="form-group"><label class="form-label">Responsável</label><input class="form-input" id="mc-responsavel" type="text"></div>
-        <div class="form-group"><label class="form-label">Rede social</label>
-          <select class="form-select" id="mc-rede" onchange="updateMcRede()">
-            <option value="instagram">Instagram</option><option value="tiktok">TikTok</option><option value="youtube">YouTube</option><option value="substack">Substack</option><option value="emanda">Emanda</option>
-          </select></div>
-        <div class="form-group" id="mc-organico-wrap"><label class="form-label">Tipo (Orgânico / Anúncio)</label>
-          <select class="form-select" id="mc-organico">
-            <option value="organico">Orgânico</option>
-            <option value="anuncio">Anúncio</option>
-          </select></div>
-        <div class="form-group" id="mc-tipo-wrap"><label class="form-label">Formato</label>
-          <select class="form-select" id="mc-tipo">
-            <option value="reel">Reel</option><option value="foto">Foto</option><option value="dump">Dump</option><option value="card">Card</option><option value="carrossel">Carrossel</option><option value="story">Story</option><option value="emailmkt">Email mkt</option><option value="video">Vídeo</option>
-          </select></div>
-        <div class="form-group"><label class="form-label">Status</label>
-          <select class="form-select" id="mc-status">
-            <option value="copy">Para criar a copy</option><option value="gravado">Para gravar</option><option value="edicao">Para editar</option><option value="aprovado">Para aprovar</option><option value="agendado">Para agendar</option><option value="postado">Para postar</option><option value="turbinar">Para turbinar</option><option value="metricas">Para analisar métricas</option><option value="turbinar2">Para turbinar novamente</option>
-          </select></div>
-        <div class="form-group"><label class="form-label">Data de produção</label><input class="form-input" id="mc-dataprod" type="date"></div>
-        <div class="form-group"><label class="form-label">Data de postagem</label><input class="form-input" id="mc-datapost" type="date"></div>
-        <div class="form-group"><label class="form-label">Horário</label><input class="form-input" id="mc-hora" type="time"></div>
-        <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Link</label><input class="form-input" id="mc-link" type="url" placeholder="https://..."></div>
-        <div class="form-group" id="mc-copy-wrap" style="grid-column:1/-1;"><label class="form-label">Copy</label><textarea class="notes-area" id="mc-copy" style="min-height:70px;"></textarea></div>
-        <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Legenda</label><textarea class="notes-area" id="mc-legenda" style="min-height:70px;"></textarea></div>
-        <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Observação</label><textarea class="notes-area" id="mc-observacao" style="min-height:50px;"></textarea></div>
-      </div>
-      <div class="btn-row"><button type="button" class="btn" onclick="closeModal('modal-conteudo')">Cancelar</button><button type="submit" class="btn btn-primary">Salvar</button></div>
-    </form>
-  </div>
-</div>
-
-<!-- MODAL STEIRA -->
-<div class="modal-overlay" id="modal-gcal-event" onclick="if(event.target===this)closeModal('modal-gcal-event')">
-  <div class="modal" style="width:420px;">
-    <button class="modal-close" onclick="closeModal('modal-gcal-event')">×</button>
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:1rem;">
-      <div style="width:12px;height:12px;border-radius:50%;background:var(--gisella);flex-shrink:0;"></div>
-      <div class="modal-title" id="gcal-modal-title" style="margin:0;"></div>
-    </div>
-    <div id="gcal-modal-body" style="display:flex;flex-direction:column;gap:10px;font-size:13px;color:var(--text);">
-    </div>
-  </div>
-</div>
-
-<!-- MODAL COMENTÁRIOS TAREFA -->
-<div class="modal-overlay" id="modal-comentarios-tarefa" onclick="if(event.target===this)closeModal('modal-comentarios-tarefa')">
-  <div class="modal" style="width:460px;max-height:80vh;display:flex;flex-direction:column;">
-    <button class="modal-close" onclick="closeModal('modal-comentarios-tarefa')">×</button>
-    <div class="modal-title" id="modal-com-titulo" style="margin-bottom:1rem;font-size:16px;"></div>
-    <div id="modal-com-lista" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-bottom:12px;min-height:40px;"></div>
-    <div style="border-top:1px solid var(--border);padding-top:12px;">
-      <select class="form-select" id="modal-com-autor" style="margin-bottom:8px;font-size:12px;">
-        <option value="Gisella">Gisella</option>
-        <option value="Milena">Milena</option>
-        <option value="Luiggi">Luiggi</option>
-      </select>
-      <div style="display:flex;gap:8px;align-items:flex-end;">
-        <textarea class="notes-area" id="modal-com-texto" placeholder="Escreva um comentário..." style="flex:1;min-height:48px;font-size:13px;resize:none;"></textarea>
-        <button onclick="submitComentarioModal()" style="background:var(--text);color:var(--surface);border:none;border-radius:8px;padding:8px 14px;font-size:13px;cursor:pointer;height:48px;font-family:'DM Sans',sans-serif;">Enviar</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL TAREFA FIXA -->
-<div class="modal-overlay" id="modal-fixed-task" onclick="if(event.target===this)closeModal('modal-fixed-task')">
-  <div class="modal" style="width:360px;">
-    <button class="modal-close" onclick="closeModal('modal-fixed-task')">×</button>
-    <div class="modal-title" id="fxt-modal-title">Nova tarefa fixa</div>
-    <div class="form-group"><label class="form-label">Nome da tarefa</label>
-      <input class="form-input" id="fxt-label" placeholder="Nome..." onkeydown="if(event.key==='Enter')saveFixedTask()">
-    </div>
-    <div class="btn-row">
-      <button class="btn" onclick="closeModal('modal-fixed-task')">Cancelar</button>
-      <button class="btn btn-primary" onclick="saveFixedTask()">Salvar</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL PRAZOS DAS TAREFAS DO PROJETO -->
-<div class="modal-overlay" id="modal-projeto-prazos" onclick="if(event.target===this)closeModal('modal-projeto-prazos')">
-  <div class="modal" style="width:560px;max-height:85vh;display:flex;flex-direction:column;">
-    <button class="modal-close" onclick="closeModal('modal-projeto-prazos')">×</button>
-    <div class="modal-title" style="margin-bottom:4px;">📅 Prazos das tarefas</div>
-    <div id="modal-pp-subtitulo" style="font-size:12px;color:var(--text-soft);margin-bottom:1.2rem;"></div>
-    <div id="modal-pp-lista" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;margin-bottom:1rem;"></div>
-    <div style="display:flex;gap:8px;align-items:center;padding-top:10px;border-top:1px solid var(--border);margin-bottom:12px;">
-      <input class="form-input" id="pp-nova-tarefa" placeholder="+ Nova tarefa..." style="flex:1;font-size:13px;" onkeydown="if(event.key==='Enter')addProjetoTaskModal()">
-      <button class="btn btn-primary" onclick="addProjetoTaskModal()" style="white-space:nowrap;">Adicionar</button>
-    </div>
-    <div class="btn-row"><button class="btn" onclick="closeModal('modal-projeto-prazos')">Fechar</button></div>
-  </div>
-</div>
-
-<!-- MODAL PRAZOS ETAPAS LIVRO -->
-<div class="modal-overlay" id="modal-etapas-prazos" onclick="if(event.target===this)closeModal('modal-etapas-prazos')">
-  <div class="modal" style="width:560px;max-height:85vh;display:flex;flex-direction:column;">
-    <button class="modal-close" onclick="closeModal('modal-etapas-prazos')">×</button>
-    <div class="modal-title" style="margin-bottom:4px;">Definir prazos das etapas</div>
-    <div style="font-size:12px;color:var(--text-soft);margin-bottom:1.2rem;" id="modal-ep-subtitulo"></div>
-    <div id="modal-ep-lista" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;margin-bottom:1rem;"></div>
-    <div style="display:flex;gap:8px;align-items:center;padding-top:10px;border-top:1px solid var(--border);margin-bottom:12px;">
-      <input class="form-input" id="ep-nova-etapa" placeholder="+ Nova etapa..." style="flex:1;font-size:13px;"
-        onkeydown="if(event.key==='Enter')addEtapaModal()">
-      <button class="btn btn-primary" onclick="addEtapaModal()" style="white-space:nowrap;">Adicionar</button>
-    </div>
-    <div class="btn-row">
-      <button class="btn" onclick="closeModal('modal-etapas-prazos')">Fechar</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL EXCLUSÃO DE RECORRÊNCIA -->
-<div class="modal-overlay" id="modal-excluir-recorrencia" onclick="if(event.target===this)cancelRecurringDeletion()">
-  <div class="modal" style="width:420px;">
-    <button class="modal-close" onclick="cancelRecurringDeletion()">×</button>
-    <div class="modal-title">Excluir tarefa recorrente?</div>
-    <div style="font-size:13px;color:var(--text-soft);line-height:1.5;margin:8px 0 20px;">Deseja apagar somente esta ocorrência ou todas as ocorrências futuras dessa recorrência?</div>
-    <div class="btn-row" style="gap:8px;flex-wrap:wrap;">
-      <button class="btn" onclick="deleteOnlyRecurringOccurrence()">Apagar só esta</button>
-      <button class="btn" style="color:var(--danger);border-color:var(--danger);" onclick="deleteAllRecurringOccurrences()">Apagar todas</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL DIA DO CALENDÁRIO -->
-<div class="modal-overlay" id="modal-dia-cal" onclick="if(event.target===this)closeModal('modal-dia-cal')">
-  <div class="modal" style="width:420px;max-height:80vh;overflow-y:auto;">
-    <button class="modal-close" onclick="closeModal('modal-dia-cal')">×</button>
-    <div class="modal-title" id="modal-dia-title" style="margin-bottom:1rem;"></div>
-    <div id="modal-dia-body" style="display:flex;flex-direction:column;gap:8px;font-size:13px;"></div>
-    <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border);">
-      <button onclick="closeModal('modal-dia-cal');quickAddDate(window._modalDiaDate)" style="background:none;border:1px dashed var(--border-mid);border-radius:8px;padding:6px 14px;font-size:12px;color:var(--text-soft);cursor:pointer;width:100%;">+ adicionar evento neste dia</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal-overlay" id="modal-steira">
-  <div class="modal" style="width:540px;">
-    <button class="modal-close" onclick="closeModal('modal-steira')">×</button>
-    <div class="modal-title" id="ms-title">Produto</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:1rem;">
-      <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Nome do produto</label><input class="form-input" id="ms-nome" type="text"></div>
-      <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Fase de Evolução da Jornada</label>
-        <select class="form-select" id="ms-fase">
-          <option value="">— selecione —</option>
-          <option>Confusão vira direção</option><option>Direção vira livro</option><option>Livro vira movimento</option>
-          <option>Movimento vira marca</option><option>Marca vira receita</option><option>Estrutura vira patrimônio</option>
-        </select></div>
-      <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Dores Centrais que Ativam a Decisão</label><textarea class="notes-area" id="ms-dores" style="min-height:70px;"></textarea></div>
-      <div class="form-group"><label class="form-label">Preço (R$)</label><input class="form-input" id="ms-preco" type="text"></div>
-      <div class="form-group"><label class="form-label">Modelo</label>
-        <select class="form-select" id="ms-modelo"><option value="">— selecione —</option><option>Lançamento</option><option>Perpétuo</option></select></div>
-      <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Formato / Como acontece</label><textarea class="notes-area" id="ms-formato" style="min-height:70px;"></textarea></div>
-      <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Link</label>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <input class="form-input" id="ms-link" type="url" placeholder="https://...">
-          <a id="ms-link-open" href="#" target="_blank" style="font-size:12px;color:var(--gisella);white-space:nowrap;display:none;">abrir →</a>
+    <!-- Modal: corrigir função reconhecida no relatório -->
+    <div id="modal-report-correction" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content" style="max-width:360px; padding:24px;">
+            <div class="modal-header" style="margin-bottom:16px;">
+                <h3 style="margin:0;">Corrigir função</h3>
+                <button id="btn-close-report-correction" type="button" class="modal-close"><i data-lucide="x"></i></button>
+            </div>
+            <p style="margin:0 0 14px; color:var(--text-secondary); font-size:.78rem; line-height:1.5;">Escolha uma tarefa concluída e informe a função correta. O app aprenderá o título para os próximos relatórios.</p>
+            <div class="form-group">
+                <label for="select-report-correction-task">Tarefa</label>
+                <select id="select-report-correction-task"></select>
+            </div>
+            <div class="form-group" style="margin-top:10px;">
+                <label for="select-report-correction-function">Função correta</label>
+                <select id="select-report-correction-function">
+                    <option value="" selected disabled>Selecione…</option><option value="delivery">Entrega</option><option value="billing">Cobrança/Financeiro</option><option value="production">Produção/Operação</option><option value="marketing">Divulgação</option><option value="sales">Vendas/Comercial</option><option value="service">Atendimento</option><option value="supply">Compra/Abastecimento</option><option value="assessment">Avaliação/Prova</option><option value="academic_work">Trabalho acadêmico</option><option value="study">Estudo/Revisão</option><option value="exercise">Atividade física</option><option value="self_care">Saúde/Autocuidado</option><option value="home">Casa/Organização</option><option value="personal_learning">Aprendizado</option><option value="planning">Rotina/Planejamento</option><option value="other">Outra atividade</option>
+                </select>
+            </div>
+            <button id="btn-save-report-correction" type="button" class="btn btn-primary" style="width:100%; margin-top:16px;">Salvar correção</button>
         </div>
-      </div>
-      <div class="form-group" style="grid-column:1/-1;"><label class="form-label">Informações adicionais</label><textarea class="notes-area" id="ms-notes" style="min-height:70px;"></textarea></div>
     </div>
-    <div class="btn-row"><button class="btn" onclick="closeModal('modal-steira')">Cancelar</button><button class="btn btn-primary" onclick="saveSteira()">Salvar</button></div>
-  </div>
-</div>
 
+    <!-- Modal: Notifications -->
+    <div id="modal-notifications" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content collaborators-modal-content" style="max-width: 380px; padding: 24px;">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="background: rgba(59, 130, 246, 0.1); color: #3b82f6; padding: 8px; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+                        <i data-lucide="bell" style="color: #3b82f6;"></i>
+                    </div>
+                    <div>
+                        <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800;">Central de Notificações</h3>
+                        <p style="margin: 0; font-size: 0.75rem; color: var(--text-secondary);">Lembretes e avisos do sistema</p>
+                    </div>
+                </div>
+                <button id="btn-close-notifications-modal" class="icon-button" style="padding: 6px;"><i data-lucide="x"></i></button>
+            </div>
+            
+            <div class="modal-body" style="padding-top: 16px; display: flex; flex-direction: column; gap: 12px;">
+                <div class="notifications-list-toolbar">
+                    <span>Histórico recente</span>
+                    <button id="btn-clear-notifications" type="button"><i data-lucide="trash-2"></i> Limpar notificações</button>
+                </div>
 
-  <script src="app.js?v=3.2.2"></script>
+                <div id="notifications-list-container" style="max-height: 40vh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-top: 4px;">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Checklist Manual -->
+    <div id="modal-manual-checklist" class="modal">
+        <div class="modal-overlay" id="overlay-manual-checklist"></div>
+        <div class="modal-content" style="max-width: 420px; padding: 24px; display: flex; flex-direction: column; gap: 16px; height: 95vh; max-height: 95vh;">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="background: rgba(139, 92, 246, 0.1); color: var(--primary); padding: 8px; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+                        <i data-lucide="clipboard-list" style="color: var(--primary);"></i>
+                    </div>
+                    <div>
+                        <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800;">Checklist Manual</h3>
+                        <p style="margin: 0; font-size: 0.75rem; color: var(--text-secondary);">Um bloco de notas rápido para uso livre</p>
+                    </div>
+                </div>
+                <button id="btn-close-manual-checklist-modal" class="icon-button" style="padding: 6px;"><i data-lucide="x"></i></button>
+            </div>
+            
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 16px; flex: 1; min-height: 0;">
+                <!-- Tabs for Checklist and Notepad -->
+                <div style="display: flex; gap: 8px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); padding: 4px; border-radius: 8px; flex-shrink: 0;">
+                    <button id="tab-manual-checklist" class="btn" style="flex: 1; padding: 8px; font-size: 0.8rem; font-weight: 700; background: var(--bg-surface-solid); border: none; border-radius: 6px; color: var(--text-primary); cursor: pointer;">
+                        Checklist
+                    </button>
+                    <button id="tab-manual-notepad" class="btn" style="flex: 1; padding: 8px; font-size: 0.8rem; font-weight: 700; background: transparent; border: none; border-radius: 6px; color: var(--text-secondary); cursor: pointer;">
+                        Bloco de Notas
+                    </button>
+                </div>
+
+                <!-- Tab content: Checklist -->
+                <div id="content-manual-checklist" style="display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0;">
+                    <!-- Add item form -->
+                    <div style="display: flex; gap: 8px; flex-shrink: 0;">
+                        <input type="text" id="input-manual-item" placeholder="Novo item..." style="flex: 1; padding: 10px 14px; font-size: 0.85rem; border-radius: 8px; border: 1px solid var(--border-color); background: rgba(0,0,0,0.2); color: white; outline: none;" autocomplete="off">
+                        <button id="btn-add-manual-item" class="btn btn-primary" style="padding: 10px 14px; border-radius: 8px; cursor: pointer;"><i data-lucide="plus"></i></button>
+                    </div>
+                    
+                    <!-- Items list -->
+                    <div id="manual-items-list" style="display: flex; flex-direction: column; gap: 8px; flex: 1; overflow-y: auto; padding-right: 4px; min-height: 100px;">
+                        <!-- Dynamically populated checklist items -->
+                    </div>
+                    
+                    <button id="btn-clear-completed-manual" class="btn" style="width: 100%; padding: 10px; font-size: 0.8rem; font-weight: 700; color: var(--text-secondary); background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px; cursor: pointer; flex-shrink: 0;">
+                        <i data-lucide="trash-2" style="width: 14px; height: 14px;"></i> Limpar Concluídos
+                    </button>
+                </div>
+
+                <!-- Tab content: Notepad -->
+                <div id="content-manual-notepad" style="display: none; flex-direction: column; gap: 8px; flex: 1; min-height: 0;">
+                    <textarea id="textarea-manual-notes" placeholder="Digite suas anotações livres aqui..." style="width: 100%; flex: 1; padding: 12px; font-size: 0.85rem; font-family: inherit; line-height: 1.5; resize: none; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 12px; color: var(--text-primary); outline: none;"></textarea>
+                    <div style="font-size: 0.7rem; color: var(--text-muted); text-align: right; margin-top: 2px; flex-shrink: 0;">Salvo automaticamente</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Collaborators -->
+    <div id="modal-collaborators" class="modal modal-collaborators-layer">
+        <div class="modal-overlay"></div>
+        <div class="modal-content" style="max-width: 380px; padding: 24px;">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="background: rgba(139, 92, 246, 0.1); color: var(--primary); padding: 8px; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+                        <i data-lucide="users" style="color: var(--primary);"></i>
+                    </div>
+                    <div>
+                        <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800;">Colaboradores da Guia</h3>
+                        <p style="margin: 0; font-size: 0.75rem; color: var(--text-secondary);" id="collab-modal-subtitle">Compartilhe esta guia com outro ID</p>
+                    </div>
+                </div>
+                <button id="btn-close-collaborators-modal" class="icon-button" style="padding: 6px;"><i data-lucide="x"></i></button>
+            </div>
+            
+            <div class="modal-body" style="padding-top: 20px;">
+                <input type="hidden" id="collab-category-id">
+                
+                <!-- Invite Form -->
+                <div id="collab-invite-section">
+                    <label style="display:block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); margin-bottom:8px;">Convidar Colaborador</label>
+                    <div class="collab-email-row" style="display: flex; gap: 8px; margin-bottom: 20px;">
+                        <input type="text" id="input-collab-email" placeholder="ID da pessoa" autocomplete="off" autocapitalize="none" style="flex: 1; padding: 12px 14px;">
+                        <button id="btn-add-collab" class="btn btn-primary" style="padding: 10px 16px; font-weight: 700;">Convidar</button>
+                    </div>
+                </div>
+
+                <!-- Current Collaborators list -->
+                <div>
+                    <label style="display:block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); margin-bottom:8px;">Quem participa desta guia</label>
+                    <div class="manage-list" id="collaborators-list" style="max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin;">
+                        <!-- Dynamic items go here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Info Notificar -->
+    <div id="modal-notification-info" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content" style="max-width: 320px; text-align: center; padding: 24px;">
+            <div style="display: flex; flex-direction: column; align-items: center; width: 100%;">
+                <div style="background: rgba(139, 92, 246, 0.1); color: var(--primary); width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 16px;">
+                    <i data-lucide="bell" style="width: 24px; height: 24px; color: var(--primary);"></i>
+                </div>
+                <h4 style="margin: 0 0 8px 0; font-size: 1.05rem; font-weight: 800; color: var(--text-primary);">Lembrete com horário</h4>
+                <p style="margin: 0 0 20px 0; font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5;">
+                    Ao ligar a alavanca, você pode adicionar uma ou mais notificações, no mesmo dia, 1 dia antes ou 7 dias antes da tarefa.
+                </p>
+                <button id="btn-close-notification-info" type="button" class="btn btn-primary" style="width: 100%; padding: 10px; font-weight: 700; font-size: 0.8rem;">Entendi</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: explicação da janela de conclusão da noite anterior -->
+    <div id="modal-past-night-info" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content" style="max-width: 330px; text-align: center; padding: 24px;">
+            <div style="display:flex; flex-direction:column; align-items:center; width:100%;">
+                <div style="background:rgba(234,179,8,.1); color:#eab308; width:48px; height:48px; border-radius:50%; display:flex; align-items:center; justify-content:center; margin-bottom:16px;">
+                    <i data-lucide="moon-star" style="width:24px; height:24px;"></i>
+                </div>
+                <h4 style="margin:0 0 8px; font-size:1.05rem; font-weight:800; color:var(--text-primary);">Noite anterior aberta até 12h</h4>
+                <p style="margin:0 0 20px; font-size:.8rem; color:var(--text-secondary); line-height:1.55;">
+                    Entre a meia-noite e o meio-dia, ao visualizar <strong>Ontem</strong>, as tarefas do turno <strong>Noite</strong> continuam disponíveis para marcar. Isso permite concluir atividades feitas durante a madrugada. Após 12h, elas retornam ao histórico bloqueado.
+                </p>
+                <button id="btn-close-past-night-info" type="button" class="btn btn-primary" style="width:100%; padding:10px; font-weight:700; font-size:.8rem;">Entendi</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Custom Delete Confirmation -->
+    <div id="modal-confirm-delete" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content" style="max-width: 360px; text-align: center; padding: 24px;">
+            <div style="display: flex; flex-direction: column; align-items: center; width: 100%;">
+                <div style="background: rgba(239, 68, 68, 0.1); color: #ef4444; width: 56px; height: 56px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 16px;">
+                    <i data-lucide="trash-2" style="width: 28px; height: 28px;"></i>
+                </div>
+                <h3 id="confirm-delete-title" style="margin: 0 0 8px 0; font-size: 1.25rem; font-weight: 800; color: var(--text-primary);">Excluir Tarefa</h3>
+                <p id="confirm-delete-body" style="margin: 0 0 24px 0; font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5; max-width: 280px;">Deseja realmente excluir esta tarefa?</p>
+                
+                <!-- Standard Actions (Non-recurring tasks) -->
+                <div id="confirm-delete-standard-actions" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; width: 100%;">
+                    <button id="btn-confirm-delete-cancel" class="btn btn-secondary" style="padding: 12px; font-weight: 700;">Não</button>
+                    <button id="btn-confirm-delete-ok" class="btn" style="background: #ef4444; color: white; padding: 12px; border-radius: var(--radius-md); font-weight: 700; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                        <i data-lucide="trash-2" style="width: 16px; height: 16px;"></i> Sim
+                    </button>
+                </div>
+
+                <!-- Recurring Actions (Recurring tasks) -->
+                <div id="confirm-delete-recurring-actions" class="hidden" style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
+                    <button id="btn-confirm-delete-recurring-today" class="btn btn-secondary" style="padding: 12px; font-weight: 700; width: 100%; border: 1px solid var(--border-color);">Excluir Apenas Hoje</button>
+                    <button id="btn-confirm-delete-recurring-all" class="btn" style="background: #ef4444; color: white; padding: 12px; border-radius: var(--radius-md); font-weight: 700; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%;">
+                        <i data-lucide="trash-2" style="width: 16px; height: 16px;"></i> Excluir de Todos os Dias
+                    </button>
+                    <button id="btn-confirm-delete-recurring-cancel" class="btn btn-secondary" style="padding: 8px; border: none; background: transparent; color: var(--text-secondary); width: 100%; cursor: pointer;">Cancelar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Gerenciar Categorias -->
+    <div id="modal-manage-categories" class="modal">
+        <div class="modal-overlay" id="overlay-manage-categories"></div>
+        <div class="modal-content manage-modal-content categories-modal-content">
+            <div class="modal-header categories-manager-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 16px;">
+                <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800; display: flex; align-items: center; gap: 8px;">
+                    <i data-lucide="folder" style="color: var(--primary);"></i> Gerenciar Categorias
+                </h3>
+                <button id="btn-close-manage-categories-modal" class="modal-close" style="background: transparent; border: none; color: var(--text-secondary); cursor: pointer; padding: 4px; display: flex; align-items: center; justify-content: center;"><i data-lucide="x"></i></button>
+            </div>
+            
+            <div class="modal-body-scroll categories-manager-body" style="overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 20px; padding-right: 4px; scrollbar-width: thin; box-sizing: border-box;">
+                <!-- Seção 1: Criar Nova Categoria -->
+                <div class="category-create-panel" style="background: rgba(255,255,255,0.01); border: 1px solid var(--border-color); padding: 14px; border-radius: var(--radius-md); display: flex; flex-direction: column; gap: 12px;">
+                    <h4 style="margin: 0; font-size: 0.85rem; font-weight: 800; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 6px;">
+                        <i data-lucide="plus-circle" style="width: 14px; height: 14px; color: var(--primary);"></i> Nova Categoria
+                    </h4>
+                    <div style="display: flex; flex-direction: column; gap: 4px;">
+                        <label style="font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);">Nome da Categoria</label>
+                        <input type="text" id="input-new-category" placeholder="Nome (ex: Unisinos)" autocomplete="off" style="width: 100%; padding: 8px 10px; font-size: 0.82rem;">
+                    </div>
+                    <div id="category-type-row" class="category-type-row" style="display: grid; grid-template-columns: 1fr; gap: 8px;">
+                        <div style="display: flex; flex-direction: column; gap: 4px;">
+                            <label style="font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);">Tipo de Contexto</label>
+                            <select id="select-new-category-type" style="width: 100%; padding: 8px 10px; font-size: 0.82rem; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
+                                <option value="Trabalho">Trabalho</option>
+                                <option value="Empresa">Empresa</option>
+                                <option value="Faculdade/Estudos">Faculdade/Estudos</option>
+                                <option value="Projeto">Projeto</option>
+                                <option value="Pessoal">Pessoal</option>
+                                <option value="Saúde">Saúde</option>
+                                <option value="Treino">Treino</option>
+                                <option value="Finanças">Finanças</option>
+                                <option value="Casa">Casa</option>
+                                <option value="Lazer">Lazer</option>
+                                <option value="Outro">Outro...</option>
+                            </select>
+                        </div>
+                        <div id="wrapper-custom-type" style="display: none; flex-direction: column; gap: 4px;">
+                            <label style="font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);">Tipo Personalizado</label>
+                            <input type="text" id="input-new-category-custom-type" placeholder="Ex: Viagens" style="width: 100%; padding: 8px 10px; font-size: 0.82rem;">
+                        </div>
+                    </div>
+                    <button id="btn-add-category" class="btn btn-primary" style="width: 100%; padding: 10px; font-weight: 700; font-size: 0.82rem;">Adicionar Categoria</button>
+                </div>
+
+                <!-- Seção 2: Categorias Existentes -->
+                <div class="categories-existing-panel">
+                    <h4 style="margin: 0 0 10px 0; font-size: 0.85rem; font-weight: 800; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 6px;">
+                        <i data-lucide="list" style="width: 14px; height: 14px; color: var(--primary);"></i> Categorias Cadastradas
+                    </h4>
+                    <!-- List of current categories -->
+                    <div class="manage-list categories-manager-list" id="manage-categories-list" style="max-height: 280px; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; scrollbar-width: thin; box-sizing: border-box;">
+                        <!-- Javascript will inject categories list here -->
+                    </div>
+                </div>
+
+                <!-- Seção 3: Classificar Categorias Antigas -->
+                <div id="settings-classify-unclassified-cats-wrapper" style="display: none; background: rgba(245, 158, 11, 0.03); padding: 12px; border-radius: var(--radius-md); border: 1px solid rgba(245, 158, 11, 0.15);">
+                    <label style="display:block; font-size:0.7rem; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; color:#f59e0b; margin-bottom:8px;">⚠️ Classificar Categorias Antigas</label>
+                    <div id="settings-unclassified-cats-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
+                </div>
+                
+                <!-- Seção 4: Ensine o App -->
+                <div id="settings-teach-app-wrapper" style="display: none; background: rgba(139, 92, 246, 0.03); padding: 12px; border-radius: var(--radius-md); border: 1px solid rgba(139, 92, 246, 0.15);">
+                    <label style="display:block; font-size:0.7rem; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; color:var(--primary); margin-bottom:4px;">🧠 Ensine o App (Funções)</label>
+                    <p style="margin:0 0 10px; color:var(--text-secondary); font-size:0.72rem; line-height:1.4;">Associe uma palavra à função que ela representa. O relatório reutilizará esse aprendizado automaticamente.</p>
+                    <div style="display:flex; flex-direction:column; gap:7px; padding:9px; margin-bottom:10px; border-radius:8px; background:rgba(139,92,246,.06); border:1px solid rgba(139,92,246,.14);">
+                        <input id="input-manual-learning-term" type="text" placeholder="Termo ou expressão (ex: levar caixa)" style="width:100%; padding:8px 10px; font-size:.78rem;">
+                        <div style="display:flex; gap:7px;">
+                            <select id="select-manual-learning-function" style="flex:1; min-width:0; background:var(--bg-surface); color:var(--text-primary); border:1px solid var(--border-color); padding:7px; border-radius:6px; font-size:.75rem;">
+                                <option value="" selected disabled>Selecione a função…</option>
+                                <option value="delivery">Entrega</option><option value="billing">Cobrança/Financeiro</option><option value="production">Produção/Operação</option><option value="marketing">Divulgação</option><option value="sales">Vendas/Comercial</option><option value="service">Atendimento</option><option value="supply">Compra/Abastecimento</option><option value="assessment">Avaliação/Prova</option><option value="academic_work">Trabalho acadêmico</option><option value="study">Estudo/Revisão</option><option value="exercise">Atividade física</option><option value="self_care">Saúde/Autocuidado</option><option value="home">Casa/Organização</option><option value="personal_learning">Aprendizado</option><option value="planning">Rotina/Planejamento</option><option value="other">Outra atividade</option>
+                            </select>
+                            <button id="btn-save-manual-learning" style="background:var(--primary); color:#fff; border:0; border-radius:6px; padding:7px 11px; font-size:.76rem; font-weight:800; cursor:pointer;">Ensinar</button>
+                        </div>
+                    </div>
+                    <div id="settings-teach-app-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
+                    <div id="settings-learned-functions-wrapper" style="display:none; margin-top:12px; padding-top:10px; border-top:1px solid var(--border-color);">
+                        <span style="display:block; margin-bottom:7px; color:var(--text-secondary); font-size:.68rem; font-weight:800; text-transform:uppercase;">Aprendizados salvos</span>
+                        <div id="settings-learned-functions-list" style="display:flex; flex-direction:column; gap:7px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="storage.js?v=1.03"></script>
+    <script src="app.js?v=11.08"></script>
 </body>
 </html>

@@ -13,6 +13,11 @@ const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", 
 const latestSaturdayDate = new Date(`${today}T12:00:00`);
 while (latestSaturdayDate.getDay() !== 6) latestSaturdayDate.setDate(latestSaturdayDate.getDate() - 1);
 const latestSaturday = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(latestSaturdayDate);
+const daysBeforeToday = days => {
+  const date = new Date(`${today}T12:00:00`);
+  date.setDate(date.getDate() - days);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+};
 const testUser = { id: "00000000-0000-4000-8000-000000000001", email: "teste@checklist.local" };
 const normalCategory = { id: "10000000-0000-4000-8000-000000000001", name: "Pessoal", type: "Pessoal", is_active: true, user_id: testUser.id };
 const trainingCategory = { id: "20000000-0000-4000-8000-000000000001", name: "Treino", type: "Treino", is_active: true, user_id: testUser.id };
@@ -52,6 +57,7 @@ async function openApp({ categories = [normalCategory], tasks = [], completions 
     localStorage.setItem("offline_category_shares", "[]");
     localStorage.setItem("offline_completions_queue", "{}");
     localStorage.setItem("offline_task_updates_queue", "{}");
+    localStorage.setItem("offline_category_updates_queue", "{}");
     if (knownDevice) localStorage.setItem("checklist_device_cache_ready", "true");
     else localStorage.removeItem("checklist_device_cache_ready");
     localStorage.setItem("checklist_last_user_id", testUser.id);
@@ -93,6 +99,20 @@ test("abertura sem alterações pendentes já aparece sincronizada", async () =>
   await context.close();
 });
 
+test("cache em memória recebe alterações feitas por outra aba", async () => {
+  const original = task("30000000-0000-4000-8000-000000000001", "Tarefa original", "Pessoal");
+  const updated = { ...original, title: "Atualizada em outra aba" };
+  const { context, page } = await openApp({ tasks: [original] });
+  await page.evaluate(nextTasks => {
+    window.dispatchEvent(new StorageEvent("storage", {
+      key: "offline_tasks",
+      newValue: JSON.stringify(nextTasks)
+    }));
+  }, [updated]);
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("offline_tasks"))[0]?.title === "Atualizada em outra aba");
+  await context.close();
+});
+
 test("checklist manual fica nas configurações e não no sininho", async () => {
   const { context, page } = await openApp();
   assert.equal(await page.locator("#modal-notifications #btn-open-manual-checklist").count(), 0);
@@ -127,6 +147,70 @@ test("treino próprio aparece imediatamente na abertura pela aba Todos", async (
   const { context, page } = await openApp({ categories: [trainingCategory], tasks: [task(id, "Treino em cache", "Treino")] });
   await page.waitForSelector(`.task-item[data-id="${id}"]`);
   assert.equal(await page.locator(`.task-item[data-id="${id}"]`).count(), 1);
+  await context.close();
+});
+
+test("modal de nova tarefa não escolhe Treino apenas por ser a primeira categoria", async () => {
+  const { context, page } = await openApp({ categories: [trainingCategory, normalCategory] });
+  await page.click("#btn-add-task-modal");
+  await page.waitForTimeout(340);
+  await page.click("#btn-add-task-modal");
+  await page.waitForSelector("#modal-add-task.active");
+  assert.equal(await page.locator("#task-category").inputValue(), "Pessoal");
+  await context.close();
+});
+
+test("a mesma tarefa importada do dashboard aparece uma única vez no checklist", async () => {
+  const first = task("25000000-0000-4000-8000-000000000002", "Revisar campanha", "Pessoal");
+  first.category = "GC Estratégias";
+  first.category_id = normalCategory.id;
+  first.context = {
+    source: "cassol_dashboard",
+    cassol_dashboard_event_id: "dashboard-gisella-42",
+    cassol_dashboard_recipient: "gisella"
+  };
+  const duplicate = {
+    ...first,
+    id: "25000000-0000-4000-8000-000000000003",
+    context: { ...first.context }
+  };
+  const { context, page } = await openApp({
+    categories: [normalCategory],
+    tasks: [first, duplicate]
+  });
+  await page.waitForSelector(".task-item", { state: "visible" });
+  assert.equal(await page.locator(".task-item", { hasText: "Revisar campanha" }).count(), 1);
+  await context.close();
+});
+
+test("duplicata legada do dashboard sem source e sem user_id também é consolidada", async () => {
+  const first = task("25000000-0000-4000-8000-000000000012", "Fechar relatório", "Pessoal");
+  first.category = "GC Estratégias";
+  first.context = { cassol_dashboard_event_id: "dashboard-luiggi-legacy-7" };
+  const duplicate = { ...first, id: "25000000-0000-4000-8000-000000000013", user_id: null, context: { ...first.context } };
+  const { context, page } = await openApp({ tasks: [first, duplicate] });
+  await page.waitForSelector(".task-item", { state: "visible" });
+  assert.equal(await page.locator(".task-item", { hasText: "Fechar relatório" }).count(), 1);
+  await context.close();
+});
+
+test("recorrência a cada duas semanas aparece no mesmo dia da semana", async () => {
+  const due = task("25000000-0000-4000-8000-000000000014", "Tarefa de duas semanas prevista", "Pessoal");
+  due.is_recurring = true;
+  due.created_at = `${daysBeforeToday(14)}T12:00:00-03:00`;
+  due.context = { recurrence_type: "interval", recurrence_interval_days: 14 };
+  const notDue = task("25000000-0000-4000-8000-000000000015", "Tarefa de duas semanas futura", "Pessoal");
+  notDue.is_recurring = true;
+  notDue.created_at = `${daysBeforeToday(13)}T12:00:00-03:00`;
+  notDue.context = { recurrence_type: "interval", recurrence_interval_days: 14 };
+  const { context, page } = await openApp({ tasks: [due, notDue] });
+  await page.waitForSelector('[data-id="25000000-0000-4000-8000-000000000014"]');
+  assert.equal(await page.locator('[data-id="25000000-0000-4000-8000-000000000015"]').count(), 0);
+  await page.click("#btn-add-task-modal");
+  await page.waitForTimeout(340);
+  await page.click("#btn-add-task-modal");
+  await page.waitForSelector("#modal-add-task.active");
+  assert.equal(await page.locator('#task-recurring option[value="interval14"]').innerText(), "A cada 2 semanas");
   await context.close();
 });
 
@@ -242,13 +326,14 @@ test("tarefa futura pede confirmação para ir a hoje e para voltar à origem", 
   await context.close();
 });
 
-test("treino permite cancelar clique acidental e depois concluir sem foto", async () => {
+test("fechar o modal de foto cancela o check do treino", async () => {
   const id = "40000000-0000-4000-8000-000000000001";
   const { context, page } = await openApp({ categories: [normalCategory, trainingCategory], tasks: [task(id, "Treino de pernas", "Treino")] });
   const card = page.locator(`.task-item[data-id="${id}"]`);
   await card.locator(".task-checkbox-wrapper").click();
   await page.waitForSelector("#modal-training-photo.active");
-  await page.click("#btn-cancel-training-completion");
+  await page.click("#btn-skip-training-photo");
+  await page.waitForSelector("#modal-training-photo:not(.active)");
   assert.equal(await card.evaluate(element => element.classList.contains("completed")), false);
   await card.locator(".task-checkbox-wrapper").click();
   await page.click("#btn-complete-without-photo");
