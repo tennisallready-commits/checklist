@@ -1,7373 +1,12445 @@
-  
-  /* ── EMPRESA HELPERS ── */
-  function getEmpresasChecked(prefix) {
-    const emps = ['editora','leia','gisella'].filter(e => {
-      const cb = document.getElementById(prefix + e);
-      return cb && cb.checked;
-    });
-    return emps.length > 0 ? emps : null;
-  }
-  
-  function setEmpresasChecked(prefix, empresaStr) {
-    const emps = (empresaStr || '').split(',');
-    ['editora','leia','gisella'].forEach(e => {
-      const cb = document.getElementById(prefix + e);
-      if (cb) cb.checked = emps.includes(e);
-    });
-  }
-  
-  function getEmpresaStr(prefix, fallback) {
-    const emps = getEmpresasChecked(prefix);
-    return emps ? emps.join(',') : (fallback || 'editora');
-  }
-  
-  
-  
-  function empBadgesHtml(empresaStr) {
-    const EMP_B = {editora:'b-editora',leia:'b-leia',gisella:'b-gisella'};
-    const EMP_L = {editora:'Editora Cassol',leia:'Léia Cassol',gisella:'GC Estratégias'};
-    return (empresaStr||'editora').split(',').map(e =>
-      `<span class="badge ${EMP_B[e]||'b-gray'}">${EMP_L[e]||e}</span>`
-    ).join(' ');
-  }
-  
-  
-  /* ── DARK MODE ── */
-  function toggleDarkMode() {
-    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-    document.documentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
-    localStorage.setItem('gc-dark-mode', isDark ? '0' : '1');
-    updateDarkBtn(!isDark);
-  }
-  function updateDarkBtn(isDark) {
-    const icon = document.getElementById('dark-mode-icon');
-    const label = document.getElementById('dark-mode-label');
-    if (icon) icon.textContent = isDark ? '☀️' : '🌙';
-    if (label) label.textContent = isDark ? 'Modo claro' : 'Modo escuro';
-  }
-  // Restaurar modo escuro
-  (function() {
-    if (localStorage.getItem('gc-dark-mode') === '1') {
-      document.documentElement.setAttribute('data-theme', 'dark');
-      updateDarkBtn(true);
-    }
-  })();
-  
-  
-  /* ── DUPLICAR ── */
-  function duplicarEvento(id) {
-    const ev = events.find(x => x.id === id);
-    if (!ev) return;
-    const novoId = Date.now();
-    const novo = {...ev, id: novoId, titulo: ev.titulo + ' (cópia)', arquivada: false};
-    events.push(novo);
-    save('gc-events', events);
-    buildTarefas(); buildColabTarefas(); buildEventosList(); buildPrioridades();
-    // Abrir modal de edição do novo item
-    setTimeout(() => openEditEvent(novoId), 50);
-  }
-  
-  function duplicarConteudo(id) {
-    const c = conteudos.find(x => x.id === id);
-    if (!c) return;
-    // A cópia começa com um novo fluxo: nunca herda checks/etapas concluídas.
-    const novo = {
-      ...c,
-      id: Date.now(),
-      nome: c.nome + ' (cópia)',
-      done: false,
-      status: 'copy',
-      etapasStatus: {},
-      etapas: Array.isArray(c.etapas) ? c.etapas.map(etapa => ({ ...etapa, feito: false })) : c.etapas,
-    };
-    conteudos.push(novo);
-    save('gc-conteudos', conteudos);
-    renderConteudos();
-  }
-  
-  function duplicarProjeto(id) {
-    const p = projetos.find(x => x.id === id);
-    if (!p) return;
-    const novoId = Date.now();
-    const novo = {...p, id: novoId, nome: p.nome + ' (cópia)', tarefas: (p.tarefas||[]).map(t => ({...t, eventId: null}))};
-    projetos.push(novo);
-    save('gc-projetos', projetos);
-    renderProjetos();
-  }
-  
-  function duplicarLivro(id) {
-    const l = livros.find(x => x.id === id);
-    if (!l) return;
-    const novo = {...l, id: Date.now(), titulo: l.titulo + ' (cópia)', etapas: l.etapas.map(e => ({...e, feito: false, eventId: null}))};
-    livros.push(novo);
-    save('gc-livros', livros);
-    renderLivros();
-  }
-  
-  
-  /* ── ETAPAS LIVRO ── */
-  let etapaDragSrcLivro = null;
-  let etapaDragSrcIdx = null;
-  
-  function etapaDragStart(e, livroId, idx) {
-    etapaDragSrcLivro = livroId;
-    etapaDragSrcIdx = idx;
-    e.dataTransfer.effectAllowed = 'move';
-  }
-  
-  function etapaDrop(e, livroId, idx) {
-    e.preventDefault();
-    if (etapaDragSrcLivro !== livroId || etapaDragSrcIdx === idx) return;
-    const l = livros.find(x => x.id === livroId);
-    if (!l) return;
-    const [moved] = l.etapas.splice(etapaDragSrcIdx, 1);
-    l.etapas.splice(idx, 0, moved);
-    save('gc-livros', livros);
-    renderLivros();
-    buildTarefas();
-  }
-  
-  function openEditEtapa(livroId, idx) {
-    const l = livros.find(x => x.id === livroId);
-    if (!l) return;
-    const e = l.etapas[idx];
-    // Reutilizar o modal quickadd como editor de etapa
-    editingEventId = null;
-    openQuickAdd();
-    window._editingEtapa = {livroId, idx};
-    document.getElementById('qa-tipo').value = 'tarefa';
-    updateQaFields();
-    document.getElementById('qa-titulo').value = e.nome;
-    document.getElementById('qa-prazo').value = e.prazo || '';
-    document.getElementById('qa-responsavel').value = e.resp || '';
-    setEmpresasChecked('qa-emp-', l.empresa || 'editora');
-    document.getElementById('qa-modal-title').textContent = `Editar etapa · ${l.titulo}`;
-    document.getElementById('qa-submit-btn').textContent = 'Salvar etapa';
-  }
-  
-  function adicionarEtapa(livroId) {
-    const nome = prompt('Nome da nova etapa:');
-    if (!nome || !nome.trim()) return;
-    const l = livros.find(x => x.id === livroId);
-    if (!l) return;
-    l.etapas.push({nome: nome.trim(), feito: false, prazo: '', resp: ''});
-    save('gc-livros', livros);
-    renderLivros();
-    buildTarefas();
-  }
-  
-  
-  /* ── IA TAREFAS PROJETO ── */
-  
-  /* ── UNDO ── */
-  let _undoStack = null;
-  let _undoTimer = null;
-  
-  function pushUndo(label, restoreFn) {
-    _undoStack = restoreFn;
-    const msg = document.getElementById('undo-msg');
-    const toast = document.getElementById('undo-toast');
-    if (msg) msg.textContent = `"${label}" excluído`;
-    if (toast) toast.classList.add('visible');
-    if (_undoTimer) clearTimeout(_undoTimer);
-    _undoTimer = setTimeout(() => {
-      if (toast) toast.classList.remove('visible');
-      _undoStack = null;
-    }, 5000);
-  }
-  
-  function undoDelete() {
-    if (_undoStack) {
-      _undoStack();
-      _undoStack = null;
-    }
-    const toast = document.getElementById('undo-toast');
-    if (toast) toast.classList.remove('visible');
-    if (_undoTimer) clearTimeout(_undoTimer);
-  }
-  
-  
-  /* ── MENTEE LIVRO ── */
-  function toggleNlMentee() {
-    const val = document.querySelector('input[name="nl-mentee-opt"]:checked')?.value;
-    const wrap = document.getElementById('nl-mentee-wrap');
-    if (!wrap) return;
-    wrap.style.display = val === 'sim' ? 'block' : 'none';
-    if (val === 'sim') {
-      // Preencher select com mentoradas
-      const sel = document.getElementById('nl-mentee-id');
-      if (sel) {
-        const sorted = [...mentees].sort((a,b)=>a.name.localeCompare(b.name,'pt-BR'));
-        sel.innerHTML = '<option value="">Selecione...</option>' +
-          sorted.map(m=>`<option value="${m.id}">${m.name}</option>`).join('');
-      }
-    }
-  }
-  
-  function switchMenteeTab(tab, btn) {
-    document.querySelectorAll('#modal-mentee .modal-tab').forEach(b=>b.classList.remove('active'));
-    document.querySelectorAll('#modal-mentee .modal-tab-content').forEach(c=>c.classList.remove('active'));
-    if (btn) btn.classList.add('active');
-    const el = document.getElementById('mtab-' + tab);
-    if (el) el.classList.add('active');
-    if (tab === 'livros') renderMenteeLivros();
-  }
-  
-  function renderMenteeLivros() {
-    const el = document.getElementById('mm-livros-list');
-    if (!el) return;
-    const m = mentees.find(x => x.id === currentMenteeId);
-    if (!m) return;
-    const livrosDaMentee = livros.filter(l => l.menteeId === m.id);
-    if (livrosDaMentee.length === 0) {
-      el.innerHTML = '<div style="padding:1rem;text-align:center;color:var(--text-soft);font-size:13px;">Nenhum livro vinculado a esta mentorada.</div>';
-      return;
-    }
-    el.innerHTML = livrosDaMentee.map(l => {
-      const done = (l.etapas||[]).filter(e=>e.feito).length;
-      const pct = (l.etapas||[]).length ? Math.round(done/(l.etapas||[]).length*100) : 0;
-      const navBtn = `Array.from(document.querySelectorAll('.nav-item')).find(b=>(b.getAttribute('onclick')||'').includes("'livros'"))`;
-      return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;margin-bottom:6px;cursor:pointer;"
-        onclick="closeModal('modal-mentee');setTimeout(()=>{const nb=${navBtn};showPage('livros',nb);setTimeout(()=>{toggleLivro(${l.id});const card=document.querySelector('[onclick*=\\'toggleLivro(${l.id})\\']');if(card){card.scrollIntoView({behavior:'smooth',block:'start'});}},250);},100);">
-        <span style="font-size:16px;">📖</span>
-        <div style="flex:1;min-width:0;">
-          <div style="font-weight:500;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${l.titulo}</div>
-          <div style="font-size:11px;color:var(--text-soft);margin-top:2px;">${pct}% concluído</div>
-        </div>
-        <span style="font-size:12px;color:var(--gisella);font-weight:600;">abrir →</span>
-      </div>`;
-    }).join('');
-  }
-  
-  /* ── UPLOAD LOCAL → FIREBASE ── */
-  async function uploadLocalToFirebase() {
-    if (!window.fbSave) {
-      alert('Firebase não está conectado. Verifique sua conexão e tente novamente.');
-      return;
-    }
-  
-    const KEYS = ['gc-events','gc-livros','gc-conteudos','gc-projetos','gc-mentees','gc-mentees-marco0','gc-kanban','gc-steira','gc-colab-ordem','gc-links','gc-gisella-checks','gc-links-empresa','gc-fixed-gisella','gc-fixed-milena','gc-fixed-luiggi','gc-fixed-checks-gisella','gc-fixed-checks-milena','gc-fixed-checks-luiggi','gc-notas-gisella','gc-notas-milena','gc-notas-luiggi','gc-recurring-tasks'];
-  
-    // Verificar se há dados no localStorage
-    const hasData = KEYS.some(k => localStorage.getItem(k));
-    if (!hasData) {
-      alert('Nenhum dado local encontrado para enviar.');
-      return;
-    }
-  
-    const btn = document.getElementById('upload-firebase-btn');
-    if (btn) btn.innerHTML = '&#9729;&#65039; <span>Enviando...</span>';
-  
-    try {
-      // Ler direto do localStorage — garante os dados originais
-      const promises = KEYS.map(key => {
-        const raw = localStorage.getItem(key);
-        if (!raw) return Promise.resolve();
-        try {
-          const val = JSON.parse(raw);
-          return window.fbSave(key, val);
-        } catch(e) { return Promise.resolve(); }
-      });
-     const results = await Promise.all(promises);
-  if (results.some(result => result === false)) {
-    throw new Error('Os dados locais não foram enviados porque a nuvem possui uma versão mais recente.');
-  }
-  
-      if (btn) btn.innerHTML = '&#10003; <span>Enviado com sucesso!</span>';
-      const ind = document.getElementById('sync-indicator');
-      if (ind) ind.style.display = 'flex';
-      setTimeout(() => {
-        if (btn) btn.innerHTML = '&#9729;&#65039; <span>Enviar dados locais &#8594; nuvem</span>';
-      }, 4000);
-    } catch(e) {
-      if (btn) btn.innerHTML = '&#9729;&#65039; <span>Enviar dados locais &#8594; nuvem</span>';
-      alert('Erro ao enviar: ' + e.message);
-    }
-  }
-  
-  
-  function renderGisellaFixedTasks() { renderFixedTasks('gisella'); }
-  function renderColabFixedTasks(key) { renderFixedTasks(key); }
-  
-  function toggleGisellaFixed(key, val) { toggleFixed('gisella', key, val); }
-  
-  
-  /* ── BANCO DE LINKS ── */
-  let links = load('gc-links', []);
-  let editingLinkId = null;
-  
-  const LINK_ICONS = { ferramenta: '🛠', planilha: '📊', doc: '📄', outro: '🔗' };
-  const LINK_LABELS = { ferramenta: 'Ferramenta', planilha: 'Planilha', doc: 'Documento', outro: 'Outro' };
-  
-  function renderLinks() {
-    const el = document.getElementById('links-grid');
-    if (!el) return;
-  
-    if (links.length === 0) {
-      el.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-soft);font-size:13px;">Nenhum link cadastrado. Use "+ adicionar link" para começar.</div>';
-      return;
-    }
-  
-    // Agrupar por categoria
-    const grouped = {};
-    links.forEach(l => {
-      if (!grouped[l.categoria]) grouped[l.categoria] = [];
-      grouped[l.categoria].push(l);
-    });
-  
-    let out = '';
-    Object.entries(grouped).forEach(([cat, items]) => {
-      out += `<div style="margin-bottom:1.5rem;">
-        <div style="font-size:11px;font-weight:600;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px;">${LINK_ICONS[cat]||'🔗'} ${LINK_LABELS[cat]||cat}</div>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;">`;
-      items.forEach(l => {
-        out += `<div style="display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 12px;">
-          <a href="${l.url}" target="_blank" rel="noopener"
-            style="font-size:13px;font-weight:500;color:var(--editora);text-decoration:none;"
-            onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">
-            ${l.nome}
-          </a>
-          <button onclick="openEditLink(${l.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:11px;padding:0 2px;" title="Editar">✎</button>
-          <button onclick="deleteLink(${l.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:13px;padding:0 2px;" title="Excluir">×</button>
-        </div>`;
-      });
-      out += `</div></div>`;
-    });
-    el.innerHTML = out;
-  }
-  
-  function openAddLink() {
-    editingLinkId = null;
-    currentEmpLink = null;
-    document.getElementById('modal-link-title').textContent = 'Novo link';
-    document.getElementById('link-nome').value = '';
-    document.getElementById('link-url').value = '';
-    document.getElementById('link-categoria').value = 'ferramenta';
-    openModal('modal-link');
-    setTimeout(() => document.getElementById('link-nome').focus(), 50);
-  }
-  
-  function openEditLink(id) {
-    const l = links.find(x => x.id === id);
-    if (!l) return;
-    editingLinkId = id;
-    document.getElementById('modal-link-title').textContent = 'Editar link';
-    document.getElementById('link-nome').value = l.nome;
-    document.getElementById('link-url').value = l.url;
-    document.getElementById('link-categoria').value = l.categoria || 'outro';
-    openModal('modal-link');
-  }
-  
-  function saveLink() {
-    const nome = document.getElementById('link-nome').value.trim();
-    const url  = document.getElementById('link-url').value.trim();
-    if (!nome || !url) { alert('Preencha nome e URL.'); return; }
-    const cat = document.getElementById('link-categoria').value;
-    const icons = {ferramenta:'🛠',planilha:'📊',doc:'📄',outro:'🔗'};
-    const icon = icons[cat]||'🔗';
-  
-    if (currentEmpLink) {
-      // Salvar no banco da empresa
-      if (!linksEmpresa[currentEmpLink]) linksEmpresa[currentEmpLink] = [];
-      if (editingEmpLink) {
-        const i = linksEmpresa[currentEmpLink].findIndex(x => x.id === editingEmpLink);
-        if (i > -1) linksEmpresa[currentEmpLink][i] = { ...linksEmpresa[currentEmpLink][i], nome, url, categoria: cat, icon };
-      } else {
-        linksEmpresa[currentEmpLink].push({ id: Date.now(), nome, url, categoria: cat, icon });
-      }
-      save('gc-links-empresa', linksEmpresa);
-      const _emp = currentEmpLink;
-      currentEmpLink = null;
-      editingEmpLink = null;
-      closeModal('modal-link');
-      setTimeout(() => openLinksModal(_emp), 100);
-      return;
-    } else {
-      // Salvar no banco geral
-      if (editingLinkId) {
-        const i = links.findIndex(x => x.id === editingLinkId);
-        if (i > -1) links[i] = { ...links[i], nome, url, categoria: cat, icon };
-      } else {
-        links.push({ id: Date.now(), nome, url, categoria: cat, icon });
-      }
-      save('gc-links', links);
-      renderLinks();
-    }
-    closeModal('modal-link');
-  }
-  
-  function deleteLink(id) {
-    const l = links.find(x => x.id === id);
-    if (!l) return;
-    const snap = [...links];
-    links = links.filter(x => x.id !== id);
-    save('gc-links', links);
-    renderLinks();
-    pushUndo(l.nome, () => { links = snap; save('gc-links', links); renderLinks(); });
-  }
-  
-  
-  /* ── LINKS POR EMPRESA ── */
-  let linksEmpresa = load('gc-links-empresa', {editora:[], leia:[], gisella:[]});
-  let editingEmpLink = null;
-  let currentEmpLink = null;
-  
-  function toggleLinksEmpresa(emp) {
-    const el = document.getElementById('links-empresa-' + emp);
-    const arrow = document.getElementById('links-arrow-' + emp);
-    if (!el) return;
-    const open = el.style.display === 'none';
-    el.style.display = open ? 'block' : 'none';
-    if (arrow) arrow.textContent = open ? '▾' : '▸';
-    if (open) renderLinksEmpresa(emp);
-  }
-  
-  function renderLinksEmpresa(emp) {
-    const el = document.getElementById('links-empresa-grid-' + emp);
-    if (!el) return;
-    const items = (linksEmpresa[emp] || []);
-    if (items.length === 0) {
-      el.innerHTML = '<div style="font-size:12px;color:var(--text-soft);padding:4px 0;">Nenhum link. Use "+ link" para adicionar.</div>';
-      return;
-    }
-    el.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:8px;">' +
-      items.map(function(l) { return '<div style="display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:6px 10px;">' +
-        '<a href="' + l.url + '" target="_blank" rel="noopener" style="font-size:13px;font-weight:500;color:var(--text);text-decoration:none;">' + (l.icon||'🔗') + ' ' + l.nome + '</a>' +
-        '<button onclick="openEditLinkEmpresa(' + JSON.stringify(emp) + ',' + l.id + ')" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:11px;padding:0 2px;">✎</button>' +
-        '<button onclick="deleteLinkEmpresa(' + JSON.stringify(emp) + ',' + l.id + ')" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:13px;padding:0 2px;">×</button>' +
-        '</div>'; }).join('') + '</div>';
-  }
-  
-  function openAddLinkEmpresa(emp) {
-    editingEmpLink = null;
-    currentEmpLink = emp;
-    document.getElementById('modal-link-title').textContent = 'Novo link';
-    document.getElementById('link-nome').value = '';
-    document.getElementById('link-url').value = '';
-    document.getElementById('link-categoria').value = 'ferramenta';
-    // Abrir painel se fechado
-    const el = document.getElementById('links-empresa-' + emp);
-    if (el && el.style.display === 'none') toggleLinksEmpresa(emp);
-    openModal('modal-link');
-    setTimeout(() => document.getElementById('link-nome').focus(), 50);
-  }
-  
-  function openEditLinkEmpresa(emp, id) {
-    const l = (linksEmpresa[emp]||[]).find(x => x.id === id);
-    if (!l) return;
-    editingEmpLink = id;
-    currentEmpLink = emp;
-    document.getElementById('modal-link-title').textContent = 'Editar link';
-    document.getElementById('link-nome').value = l.nome;
-    document.getElementById('link-url').value = l.url;
-    document.getElementById('link-categoria').value = l.categoria || 'ferramenta';
-    openModal('modal-link');
-  }
-  
-  function deleteLinkEmpresa(emp, id) {
-    const snap = JSON.parse(JSON.stringify(linksEmpresa));
-    linksEmpresa[emp] = (linksEmpresa[emp]||[]).filter(x => x.id !== id);
-    save('gc-links-empresa', linksEmpresa);
-    renderLinksEmpresa(emp);
-    pushUndo('Link', () => { linksEmpresa = snap; save('gc-links-empresa', linksEmpresa); renderLinksEmpresa(emp); });
-  }
-  
-  
-  function openLinksModal(emp) {
-    currentEmpLink = emp;
-    const titles = {editora:'Editora Cassol', leia:'Léia Cassol', gisella:'GC Estratégias'};
-    const el = document.getElementById('modal-links-emp-title');
-    if (el) el.textContent = '🔗 ' + (titles[emp]||emp);
-    renderLinksEmpresaModal(emp);
-    openModal('modal-links-empresa');
-  }
-  
-  function renderLinksEmpresaModal(emp) {
-    const el = document.getElementById('modal-links-emp-content');
-    if (!el) return;
-    const items = (linksEmpresa[emp] || []);
-    if (items.length === 0) {
-      el.innerHTML = '<div style="padding:1rem;text-align:center;color:var(--text-soft);font-size:13px;">Nenhum link cadastrado. Use "+ adicionar" para começar.</div>';
-      return;
-    }
-    // Agrupar por categoria
-    const grouped = {};
-    items.forEach(l => {
-      if (!grouped[l.categoria]) grouped[l.categoria] = [];
-      grouped[l.categoria].push(l);
-    });
-    const ICONS = {ferramenta:'🛠',planilha:'📊',doc:'📄',outro:'🔗'};
-    const LABELS = {ferramenta:'Ferramenta',planilha:'Planilha',doc:'Documento',outro:'Outro'};
-    let out = '';
-    Object.entries(grouped).forEach(([cat, catItems]) => {
-      out += `<div style="margin-bottom:1rem;">
-        <div style="font-size:11px;font-weight:600;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px;">${ICONS[cat]||'🔗'} ${LABELS[cat]||cat}</div>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;">`;
-      catItems.forEach(l => {
-        out += `<div style="display:flex;align-items:center;gap:6px;background:var(--surface2,var(--surface));border:1px solid var(--border);border-radius:8px;padding:8px 12px;">
-          <a href="${l.url}" target="_blank" rel="noopener"
-            style="font-size:13px;font-weight:500;color:var(--text);text-decoration:none;"
-            onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">
-            ${l.icon||'🔗'} ${l.nome}
-          </a>
-          <button onclick="openEditLinkEmpresa('${emp}',${l.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:11px;padding:0 2px;">✎</button>
-          <button onclick="deleteLinkEmpresaModal('${emp}',${l.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:13px;padding:0 2px;">×</button>
-        </div>`;
-      });
-      out += `</div></div>`;
-    });
-    el.innerHTML = out;
-  }
-  
-  function openAddLinkEmpresaFromModal() {
-    const emp = currentEmpLink;
-    closeModal('modal-links-empresa');
-    setTimeout(() => openAddLinkEmpresa(emp), 100);
-  }
-  
-  function deleteLinkEmpresaModal(emp, id) {
-    const snap = JSON.parse(JSON.stringify(linksEmpresa));
-    linksEmpresa[emp] = (linksEmpresa[emp]||[]).filter(x => x.id !== id);
-    save('gc-links-empresa', linksEmpresa);
-    renderLinksEmpresaModal(emp);
-    pushUndo('Link', () => { linksEmpresa = snap; save('gc-links-empresa', linksEmpresa); renderLinksEmpresaModal(emp); });
-  }
-  
-  /* ── TAREFAS AUTO MENTORIA ── */
-  // Criação automática de tarefas por evento do calendário GC
-  // Lista negra de gcalKeys excluídos manualmente — nunca recriar
-  function getGcalBlacklist() {
-    try { return new Set(JSON.parse(localStorage.getItem('gc-gcal-blacklist') || '[]')); }
-    catch(e) { return new Set(); }
-  }
-  function getLegacyRecurringSet(key) {
-    try { return new Set(JSON.parse(localStorage.getItem(key) || '[]')); }
-    catch (_) { return new Set(); }
-  }
-  function saveLegacyRecurringSet(key, set) {
-    localStorage.setItem(key, JSON.stringify([...set]));
-  }
-  function addToGcalBlacklist(key) {
-    const bl = getGcalBlacklist();
-    bl.add(key);
-    localStorage.setItem('gc-gcal-blacklist', JSON.stringify([...bl]));
-  }
-  
-  function criarTarefasEventos(allEvents) {
-    let changed = false;
-    const hoje = new Date(); hoje.setHours(0,0,0,0);
-    const hojeStr = hoje.toISOString().slice(0,10);
-    allEvents.forEach(ev => {
-      if (!ev.start || !ev.title) return;
-      if (ev.start < hojeStr) return;
-      const nome = ev.title.trim();
-      const nomeKey = nome.replace(/\s+/g,'_').slice(0, 30);
-      const diaEvento = new Date(ev.start + 'T12:00:00');
-      const strEvento = diaEvento.toISOString().slice(0,10);
-      const keyDia  = 'gcal-dia-'  + ev.start + '-' + nomeKey;
-      const _bl = getGcalBlacklist();
-      if (!events.some(e => e.gcalKey === keyDia) && !_bl.has(keyDia)) {
-        events.push({ id: Date.now()+Math.floor(Math.random()*9999)+1,
-          titulo: nome, empresa: 'gisella', tipo: 'tarefa',
-          data: strEvento, responsavel: 'Gisella', gcalKey: keyDia, arquivada: false });
-        changed = true;
-      }
-    });
-    if (changed) {
-      save('gc-events', events);
-      buildTarefas(); buildColabTarefas(); buildPrioridades();
-    }
-  }
-  
-  function limparTarefasEventosRemovidos(allEvents) {
-    const validKeys = new Set();
-    allEvents.forEach(ev => {
-      if (!ev.start || !ev.title) return;
-      const nomeKey = ev.title.trim().replace(/\s+/g,'_').slice(0, 30);
-      // A agenda Daily mantém somente a tarefa do próprio evento. As antigas
-      // tarefas automáticas de preparar/encerrar deixam de ser válidas e são
-      // removidas na próxima sincronização, sem afetar tarefas manuais.
-      validKeys.add('gcal-dia-'  + ev.start + '-' + nomeKey);
-    });
-    const antes = events.length;
-    events = events.filter(e => !e.gcalKey || validKeys.has(e.gcalKey));
-    if (events.length < antes) {
-      save('gc-events', events);
-      buildTarefas(); buildColabTarefas(); buildPrioridades();
-    }
-  }
-  
-  
-  
-  function toggleColabFixed(key, taskKey, val) { toggleFixed(key, taskKey, val); }
-  
-  
-  /* ── TAREFAS AUTOMÁTICAS RECORRENTES (GISELLA) ── */
-  // Estas tarefas são criadas automaticamente como tarefas normais (aparecem
-  // na aba "Tarefas", filtráveis por colaborador) com a data de hoje.
-  const LUIGGI_RECORRENTES_DIARIAS = [];
-  const GISELLA_RECORRENTES_SEGUNDA = ['Avisos da semana - Plano Diretor', 'Links da semana - Plano Diretor', 'Analisar Planilha de Métricas'];
-  const GISELLA_RECORRENTES_SEXTA   = [];
-  
-  function ensureGisellaRecorrentes() {
-    const todayStr = new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD horário local
-    const dow = new Date().getDay(); // 0=dom,1=seg,...5=sex,6=sab
-    let changed = false;
-    let idCounter = 0;
+(function() {
+// ----------------------------------------------------
+// Supabase Configuration
+// ----------------------------------------------------
+const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
+const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
+const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
+const SERVICE_WORKER_URL = "./sw.js?v=11.08";
+// O tipo acompanha a categoria na nuvem para que regras especiais, como a
+// visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
+const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
 
-    // A recorrência agora é configurada no formulário de tarefas. Removemos
-    // apenas as duas cópias que eram criadas automaticamente pelo sistema,
-    // reconhecidas pela chave interna, sem tocar em tarefas manuais.
-    const retiredRecurringKeys = new Set([
-      'diaria-0', 'diaria-1',
-      'luiggi-diaria-0',
-      'sexta-0', 'sexta-1',
-    ]);
-    const beforeRetiredCleanup = events.length;
-    events = events.filter(event => !retiredRecurringKeys.has(event.recurKey));
-    if (events.length !== beforeRetiredCleanup) changed = true;
-    // As duas tarefas semanais do Plano Diretor passam a ser da Milena.
-    const milenaWeeklyKeys = new Set(['segunda-0', 'segunda-1']);
-    events.forEach(event => {
-      if (milenaWeeklyKeys.has(event.recurKey) && event.responsavel !== 'Milena') {
-        event.responsavel = 'Milena';
-        changed = true;
-      }
-      const weeklyIndex = event.recurKey === 'segunda-0' ? 0 : event.recurKey === 'segunda-1' ? 1 : -1;
-      if (weeklyIndex >= 0 && event.titulo !== GISELLA_RECORRENTES_SEGUNDA[weeklyIndex]) {
-        event.titulo = GISELLA_RECORRENTES_SEGUNDA[weeklyIndex];
-        changed = true;
-      }
-    });
-  
-    function ensureTask(label, recurKey, responsavel = 'Gisella') {
-      const disabledKeys = getLegacyRecurringSet('gc-legacy-recur-disabled');
-      const excludedOccurrences = getLegacyRecurringSet('gc-legacy-recur-exclusions');
-      if (disabledKeys.has(recurKey) || excludedOccurrences.has(`${recurKey}:${todayStr}`)) return;
-      const normalizedLabel = label.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
-      const ja = events.some(e => {
-        const sameTitle = String(e.titulo || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase() === normalizedLabel;
-        return e.data === todayStr && (e.recurKey === recurKey || sameTitle);
-      });
-      if (ja) return;
-      events.push({
-        id: Date.now() + (idCounter++),
-        empresa: 'gisella',
-        titulo: label,
-        tipo: 'tarefa',
-        data: todayStr,
-        responsavel,
-        arquivada: false,
-        recurKey,
-      });
-      changed = true;
-    }
-  
-    LUIGGI_RECORRENTES_DIARIAS.forEach((label, i) => ensureTask(label, 'luiggi-diaria-' + i, 'Luiggi'));
-    if (dow === 1) GISELLA_RECORRENTES_SEGUNDA.forEach((label, i) => ensureTask(label, 'segunda-' + i, i < 2 ? 'Milena' : 'Gisella'));
-    if (dow === 5) GISELLA_RECORRENTES_SEXTA.forEach((label, i) => ensureTask(label, 'sexta-' + i));
-  
-    if (changed) {
-      save('gc-events', events);
-      buildTarefas();
-      buildColabTarefas();
-      buildPrioridades();
-    }
-  }
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && Array.isArray(events)) ensureGisellaRecorrentes();
-  });
-  
-  
-  /* ── TAREFAS FIXAS EDITÁVEIS ── */
-  
-  // Dados padrão iniciais
-  const FIXED_DEFAULTS = {
-    gisella: {
-      daily:  [{id:'g-d-1', label:'Whats'}, {id:'g-d-2', label:'Email'}, {id:'g-d-3', label:'Direct'}],
-      weekly: [
-        {id:'g-w-1', label:'Avisos da semana - Plano Diretor'},
-        {id:'g-w-2', label:'Links da semana - Plano Diretor'},
-        {id:'g-w-3', label:'Analisar planilha de métricas', link:'https://docs.google.com/spreadsheets/d/1ROG9DTW7jQemiMf8mwfDEvC2oOTrTP4TwDCxMN3KlKI/edit?gid=0#gid=0'},
-        {id:'g-w-4', label:'Rodar novos anúncios'},
-      ]
-    },
-    milena: { daily: [], weekly: [] },
-    luiggi: { daily: [], weekly: [] },
-  };
-  // Itens aposentados do checklist fixo. Os IDs garantem que uma tarefa manual
-  // com o mesmo texto não seja apagada.
-  const RETIRED_FIXED_TASK_IDS = new Set(['g-w-5', 'g-w-6']);
-  
-  function getFixedData(colab) {
-    const key = 'gc-fixed-' + colab;
-    try {
-      const stored = localStorage.getItem(key);
-      if (stored) {
-        const data = JSON.parse(stored);
-        const weekly = Array.isArray(data.weekly) ? data.weekly : [];
-        const activeWeekly = weekly.filter(task => !RETIRED_FIXED_TASK_IDS.has(task.id));
-        if (activeWeekly.length !== weekly.length) {
-          data.weekly = activeWeekly;
-          localStorage.setItem(key, JSON.stringify(data));
+// Camada persistente isolada em storage.js para manter este arquivo focado nas regras do app.
+let crossTabStorageRefreshTimer = null;
+function handleChecklistStorageChange(key, metadata = {}) {
+    scheduleSyncStatusRefresh();
+    if (!metadata.external || !currentUser || document.visibilityState !== "visible") return;
+    clearTimeout(crossTabStorageRefreshTimer);
+    crossTabStorageRefreshTimer = setTimeout(() => {
+        loadDataOffline();
+        if (modalAddTask?.classList.contains("active") || modalEditTask?.classList.contains("active")) {
+            deferredTaskEditorBackgroundRender = true;
+            return;
         }
-        return data;
-      }
-    } catch(e) {}
-    // Primeira vez: usar defaults
-    const def = JSON.parse(JSON.stringify(FIXED_DEFAULTS[colab] || {daily:[], weekly:[]}));
-    localStorage.setItem(key, JSON.stringify(def));
-    return def;
-  }
-  
-  function saveFixedData(colab, data) {
-    const key = 'gc-fixed-' + colab;
-    localStorage.setItem(key, JSON.stringify(data));
-    if (window.fbSave) window.fbSave(key, data);
-  }
-  
-  function getFixedChecks(colab) {
-    try { return JSON.parse(localStorage.getItem('gc-fixed-checks-' + colab) || '{}'); } catch(e) { return {}; }
-  }
-  function saveFixedChecks(colab, obj) {
-    localStorage.setItem('gc-fixed-checks-' + colab, JSON.stringify(obj));
-    if (window.fbSave) window.fbSave('gc-fixed-checks-' + colab, obj);
-  }
-  
-  function resetFixedChecks(colab) {
-    let checks = getFixedChecks(colab);
-    const data = getFixedData(colab);
-    // Use local Brazil timezone date to avoid UTC mismatch
-    const now = new Date();
-    const today = now.toLocaleDateString('sv-SE'); // YYYY-MM-DD in local tz
-    // Semana começa na segunda-feira
-    const dow = now.getDay();
-    const monday = new Date(now);
-    monday.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1));
-    const weekKey = monday.toLocaleDateString('sv-SE');
-    let changed = false;
-  
-    // Store day/week keys INSIDE checks to survive Firebase sync
-    if (checks['_day'] !== today) {
-      data.daily.forEach(t => { checks['d-'+t.id] = false; });
-      checks['_day'] = today;
-      localStorage.setItem('gc-fixed-day-' + colab, today);
-      changed = true;
-    }
-    if (checks['_week'] !== weekKey) {
-      data.weekly.forEach(t => { checks['w-'+t.id] = false; });
-      checks['_week'] = weekKey;
-      localStorage.setItem('gc-fixed-week-' + colab, weekKey);
-      changed = true;
-    }
-    if (changed) saveFixedChecks(colab, checks);
-    return checks;
-  }
-  
-  let fixedDragSrc = null;
-  let fixedDragColab = null;
-  let fixedDragType = null;
-  
-  function renderFixedTasks(colab) {
-    const dailyEl  = document.getElementById(colab + '-daily-tasks');
-    const weeklyEl = document.getElementById(colab + '-weekly-tasks');
-    if (!dailyEl || !weeklyEl) return;
-  
-    const data = getFixedData(colab);
-    const checks = resetFixedChecks(colab);
-  
-    function taskRow(t, type, prefix) {
-      const checked = !!checks[prefix + t.id];
-      const labelHtml = t.link
-        ? '<a href="' + t.link + '" target="_blank" style="color:var(--editora);text-decoration:underline;text-underline-offset:2px;font-size:13px;' + (checked ? 'opacity:0.5;' : '') + '">' + t.label + ' ↗</a>'
-        : '<span style="font-size:13px;flex:1;' + (checked ? 'text-decoration:line-through;opacity:0.5;' : '') + '">' + t.label + '</span>';
-      const ds = 'fixedDragStart(event,' + JSON.stringify(colab) + ',' + JSON.stringify(type) + ',' + JSON.stringify(t.id) + ')';
-      const dd = 'fixedDrop(event,' + JSON.stringify(colab) + ',' + JSON.stringify(type) + ',' + JSON.stringify(t.id) + ')';
-      const onch = 'toggleFixed(' + JSON.stringify(colab) + ',' + JSON.stringify(prefix + t.id) + ',this.checked)';
-      return '<div draggable="true"' +
-        ' ondragstart="' + ds + '"' +
-        ' ondragover="event.preventDefault()"' +
-        ' ondrop="' + dd + '"' +
-        ' style="display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--border);">' +
-        '<span style="cursor:grab;color:var(--text-soft);font-size:11px;flex-shrink:0;">⠿</span>' +
-        '<input type="checkbox" ' + (checked ? 'checked' : '') + ' onchange="' + onch + '" style="accent-color:var(--gisella);width:14px;height:14px;cursor:pointer;flex-shrink:0;">' +
-        '<span style="flex:1;">' + labelHtml + '</span>' +
-        `<button onclick="editFixedTask('${colab}','${type}','${t.id}')" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:11px;padding:0 2px;">✎</button>` +
-        `<button onclick="deleteFixedTask('${colab}','${type}','${t.id}')" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:13px;padding:0 2px;">×</button>` +
-        '</div>';
-    }
-  
-    const dailyTasks = data.daily.slice().sort((a,b) => Number(!!checks['d-'+a.id]) - Number(!!checks['d-'+b.id]));
-    const weeklyTasks = data.weekly.slice().sort((a,b) => Number(!!checks['w-'+a.id]) - Number(!!checks['w-'+b.id]));
-  
-    dailyEl.innerHTML  = dailyTasks.map(t => taskRow(t,'daily','d-')).join('') +
-      `<button onclick="addFixedTask('${colab}','daily')" style="margin-top:8px;font-size:11px;background:none;border:1px dashed var(--border-mid);border-radius:6px;padding:4px 8px;color:var(--text-soft);cursor:pointer;width:100%;">+ adicionar</button>`;
-  
-    weeklyEl.innerHTML = weeklyTasks.map(t => taskRow(t,'weekly','w-')).join('') +
-      `<button onclick="addFixedTask('${colab}','weekly')" style="margin-top:8px;font-size:11px;background:none;border:1px dashed var(--border-mid);border-radius:6px;padding:4px 8px;color:var(--text-soft);cursor:pointer;width:100%;">+ adicionar</button>`;
-  }
-  
-  function toggleFixed(colab, key, val) {
-    const checks = getFixedChecks(colab);
-    checks[key] = val;
-    saveFixedChecks(colab, checks);
-    renderFixedTasks(colab);
-  }
-  
-  // Fixed task modal state
-  let _fxtColab = null, _fxtType = null, _fxtId = null;
-  
-  function addFixedTask(colab, type) {
-    _fxtColab = colab; _fxtType = type; _fxtId = null;
-    document.getElementById('fxt-modal-title').textContent = 'Nova tarefa fixa';
-    document.getElementById('fxt-label').value = '';
-    openModal('modal-fixed-task');
-    setTimeout(() => document.getElementById('fxt-label').focus(), 50);
-  }
-  
-  function openFixedTaskModal(colab, type, existingId) {
-    _fxtColab = colab; _fxtType = type; _fxtId = existingId;
-    const data = getFixedData(colab);
-    const list = type==='daily' ? data.daily : data.weekly;
-    const existing = existingId ? list.find(t=>t.id===existingId) : null;
-    document.getElementById('fxt-modal-title').textContent = existing ? 'Editar tarefa' : 'Nova tarefa fixa';
-    document.getElementById('fxt-label').value = existing ? existing.label : '';
-    openModal('modal-fixed-task');
-    setTimeout(() => document.getElementById('fxt-label').focus(), 50);
-  }
-  
-  function saveFixedTask() {
-    const label = document.getElementById('fxt-label').value.trim();
-    if (!label) { document.getElementById('fxt-label').focus(); return; }
-    const link = '';
-    const data = getFixedData(_fxtColab);
-    const list = _fxtType==='daily' ? data.daily : data.weekly;
-    if (_fxtId) {
-      const t = list.find(x=>x.id===_fxtId);
-      if (t) { t.label = label; t.link = link||undefined; }
-    } else {
-      const id = _fxtColab[0] + '-' + _fxtType[0] + '-' + Date.now();
-      list.push({id, label, link: link||undefined});
-    }
-    saveFixedData(_fxtColab, data);
-    renderFixedTasks(_fxtColab);
-    closeModal('modal-fixed-task');
-  }
-  
-  function editFixedTask(colab, type, id) {
-    openFixedTaskModal(colab, type, id);
-  }
-  
-  function deleteFixedTask(colab, type, id) {
-    const data = getFixedData(colab);
-    const snap = JSON.parse(JSON.stringify(data));
-    data[type] = data[type].filter(x => x.id !== id);
-    saveFixedData(colab, data);
-    renderFixedTasks(colab);
-    pushUndo('Tarefa fixa', () => { saveFixedData(colab, snap); renderFixedTasks(colab); });
-  }
-  
-  function fixedDragStart(e, colab, type, id) {
-    fixedDragSrc = id;
-    fixedDragColab = colab;
-    fixedDragType = type;
-    e.dataTransfer.effectAllowed = 'move';
-  }
-  
-  function fixedDrop(e, colab, type, targetId) {
-    e.preventDefault();
-    if (fixedDragColab !== colab || fixedDragType !== type || fixedDragSrc === targetId) return;
-    const data = getFixedData(colab);
-    const arr = data[type];
-    const fromIdx = arr.findIndex(x => x.id === fixedDragSrc);
-    const toIdx   = arr.findIndex(x => x.id === targetId);
-    if (fromIdx === -1 || toIdx === -1) return;
-    const [moved] = arr.splice(fromIdx, 1);
-    arr.splice(toIdx, 0, moved);
-    saveFixedData(colab, data);
-    renderFixedTasks(colab);
-  }
-  
-  
-  /* ── CONTEÚDOS VISÃO GERAL ── */
-  function buildVisaoConteudos() {
-    const el = document.getElementById('visao-conteudos');
-    if (!el) return;
-    const hoje = new Date().toISOString().slice(0,10);
-    const fim = new Date(); fim.setDate(fim.getDate()+7);
-    const fimStr = fim.toISOString().slice(0,10);
-    const lista = conteudos.filter(c => !isConteudoFinalizado(c) && c.dataPost >= hoje && c.dataPost <= fimStr);
-    lista.sort((a,b)=>(a.dataPost||'').localeCompare(b.dataPost||''));
-    if (lista.length === 0) {
-      el.innerHTML = '<div style="padding:1rem;text-align:center;color:var(--text-soft);font-size:13px;">Nenhum conteúdo programado para os próximos 7 dias.</div>';
-      return;
-    }
-    const empColors = {editora:'var(--editora)',leia:'var(--leia)',gisella:'var(--gisella)'};
-    el.innerHTML = lista.map(c => {
-      const emp = c.empresa||'editora';
-      const cor = empColors[emp]||'var(--text-soft)';
-      return '<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);">' +
-        '<div style="width:3px;min-height:28px;background:'+cor+';border-radius:2px;flex-shrink:0;"></div>' +
-        '<div style="flex:1;min-width:0;">' +
-          '<div style="font-weight:500;font-size:13px;">'+c.nome+'</div>' +
-          '<div style="font-size:11px;color:var(--text-soft);">'+fmtDate(c.dataPost||'')+' · '+(c.rede||'')+'</div>' +
-        '</div>' +
-        '<span class="badge b-'+emp+'" style="font-size:10px;">'+(emp==='editora'?'Editora':emp==='leia'?'Léia':'GC')+'</span>' +
-      '</div>';
-    }).join('');
-  }
-  
-  
-  
-  /* ── GOOGLE CALENDAR LÉIA ── */
-  let gcalLeiaCache = [];
-  
-  async function loadGcalLeia() {
-    const rangeStart = new Date(); rangeStart.setMonth(rangeStart.getMonth() - 2); rangeStart.setDate(1);
-    const rangeEnd   = new Date(); rangeEnd.setMonth(rangeEnd.getMonth() + 4); rangeEnd.setDate(1);
-  
-    const url = 'https://www.googleapis.com/calendar/v3/calendars/' + encodeURIComponent(GCAL_ID_LEIA) + '/events'
-      + '?key=' + GCAL_API_KEY
-      + '&timeMin=' + rangeStart.toISOString()
-      + '&timeMax=' + rangeEnd.toISOString()
-      + '&singleEvents=true&orderBy=startTime&maxResults=250';
-  
-    try {
-      const res = await fetch(url);
-      if (!res.ok) return;
-      const data = await res.json();
-      gcalLeiaCache = (data.items || []).map(ev => {
-        const title = (ev.summary && ev.summary.trim()) ? ev.summary.trim() : (ev.description ? ev.description.slice(0,30) : '(evento)');
-        const start = ev.start ? (ev.start.dateTime ? ev.start.dateTime.slice(0,10) : ev.start.date) : '';
-        const end   = ev.end   ? (ev.end.dateTime   ? ev.end.dateTime.slice(0,10)   : ev.end.date)   : start;
-        return {
-          title,
-          start,
-          end,
-          startTime: ev.start && ev.start.dateTime ? ev.start.dateTime.slice(11,16) : null,
-          endTime:   ev.end   && ev.end.dateTime   ? ev.end.dateTime.slice(11,16)   : null,
-          description: ev.description || '',
-          link: ev.htmlLink || '',
-          empresa: 'leia',
-        };
-      });
-      // Injetar no calendário da Léia
-      refreshCalendars();
-      buildEventosList();
-    } catch(e) {
-      console.warn('loadGcalLeia erro:', e);
-    }
-  }
-  
-  /* ── STORAGE ── */
-  function load(key, def) {
-    try { return JSON.parse(localStorage.getItem(key)) || def; } catch(e) { return def; }
-  }
-  const _lastLocalSave = {};
-  const CHECKLIST_SYNC_URL = 'https://piwsavppaabjygaolldb.supabase.co/functions/v1/sync-cassol-dashboard';
-  const CHECKLIST_SYNCED_DOCUMENTS = new Set(['gc-events','gc-conteudos','gc-livros','gc-projetos']);
-  let checklistDirectSyncTimer = null;
-  function checklistRecipientsForChanges(key, items) {
-    const names = [];
-    const add = value => { if (value) names.push(String(value)); };
-    items.forEach(item => {
-      if (key === 'gc-events') add(item?.responsavel);
-      if (key === 'gc-conteudos') Object.values(item?.etapasStatus || {}).forEach(stage => add(stage?.resp));
-      if (key === 'gc-livros') {
-        add(item?.responsavel);
-        (item?.etapas || []).forEach(stage => add(stage?.resp));
-      }
-      if (key === 'gc-projetos') (item?.tarefas || []).forEach(task => add(task?.resp));
-    });
-    const normalized = names.map(name => name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase());
-    return ['luiggi','gisella','milena'].filter(recipient => normalized.some(name => name === recipient || name.includes(recipient)));
-  }
-  function scheduleChecklistCentralSync(key, changedItems, previousChangedItems = []) {
-    const token = sessionStorage.getItem('gc-dashboard-session-token');
-    if (!token || !CHECKLIST_SYNCED_DOCUMENTS.has(key) || !changedItems.length) return;
-    clearTimeout(checklistDirectSyncTimer);
-    checklistDirectSyncTimer = setTimeout(async () => {
-      try {
-        // Inclui responsáveis antigos e novos. Assim, uma transferência não
-        // deixa a tarefa presa no Checklist da pessoa anterior.
-        const recipients = [...new Set([
-          ...checklistRecipientsForChanges(key, previousChangedItems),
-          ...checklistRecipientsForChanges(key, changedItems),
-        ])];
-        if (!recipients.length) return;
-        const results = await Promise.allSettled(recipients.map(async recipient => {
-          const response = await fetch(CHECKLIST_SYNC_URL, {
-            method:'POST',
-            headers:{'Content-Type':'application/json','x-cassol-dashboard-session':token},
-            body:JSON.stringify({operation:'dashboard_session_pull',source_document:key,document_value:changedItems,recipients:[recipient]}),
-          });
-          if (!response.ok) throw new Error(`${recipient}: HTTP ${response.status}`);
-        }));
-        const failed = results.find(result => result.status === 'rejected');
-        if (failed) throw failed.reason;
-      } catch (error) {
-        console.warn('Sincronização central indisponível; o mecanismo de segurança tentará novamente.', error);
-      }
-  }, 0);
+        renderCategories();
+        renderChecklist();
+        updateProgress();
+    }, 100);
 }
-async function syncChecklistAfterDashboardDeletion(key, previousItems) {
-  const token = sessionStorage.getItem('gc-dashboard-session-token');
-  const recipients = checklistRecipientsForChanges(key, previousItems);
-  if (!token || !recipients.length) return;
-  await Promise.allSettled(recipients.map(recipient => fetch(CHECKLIST_SYNC_URL, {
-    method:'POST',
-    headers:{'Content-Type':'application/json','x-cassol-dashboard-session':token},
-    body:JSON.stringify({operation:'dashboard_session_pull',recipients:[recipient]}),
-  })));
-}
-function save(key, val) {
-  const previousValue = load(key, []);
-  const previousById = new Map((Array.isArray(previousValue) ? previousValue : []).map(item => [String(item?.id ?? ''), JSON.stringify(item)]));
-  const changedItems = (Array.isArray(val) ? val : []).filter(item => previousById.get(String(item?.id ?? '')) !== JSON.stringify(item));
-  const nextIds = new Set((Array.isArray(val) ? val : []).map(item => String(item?.id ?? '')));
-  const removedItems = (Array.isArray(previousValue) ? previousValue : []).filter(item => !nextIds.has(String(item?.id ?? '')));
-  const changedIds = new Set(changedItems.map(item => String(item?.id ?? '')));
-  const previousChangedItems = (Array.isArray(previousValue) ? previousValue : []).filter(item => changedIds.has(String(item?.id ?? '')));
-  localStorage.setItem(key, JSON.stringify(val));
-  _lastLocalSave[key] = Date.now();
-  // Cópia local da última lista não vazia: se uma lista vazia aparecer nesta
-  // Central, a pessoa recebe a opção de restaurar os livros imediatamente.
-  if (key === 'gc-livros' && Array.isArray(val) && val.length > 0) {
-    localStorage.setItem('gc-livros-last-nonempty', JSON.stringify(val));
-  }
-  // O Checklist recebe a alteração imediatamente. A persistência no Firebase
-  // continua em paralelo como cópia compartilhada do Dashboard.
-  scheduleChecklistCentralSync(key, changedItems, previousChangedItems);
-  if (window.fbSave) window.fbSave(key, val)
-    .then(savedAt => {
-      if (!savedAt) console.warn('Firebase não confirmou a gravação:', key);
-      else if (removedItems.length) syncChecklistAfterDashboardDeletion(key, removedItems);
-    })
-    .catch(e => console.warn('fbSave err:', key, e));
-    autoSave();
-  }
-  
-  /* ── DATA ── */
-  let events = load('gc-events', []).map(e => ({...e, tipo: e.tipo || 'tarefa'}));
-  let recurringTasks = load('gc-recurring-tasks', []);
 
-  function dashboardDate(value = new Date()) {
-    return new Date(value).toLocaleDateString('sv-SE');
-  }
+const { dbCache, idb, localPrefs, localStorage } = window.ChecklistStorage.create({
+    onStorageChange: handleChecklistStorageChange,
+    // Agrupa toques seguidos no check em um único lote para a nuvem. As
+    // demais alterações continuam com debounce maior para não gerar ruído.
+    onCloudQueueChange: key => scheduleCloudSync("fila-local", key === "offline_completions_queue" ? 120 : 1200)
+});
 
-  function addDashboardDays(dateStr, amount) {
-    const date = new Date(`${dateStr}T12:00:00`);
-    date.setDate(date.getDate() + Number(amount || 0));
-    return dashboardDate(date);
-  }
+// Novas contas e restaurações começam sem categorias pessoais pré-cadastradas.
+const DEFAULT_CATEGORIES = [];
+const LEGACY_AUTO_SEEDED_CATEGORIES = ["Tio Nan", "Cassol", "PUCRS"];
+// Espelho opcional das categorias das empresas no painel interno. A fila só é
+// processada pela Edge Function, que ainda confirma no servidor se o pedido
+// veio da conta autorizada do Luiggi.
+const CASSOL_DASHBOARD_SYNC_QUEUE_KEY = "cassol_dashboard_sync_queue";
+const CASSOL_DASHBOARD_CATEGORY_NAMES = new Set(["cassol", "leia cassol", "gc estrategias"]);
+const CASSOL_DASHBOARD_RECONCILE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const CASSOL_DASHBOARD_LOCAL_CHANGE_GUARD_MS = 2500;
+let cassolDashboardSyncTimer = null;
+let cassolDashboardSyncInProgress = false;
+let cassolDashboardPullTimer = null;
+let cassolDashboardPullInProgress = false;
+let cassolDashboardLastPullAt = 0;
+let cassolDashboardLastPushAt = 0;
+let cassolDashboardRealtimePullTimer = null;
+let cassolDashboardRealtimeStartPending = false;
+let cassolFirebaseRealtimeStarted = false;
+let cassolFirebaseRealtimeUnsubscribers = [];
+const cassolFirebaseLastTimestamp = new Map();
 
-  function isMentoringCalendarEvent(event) {
-    return /mentoria|mentoring/i.test([
-      event?.title, event?.titulo, event?.description, event?.descricao,
-      event?.location, event?.local,
-    ].filter(Boolean).join(' '));
-  }
+// Default tasks database for initial setup (offline fallback and reset option)
+const DEFAULT_TASKS = [];
 
-  function isMentoringFeedbackTask(item) {
-    const title = String(item?.titulo || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
-    return title === 'devolutivas da mentoria';
-  }
-
-  function ensureCustomRecurringTasks(calendarEvents = []) {
-    const today = dashboardDate();
-    const horizon = addDashboardDays(today, 120);
-    let changed = false;
-    let templatesChanged = false;
-    recurringTasks.forEach(template => {
-      if (isMentoringFeedbackTask(template) && template.responsavel !== 'Milena') {
-        template.responsavel = 'Milena';
-        templatesChanged = true;
-      }
+function dedupeCategories(list) {
+    const byId = new Map();
+    (Array.isArray(list) ? list : []).forEach(category => {
+        if (!category) return;
+        const idKey = category.id !== undefined && category.id !== null ? String(category.id) : `missing-${byId.size}`;
+        const previous = byId.get(idKey);
+        byId.set(idKey, previous ? { ...previous, ...category, type: category.type || previous.type || null } : category);
     });
-    const feedbackTemplateIds = new Set(recurringTasks.filter(isMentoringFeedbackTask).map(template => template.id));
-    events.forEach(event => {
-      if (feedbackTemplateIds.has(event.recurrenceTemplateId) && event.responsavel !== 'Milena') {
-        event.responsavel = 'Milena';
-        changed = true;
-      }
-    });
-    const createOccurrence = (template, date, sourceKey) => {
-      if (!date || date < today) return;
-      const recurrenceKey = `custom-recurrence-${template.id}-${sourceKey}`;
-      if ((template.excludedOccurrenceKeys || []).includes(recurrenceKey)) return;
-      if (events.some(event => event.recurrenceKey === recurrenceKey)) return;
-      events.push({
-        id: Date.now() + Math.floor(Math.random() * 100000),
-        titulo: template.titulo,
-        empresa: template.empresa,
-        tipo: 'tarefa',
-        data: date,
-        responsavel: template.responsavel,
-        observacao: template.observacao || '',
-        urgente: Boolean(template.urgente),
-        arquivada: false,
-        recurrenceKey,
-        recurrenceTemplateId: template.id,
-      });
-      changed = true;
-    };
-    const calendarSources = [...calendarEvents, ...(window.gcalEventsCache || [])];
-    const knownCalendarEvents = [...new Map(calendarSources.map(event => {
-      const date = String(event?.start || event?.data || '').slice(0, 10);
-      const title = String(event?.title || event?.titulo || '').trim().toLowerCase();
-      return [`${date}|${title}|${String(event?.link || '')}`, event];
-    })).values()];
-    recurringTasks.forEach(template => {
-      if (template.kind === 'interval15') {
-        const anchor = template.anchorDate || today;
-        let date = anchor >= today ? anchor : today;
-        const elapsed = Math.round((new Date(`${date}T12:00:00`) - new Date(`${anchor}T12:00:00`)) / 86400000);
-        if (elapsed > 0) date = addDashboardDays(date, (15 - (elapsed % 15)) % 15);
-        while (date <= horizon) {
-          createOccurrence(template, date, date);
-          date = addDashboardDays(date, 15);
+    // A mesma categoria compartilhada pode chegar pela consulta do proprietário e
+    // pela consulta de compartilhamentos. Além disso, versões antigas permitiam
+    // que cada participante criasse seu próprio "Treino". Exibimos apenas uma
+    // categoria por nome, mas preservamos todos os IDs para consultar o histórico.
+    const byNormalizedName = new Map();
+    [...byId.values()].forEach(category => {
+        const normalizedName = normalizeCategoryName(category.name);
+        const ownerId = category.user_id ? String(category.user_id) : "";
+        const stableKey = isTrainingCategory(category.name)
+            ? `training::${normalizedName}`
+            : (ownerId && normalizedName ? `${ownerId}::${normalizedName}` : `id::${String(category.id)}`);
+        const previous = byNormalizedName.get(stableKey);
+        if (!previous) {
+            return byNormalizedName.set(stableKey, { ...category, merged_category_ids: [category.id] });
         }
-      } else if (template.kind === 'weekdays') {
-        const selectedDays = (template.weekdays || []).map(Number);
-        for (let offset = 0; offset <= 120; offset++) {
-          const date = addDashboardDays(today, offset);
-          if (selectedDays.includes(new Date(`${date}T12:00:00`).getDay())) createOccurrence(template, date, date);
-        }
-      } else if (['googleMentoring', 'googleCalendarMentoring', 'mentoring'].includes(template.kind)) {
-        knownCalendarEvents.filter(isMentoringCalendarEvent).forEach(event => {
-          const eventDate = String(event.start || event.data || '').slice(0, 10);
-          if (!eventDate) return;
-          const date = addDashboardDays(eventDate, template.mentoringOffset);
-          createOccurrence(template, date, `${eventDate}-${String(event.title || event.titulo || '').trim().toLowerCase()}`);
+        const previousTemporary = isTemporaryId(previous.id);
+        const currentTemporary = isTemporaryId(category.id);
+        const previousShared = (categoryShares || []).some(share => String(share.category_id) === String(previous.id) && share.accepted === true);
+        const currentShared = (categoryShares || []).some(share => String(share.category_id) === String(category.id) && share.accepted === true);
+        const canonical = previousTemporary && !currentTemporary
+            ? category
+            : (!previousShared && currentShared ? category : previous);
+        const supplemental = canonical === category ? previous : category;
+        const mergedIds = [...new Set([
+            ...(previous.merged_category_ids || [previous.id]),
+            ...(category.merged_category_ids || [category.id])
+        ].filter(id => id !== undefined && id !== null))];
+        byNormalizedName.set(stableKey, {
+            ...supplemental,
+            ...canonical,
+            type: canonical.type || supplemental.type || null,
+            merged_category_ids: mergedIds
         });
-      }
     });
-    if (changed) {
-      save('gc-events', events);
-      buildTarefas(); buildColabTarefas(); buildPrioridades(); refreshCalendars();
+    return [...byNormalizedName.values()];
+}
+
+function normalizeCategoryName(value) {
+    return String(value || "")
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/[\u200B-\u200D\uFEFF]/g, "")
+        .replace(/\s+/g, " ").trim().toLocaleLowerCase("pt-BR");
+}
+
+function parseTaskContextValue(value) {
+    if (!value) return {};
+    if (typeof value === "string") {
+        try { return JSON.parse(value); } catch (_) { return {}; }
     }
-    if (templatesChanged) save('gc-recurring-tasks', recurringTasks);
-  }
-  const MENTEES_DEFAULT = [
-    {id:1,  name:'Dionysio Ofra',           status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/1SGsDhwGmimnuiQk06NQqiS6bvi2HRwE3_VDAm85VAYc/edit?usp=sharing'},
-    {id:2,  name:'Ângela Basso',            status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/1VpQVSkAmtufEFSTwG9mkHe9jsUfi0KEAGqDR9NmyGkU/edit?usp=sharing'},
-    {id:3,  name:'Hellen Quinta',           status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/10dKwyQVmCXfHBhlvB2uMSOPuW77mHDuyggP0sGypBXU/edit?usp=sharing'},
-    {id:4,  name:'Jacqueline Gisler',       status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/1uHaDvfzAGTSUFSdT-sd4ptbL2kUQ0TffaBTMpSe2IDA/edit?usp=sharing'},
-    {id:5,  name:'Jessica Colvara Chacon',  status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://drive.google.com/drive/folders/1VaNQTaLbvkg32k-oAQc2vI7BzUJzgvua?usp=sharing'},
-    {id:6,  name:'Juh Araujo',              status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/18QsOg5rRUF-uYampX0ZwhHArmENBtKQKYV_KX-RyeNc/edit?usp=sharing'},
-    {id:7,  name:'Lauren Vargas',           status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/1wSn_Nb2P_6xHOXW4dDVMgKDizRFwGBzTN_wxDNSn5X4/edit?usp=sharing'},
-    {id:8,  name:'Liliana Madril',          status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/1TeRxlkedAOhZTLTFiilRvEAL5Taa35zscKkWa5MJsA4/edit?usp=sharing'},
-    {id:9,  name:'Marilia Santos Ribeiro',  status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/1jamtnbLHaV_0WG8nHAUajMfHiHxbzN6QWBKtWDs59RE/edit?usp=sharing'},
-    {id:10, name:'Martina Kirst',           status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/1OjYYhf-Slk6fdgpzuYNpIh6gWSRseLi1xnzTWzZgeUg/edit?usp=sharing'},
-    {id:11, name:'Michele Melo',            status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/1WT6gbvQ9hoznBGmFf1ItVe3TmdfF3PoPH4Lf-RI9B74/edit?usp=sharing'},
-    {id:12, name:'Nathiele Fagundes',       status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/1p3_DLCevkLsYHTMmaJ7O90G0crY_v9sTdE9Mbn1i6iA/edit?usp=sharing'},
-    {id:13, name:'Priscila Cunha',          status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/1UzZ4a9OQphe0hA62QZyfqQASbBYDv4UzYl_k-IL99wI/edit?usp=sharing'},
-    {id:14, name:'Regina Vieira',           status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/17DxYV8MinQJ5SYx1EoD8qqPvTK8C2Z2xuTBxrHX0hJI/edit?usp=sharing'},
-    {id:15, name:'Tetê Amodeo',             status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/17btvt710XxKuOQx4Ezk1ocyZM5CHFJKzqXdS3mMrXfY/edit?usp=sharing'},
-    {id:16, name:'Ana Elisa Coelho Pinho',  status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/1cnHtrvLdCLgnw3qvkhBcfW2XhjqOhRQ5-vnSrXEULWc/edit?usp=drive_link'},
-    {id:17, name:'Gabi Prado',              status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/1KtdxNtXgChIMfGdMfC5Gy9MaQTGsiotBsimoLwCxzNA/edit?usp=drive_link'},
-    {id:18, name:'Ni Cordeiro',             status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/1tTEuRTAruDtkOMW-KMOv5OlH7u-YSpV29ggygzXJO2E/edit?usp=drive_link'},
-    {id:19, name:'Patrícia Lima',           status:'ok', notes:'', sessions:[], tasks:[], docsLink:'https://docs.google.com/document/d/1CZDs8GCY7tDRfNmmY5W8m4YdfYhWk0H1NV2wpqiI0SE/edit?usp=drive_link'}
-  ];
-  
-  // Mesclar com dados salvos: preserva notas/sessões/tarefas existentes, garante que todos os 19 estejam presentes
-  function mergeMentees(saved) {
-    const result = MENTEES_DEFAULT.map(def => {
-      const existing = saved.find(s => s.name === def.name);
-      return existing ? {...def, notes: existing.notes||'', sessions: existing.sessions||[], tasks: existing.tasks||[], status: existing.status||'ok'} : def;
-    });
-    // Adicionar quaisquer extras cadastrados manualmente que não estejam na lista default
-    saved.forEach(s => {
-      if (!result.find(r => r.name === s.name)) {
-        result.push(s);
-      }
+    return typeof value === "object" ? value : {};
+}
+
+function getTaskIntervalDays(task) {
+    const context = parseTaskContextValue(task?.context);
+    const interval = Number(context.recurrence_interval_days || 0);
+    // A primeira versão chamou a opção de "15 em 15 dias". Converte esses
+    // registros automaticamente para duas semanas, preservando o mesmo dia
+    // da semana sem exigir que a pessoa edite cada tarefa.
+    if (context.recurrence_type === "interval" && interval === 15) return 14;
+    return context.recurrence_type === "interval" && Number.isInteger(interval) && interval > 0 ? interval : 0;
+}
+
+function calendarDayNumber(dateStr) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || ""));
+    return match ? Math.floor(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) / 86400000) : NaN;
+}
+
+function recurringTaskOccursOnDate(task, dateStr) {
+    if (!task?.is_recurring) return false;
+    const startDate = extractDateFromTimestamp(task.created_at);
+    if (!startDate || startDate > dateStr) return false;
+    const intervalDays = getTaskIntervalDays(task);
+    if (intervalDays) {
+        const elapsedDays = calendarDayNumber(dateStr) - calendarDayNumber(startDate);
+        return Number.isFinite(elapsedDays) && elapsedDays >= 0 && elapsedDays % intervalDays === 0;
+    }
+    if (Array.isArray(task.repeat_days) && task.repeat_days.length > 0) {
+        return task.repeat_days.map(Number).includes(new Date(`${dateStr}T12:00:00`).getDay());
+    }
+    return true;
+}
+
+function getTaskRecurrenceMode(task) {
+    if (!task?.is_recurring) return "once";
+    if (getTaskIntervalDays(task) === 14) return "interval14";
+    return Array.isArray(task.repeat_days) && task.repeat_days.length > 0 && task.repeat_days.length < 7 ? "repeat" : "daily";
+}
+
+function dashboardTaskIdentity(task) {
+    const context = parseTaskContextValue(task?.context);
+    const eventId = String(context.cassol_dashboard_event_id || "").trim();
+    const source = normalizeCategoryName(context.cassol_dashboard_source || "event");
+    const contentId = String(context.cassol_dashboard_content_id || "").trim();
+    const stageKey = String(context.cassol_dashboard_stage_key || "").trim();
+    const bookId = String(context.cassol_dashboard_book_id || "").trim();
+    const bookStage = Number(context.cassol_dashboard_book_stage_index);
+    const projectId = String(context.cassol_dashboard_project_id || "").trim();
+    const projectTask = Number(context.cassol_dashboard_project_task_index);
+    const projectTaskKey = String(context.cassol_dashboard_project_task_key || "").trim();
+    const syncToken = String(context.sync_token || "").trim();
+    const imported = normalizeCategoryName(context.source) === "cassol_dashboard"
+        || context.cassol_dashboard_linked === true
+        || Boolean(eventId || contentId || bookId || projectId || syncToken.startsWith("cassol-dashboard-"));
+    if (!imported) return "";
+    if (source === "content_stage" && contentId && stageKey) return `content:${contentId}:${stageKey}`;
+    if (source === "book_stage" && bookId && Number.isInteger(bookStage) && bookStage >= 0) return `book:${bookId}:${bookStage}`;
+    if (source === "project_task" && projectId && projectTaskKey) return `project:${projectId}:${projectTaskKey}`;
+    if (source === "project_task" && projectId && Number.isInteger(projectTask) && projectTask >= 0) return `project:${projectId}:${projectTask}`;
+    if (eventId) return `event:${eventId}`;
+    if (syncToken.startsWith("cassol-dashboard-")) return `token:${syncToken}`;
+    // Compatibilidade com importações muito antigas, que não guardavam o ID
+    // de origem. A combinação inclui data e categoria para não unir tarefas
+    // comuns que apenas compartilham o mesmo título.
+    return `legacy:${normalizeCategoryName(task?.category)}:${normalizeCategoryName(task?.title)}:${extractDateFromTimestamp(task?.created_at)}:${normalizeCategoryName(context.cassol_dashboard_recipient)}`;
+}
+
+function dedupeDashboardTasks(list) {
+    const result = [];
+    const importedTaskIndexBySource = new Map();
+    (Array.isArray(list) ? list : []).forEach(task => {
+        if (!task) return;
+        const sourceKey = dashboardTaskIdentity(task);
+        if (!sourceKey) {
+            result.push(task);
+            return;
+        }
+        const existingIndex = importedTaskIndexBySource.get(sourceKey);
+        if (existingIndex === undefined) {
+            importedTaskIndexBySource.set(sourceKey, result.length);
+            result.push(task);
+            return;
+        }
+
+        const existing = result[existingIndex];
+        const existingCreatedAt = new Date(existing.created_at || 0).getTime();
+        const currentCreatedAt = new Date(task.created_at || 0).getTime();
+        const preferred = currentCreatedAt < existingCreatedAt ? task : existing;
+        result[existingIndex] = {
+            ...preferred,
+            completed: Boolean(existing.completed || task.completed)
+        };
     });
     return result;
-  }
-  
-  let mentees      = load('gc-mentees',       MENTEES_DEFAULT);
-  let menteesMarco0 = load('gc-mentees-marco0', []);
-  let livros = load('gc-livros', []);
-  function offerLivrosRecovery() {
-    const backup = load('gc-livros-last-nonempty', []);
-    if (livros.length || !Array.isArray(backup) || !backup.length) return;
-    if (sessionStorage.getItem('gc-livros-recovery-offered')) return;
-    sessionStorage.setItem('gc-livros-recovery-offered', '1');
-    if (window.confirm(`A Central está sem livros, mas existe uma cópia de segurança neste dispositivo com ${backup.length} livro(s). Deseja restaurá-la agora?`)) {
-      livros = backup;
-      save('gc-livros', livros);
-      renderLivros();
-    }
-  }
-  let conteudos = load('gc-conteudos', []);
-  let steiraData = load('gc-steira', {});
-  let kanbanData = load('gc-kanban', {});
-  
-  const ETAPAS_DEFAULT = [
-    'Briefing',
-    'Texto em andamento',
-    'Texto preparado',
-    'Texto finalizado',
-    'Escolha do ilustrador',
-    'Reunião de alinhamento de conceito',
-    'Pré-diagramação',
-    'Esboços',
-    'Estado da arte — coloração',
-    'Finalização das ilustrações',
-    'ISBN + Código de barras + Ficha catalográfica',
-    'Diagramação final',
-    'Revisão',
-    'Revisão final',
-    'UV',
-    'Envio para gráfica',
-    'Boneco',
-    'Ajuste fino',
-    'Contrato',
-    'Aprovação para impressão',
-    'Recebimento do estoque',
-    'Cadastro no sistema',
-    'Liberação no site',
-  ];
-  
-  const ETAPAS_REIMP = [
-    'Pedir orçamento',
-    'Reler impresso',
-    'Localizar arquivos',
-    'Enviar para revisão',
-    'Fazer alterações',
-    'Enviar para gráfica',
-    'Prova digital',
-    'Liberar para impressão',
-  ];
-  
-  /* ── NAV ── */
-  
-  /* ── CALENDÁRIO SEMANAL CONTEÚDO ── */
-  let _conteudoCalView = 'semana';
-  let _conteudoWeekOffset = 0;
-  
-  function setConteudoCalView(view) {
-    _conteudoCalView = view;
-    const wrap = document.getElementById('cal-conteudo-wrap');
-    if (wrap) wrap.dataset.view = view;
-    document.getElementById('btn-cal-semana').classList.toggle('active', view === 'semana');
-    document.getElementById('btn-cal-mes').classList.toggle('active', view === 'mes');
-    if (view === 'semana') {
-      buildConteudoCalSemana();
-    } else {
-      const wrap2 = document.getElementById('cal-conteudo-wrap');
-      if (wrap2) wrap2.innerHTML = '<div class="cal-wrap" id="cal-conteudo"></div>';
-      buildCalendar('cal-conteudo', getFilter('conteudo-menu'));
-    }
-  }
-  
-  function buildConteudoCalSemana() {
-    const wrap = document.getElementById('cal-conteudo-wrap');
-    if (!wrap) return;
-    wrap.dataset.view = 'semana';
-  
-    const hoje = new Date(); hoje.setHours(0,0,0,0);
-    const inicioSemana = new Date(hoje);
-    inicioSemana.setDate(hoje.getDate() - hoje.getDay() + (_conteudoWeekOffset * 7));
-    const dias = Array.from({length:7}, (_,i) => {
-      const d = new Date(inicioSemana);
-      d.setDate(inicioSemana.getDate() + i);
-      return d;
-    });
-  
-    const meses = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
-    const dows = ['DOM','SEG','TER','QUA','QUI','SEX','SÁB'];
-    const filter = getFilter('conteudo-menu');
-  
-    const inicioStr = dias[0].toISOString().slice(0,10);
-    const fimStr = dias[6].toISOString().slice(0,10);
-    const label = `${dias[0].getDate()} ${meses[dias[0].getMonth()]} — ${dias[6].getDate()} ${meses[dias[6].getMonth()]} ${dias[6].getFullYear()}`;
-  
-    let html = `<div class="cal-header">
-      <button class="cal-nav" onclick="_conteudoWeekOffset--;buildConteudoCalSemana()">‹</button>
-      <div class="cal-month">${label}</div>
-      <button class="cal-nav" onclick="_conteudoWeekOffset++;buildConteudoCalSemana()">›</button>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-top:8px;">`;
-  
-    dias.forEach((dia, idx) => {
-      const ds = dia.toISOString().slice(0,10);
-      const isToday = ds === hoje.toISOString().slice(0,10);
-      const dayConts = conteudos.filter(c =>
-        !isConteudoFinalizado(c) && c.dataPost === ds &&
-        (filter === 'all' || (c.empresa||'').split(',').includes(filter))
-      );
-  
-      html += `<div style="background:var(--surface);border-radius:10px;padding:8px;min-height:90px;border:1px solid ${isToday?'var(--gisella)':'var(--border)'}">
-        <div style="font-size:10px;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;">${dows[idx]}</div>
-        <div style="font-size:${isToday?'16px':'14px'};font-weight:${isToday?'700':'500'};color:${isToday?'var(--gisella)':'var(--text)'};margin-bottom:6px;">${dia.getDate()}</div>`;
-  
-      dayConts.forEach(c => {
-        const cor = c.empresa==='editora'?'var(--editora)':c.empresa==='leia'?'var(--leia)':'var(--gisella)';
-        html += `<div onclick="openConteudo(${c.id})" style="font-size:10px;padding:2px 5px;border-radius:4px;margin-bottom:2px;background:${cor}15;color:${cor};cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-left:2px solid ${cor};" title="Postagem: ${c.nome}">📤 ${c.nome}</div>`;
-      });
-  
-      html += '</div>';
-    });
-  
-    html += '</div>';
-    wrap.innerHTML = html;
-  }
-  
-  /* ── CALENDÁRIO SEMANAL DE TAREFAS DOS LIVROS (aba Livros) ── */
-  let _livrosCalWeekOffset = 0;
-  let _livroCalDragSrc = null;
-  
-  function buildLivrosCalSemana() {
-    const wrap = document.getElementById('cal-livros-semana-wrap');
-    if (!wrap) return;
-  
-    const hoje = new Date(); hoje.setHours(0,0,0,0);
-    const inicioSemana = new Date(hoje);
-    inicioSemana.setDate(hoje.getDate() - hoje.getDay() + (_livrosCalWeekOffset * 7));
-    const dias = Array.from({length:7}, (_,i) => {
-      const d = new Date(inicioSemana);
-      d.setDate(inicioSemana.getDate() + i);
-      return d;
-    });
-  
-    const meses = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
-    const dows = ['DOM','SEG','TER','QUA','QUI','SEX','SÁB'];
-    const filter = getFilter('livros');
-    const hojeStr = hoje.toISOString().slice(0,10);
-    const label = `${dias[0].getDate()} ${meses[dias[0].getMonth()]} — ${dias[6].getDate()} ${meses[dias[6].getMonth()]} ${dias[6].getFullYear()}`;
-  
-    // Montar lista de etapas (tarefas de livros) que têm prazo definido
-    const todasEtapas = [];
-    livros.forEach(l => {
-      if (filter !== 'all' && !(l.empresa||'').split(',').includes(filter)) return;
-      (l.etapas||[]).forEach((e,i) => {
-        if (!e.prazo) return;
-        todasEtapas.push({ livroId: l.id, idx: i, livroTitulo: l.titulo, empresa: l.empresa, nome: e.nome, prazo: e.prazo, feito: e.feito });
-      });
-    });
-  
-    let html = `<div class="cal-header" style="padding:0 0 10px;border-bottom:none;">
-      <button class="cal-nav" onclick="_livrosCalWeekOffset--;buildLivrosCalSemana()">‹</button>
-      <div class="cal-month">${label}</div>
-      <button class="cal-nav" onclick="_livrosCalWeekOffset++;buildLivrosCalSemana()">›</button>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;">`;
-  
-    dias.forEach((dia, idx) => {
-      const ds = dia.toISOString().slice(0,10);
-      const isToday = ds === hojeStr;
-      const dayEtapas = todasEtapas.filter(e => e.prazo === ds);
-  
-      html += `<div class="livros-cal-day" ondragover="event.preventDefault();this.style.background='var(--gisella-bg)';" ondragleave="this.style.background='var(--surface)';" ondrop="livroCalDrop(event,'${ds}')"
-        style="background:var(--surface);border-radius:10px;padding:8px;min-height:110px;border:1px solid ${isToday?'var(--gisella)':'var(--border)'};transition:background 0.1s;">
-        <div style="font-size:10px;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;">${dows[idx]}</div>
-        <div style="font-size:${isToday?'16px':'14px'};font-weight:${isToday?'700':'500'};color:${isToday?'var(--gisella)':'var(--text)'};margin-bottom:6px;">${dia.getDate()}</div>`;
-  
-      if (dayEtapas.length === 0) {
-        html += `<div style="font-size:10px;color:var(--text-soft);opacity:0.5;">—</div>`;
-      }
-      dayEtapas.forEach(e => {
-        const primeiraEmp = (e.empresa||'').split(',')[0];
-        const cor = primeiraEmp==='editora'?'var(--editora)':primeiraEmp==='leia'?'var(--leia)':'var(--gisella)';
-        html += `<div draggable="true"
-          ondragstart="livroCalDragStart(event,${e.livroId},${e.idx})"
-          onclick="openEditEtapa(${e.livroId},${e.idx})"
-          title="${e.livroTitulo} — ${e.nome}"
-          style="font-size:10px;padding:4px 6px;border-radius:4px;margin-bottom:3px;background:${cor}15;color:${cor};cursor:grab;border-left:2px solid ${cor};${e.feito?'opacity:0.45;':''}">
-          <span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${e.feito?'text-decoration:line-through;':''}">${e.nome}</span>
-          <span style="display:block;font-size:9px;opacity:0.75;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${e.livroTitulo}</span>
-        </div>`;
-      });
-  
-      html += '</div>';
-    });
-  
-    html += '</div>';
-    wrap.innerHTML = html;
-  }
-  
-  function livroCalDragStart(e, livroId, idx) {
-    _livroCalDragSrc = { livroId, idx };
-    e.dataTransfer.effectAllowed = 'move';
-  }
-  
-  function livroCalDrop(e, novaData) {
-    e.preventDefault();
-    e.currentTarget.style.background = 'var(--surface)';
-    if (!_livroCalDragSrc) return;
-    const { livroId, idx } = _livroCalDragSrc;
-    _livroCalDragSrc = null;
-    updateEtapaPrazoInline(livroId, idx, novaData);
-  }
-  
-  /* ── CALENDÁRIO SEMANAL DE TAREFAS (aba Tarefas) ── */
-  let _tarefasCalWeekOffset = 0;
-  let _tarefaCalDragSrc = null;
-  
-  /* ── TIPO TAREFA ── */
-  const _TIPO_EMOJI = { burocracia:'⚙️', criativo:'💡', estrategia:'🎯' };
-  const _TIPO_ORDER = { burocracia:2, criativo:1, estrategia:0, '':3 };
-  function _sortTipo(arr) {
-    return arr.slice().sort((a,b) => {
-      // Pendentes sempre ficam acima das concluídas. Dentro de cada bloco,
-      // urgentes vêm primeiro; o tipo e o título só desempatarem depois.
-      const completedDiff = Number(!!a.arquivada) - Number(!!b.arquivada);
-      if (completedDiff !== 0) return completedDiff;
-      const urgentDiff = Number(!!b.urgente) - Number(!!a.urgente);
-      if (urgentDiff !== 0) return urgentDiff;
-      const oa = _TIPO_ORDER[a.tipoTarefa||''] ?? 3;
-      const ob = _TIPO_ORDER[b.tipoTarefa||''] ?? 3;
-      return oa !== ob ? oa - ob : (a.titulo||'').localeCompare(b.titulo||'');
-    });
-  }
-  /* _fds: move sábado→sexta, domingo→segunda */
-  function _fds(ds) {
-    if (!ds) return ds;
-    const d = new Date(ds + 'T00:00:00');
-    const dw = d.getDay();
-    if (dw === 6) { d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); }
-    if (dw === 0) { d.setDate(d.getDate()+1); return d.toISOString().slice(0,10); }
-    return ds;
-  }
-  
-  function buildTarefasCalSemana() {
-    const wrap  = document.getElementById('cal-tarefas-semana-wrap');
-    const wrapV = document.getElementById('cal-visao-semana-wrap');
-    const wrapC1 = document.getElementById('colab-cal-semana-gisella');
-    const wrapC2 = document.getElementById('colab-cal-semana-milena');
-    const wrapC3 = document.getElementById('colab-cal-semana-luiggi');
-    if (!wrap && !wrapV && !wrapC1 && !wrapC2 && !wrapC3) return;
-  
-    const hoje = new Date(); hoje.setHours(0,0,0,0);
-    const inicioSemana = new Date(hoje);
-    const _dow0 = hoje.getDay();
-    const _dm   = _dow0 === 0 ? -6 : 1 - _dow0; // segunda é o primeiro dia
-    inicioSemana.setDate(hoje.getDate() + _dm + (_tarefasCalWeekOffset * 7));
-    const dias = Array.from({length:7}, (_,i) => {
-      const d = new Date(inicioSemana);
-      d.setDate(inicioSemana.getDate() + i);
-      return d;
-    });
-  
-    const meses = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
-    const dows  = ['SEG','TER','QUA','QUI','SEX','SÁB','DOM'];
-    const hojeStr = hoje.toISOString().slice(0,10);
-    const label = `${dias[0].getDate()} ${meses[dias[0].getMonth()]} — ${dias[6].getDate()} ${meses[dias[6].getMonth()]} ${dias[6].getFullYear()}`;
-  
-    const _tf  = getFilter('tarefas');
-    const _tfc = getFilterColab('tarefas');
-  
-    const etapaEvents = [];
-    livros.forEach(l => {
-      (l.etapas||[]).forEach((e,i) => {
-        const empMatch = _tf==='all'||(l.empresa||'').split(',').includes(_tf);
-        if (!empMatch) return;
-        if (_tfc!=='all' && (e.resp||'')!==_tfc) return;
-        etapaEvents.push({
-          _isEtapa:true, livroId:l.id, etapaIdx:i,
-          titulo:`[${l.titulo}] ${e.nome}`, empresa:l.empresa,
-          data:e.prazo||'', responsavel:e.resp||'', arquivada:!!e.feito, urgente:false, tipoTarefa:'',
-        });
-      });
-    });
-    // Etapas de conteúdos como tarefas virtuais no calendário semanal
-    conteudos.forEach(c => {
-      if (isConteudoFinalizado(c)) return;
-      const empMatch = _tf==='all'||(c.empresa||'').split(',').includes(_tf);
-      if (!empMatch) return;
-      const etapas = getConteudoEtapasLiberadas(c);
-      etapas.forEach(e => {
-        if (!e.prazo) return; // só aparece no cal se tiver prazo
-        if (_tfc!=='all' && (e.resp||'')!==_tfc) return;
-        etapaEvents.push({
-          _isEtapa:false, _conteudoId:c.id, _conteudoKey:e.key,
-          id:`cont-${c.id}-${e.key}`,
-          titulo:`[${c.nome}] ${e.nome}`, empresa:c.empresa,
-          data:e.prazo, responsavel:e.resp||'', arquivada:!!e.feito, urgente:false, tipoTarefa:'',
-        });
-      });
-    });
-    const todas = [
-      ...events.filter(e => e.tipo==='tarefa' && (_tf==='all'||(e.empresa||'').split(',').includes(_tf)) && (_tfc==='all'||(e.responsavel||'')===_tfc))
-        .map(e => ({ _isEtapa:false, id:e.id, titulo:e.titulo, empresa:e.empresa, data:e.data||'', responsavel:e.responsavel||'', arquivada:!!e.arquivada, urgente:!!e.urgente, tipoTarefa:e.tipoTarefa||'' })),
-      ...etapaEvents,
-    ];
-  
-    function _chipHtml(t, cor) {
-      const dragStart = t._isEtapa ? `tarefaCalDragStart(event,'etapa',${t.livroId},${t.etapaIdx})` : `tarefaCalDragStart(event,'evento',${t.id},null)`;
-      const clickAction = t._isEtapa ? `openEditEtapa(${t.livroId},${t.etapaIdx})` : (t._conteudoId ? `openConteudoEtapasPrazos(${t._conteudoId})` : `openEditEvent(${t.id})`);
-      const _chk = t._isEtapa ? `toggleEtapa(${t.livroId},${t.etapaIdx})` : (t._conteudoId ? `toggleConteudoEtapa(${t._conteudoId},'${t._conteudoKey}')` : `toggleTarefaArquivada(${t.id})`);
-      return `<div style="font-size:10px;padding:4px 6px;border-radius:4px;margin-bottom:3px;background:${cor}15;color:${cor};border-left:2px solid ${cor};${t.arquivada?'opacity:0.45;':''}display:flex;align-items:flex-start;gap:4px;">
-        <input type="checkbox" ${t.arquivada?'checked':''} onchange="${_chk}" onclick="event.stopPropagation();" style="accent-color:${cor};flex-shrink:0;margin-top:2px;width:11px;height:11px;cursor:pointer;">
-        <div draggable="true" ondragstart="${dragStart}" onclick="${clickAction}" style="flex:1;min-width:0;cursor:pointer;">
-          <span style="display:block;word-break:break-word;line-height:1.3;${t.arquivada?'text-decoration:line-through;':''}">${t.urgente?'❗ ':''}${_TIPO_EMOJI[t.tipoTarefa]?_TIPO_EMOJI[t.tipoTarefa]+' ':''}${t.titulo}</span>
-          ${t.responsavel?`<span style="display:block;font-size:9px;opacity:0.8;">${t.responsavel}</span>`:''}
-        </div>
-      </div>`;
-    }
-  
-    if (wrap) {
-      let html = `<div class="cal-header" style="padding:0 0 10px;border-bottom:none;">
-        <button class="cal-nav" onclick="_tarefasCalWeekOffset--;buildTarefasCalSemana()">‹</button>
-        <div class="cal-month">${label}</div>
-        <button class="cal-nav" onclick="_tarefasCalWeekOffset++;buildTarefasCalSemana()">›</button>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;align-items:start;">`;
-      dias.forEach((dia,idx) => {
-        const ds = dia.toISOString().slice(0,10);
-        const isToday = ds === hojeStr;
-        const dayTarefas = _sortTipo(todas.filter(t => t.data === ds));
-        const cor = 'var(--gisella)';
-        html += `<div class="tarefas-cal-day" ondragover="event.preventDefault();this.style.background='var(--gisella-bg)';" ondragleave="this.style.background='var(--surface)';" ondrop="tarefaCalDrop(event,'${ds}')"
-          style="background:var(--surface);border-radius:10px;padding:8px;min-height:110px;border:1px solid ${isToday?'var(--gisella)':'var(--border)'};transition:background 0.1s;">
-          <div style="font-size:10px;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;">${dows[idx]}</div>
-          <div style="font-size:${isToday?'16px':'14px'};font-weight:${isToday?'700':'500'};color:${isToday?'var(--gisella)':'var(--text)'};margin-bottom:6px;">${dia.getDate()}</div>`;
-        if (dayTarefas.length===0) html += `<div style="font-size:10px;color:var(--text-soft);opacity:0.5;">—</div>`;
-        dayTarefas.forEach(t => {
-          const pr = (t.empresa||'').split(',')[0];
-          const c = pr==='editora'?'var(--editora)':pr==='leia'?'var(--leia)':'var(--gisella)';
-          html += _chipHtml(t, c);
-        });
-        html += '</div>';
-      });
-      html += '</div>';
-      wrap.innerHTML = html;
-    }
-  
-    if (wrapV) {
-      let hVG = `<div class="cal-header" style="padding:0 0 10px;border-bottom:none;">
-        <button class="cal-nav" onclick="_tarefasCalWeekOffset--;buildTarefasCalSemana()">‹</button>
-        <div class="cal-month">${label}</div>
-        <button class="cal-nav" onclick="_tarefasCalWeekOffset++;buildTarefasCalSemana()">›</button>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;align-items:start;">`;
-      dias.forEach((dia,idx) => {
-        const ds = dia.toISOString().slice(0,10);
-        const isToday = ds === hojeStr;
-        const dayTarefas = _sortTipo(todas.filter(t => t.data === ds));
-        hVG += `<div style="background:var(--surface);border-radius:10px;padding:8px;min-height:90px;border:1px solid ${isToday?'var(--gisella)':'var(--border)'};">
-          <div style="font-size:10px;color:var(--text-soft);text-transform:uppercase;margin-bottom:4px;">${dows[idx]}</div>
-          <div style="font-size:${isToday?'16px':'14px'};font-weight:${isToday?700:500};color:${isToday?'var(--gisella)':'var(--text)'};margin-bottom:6px;">${dia.getDate()}</div>`;
-        if (dayTarefas.length===0) hVG += `<div style="font-size:10px;color:var(--text-soft);opacity:0.5;">—</div>`;
-        dayTarefas.forEach(t => {
-          const pr = (t.empresa||'').split(',')[0];
-          const c = pr==='editora'?'var(--editora)':pr==='leia'?'var(--leia)':'var(--gisella)';
-          hVG += _chipHtml(t, c);
-        });
-        hVG += '</div>';
-      });
-      hVG += '</div>';
-      wrapV.innerHTML = hVG;
-    }
-  
-    [wrapC1,wrapC2,wrapC3].filter(Boolean).forEach(w => {
-      const key = w.id.replace('colab-cal-semana-','');
-      _buildColabCal(key);
-    });
-  }
-  
-  function tarefaCalDragStart(e, kind, a, b) {
-    _tarefaCalDragSrc = kind === 'etapa' ? { kind:'etapa', livroId:a, idx:b } : { kind:'evento', id:a };
-    e.dataTransfer.effectAllowed = 'move';
-  }
-  
-  function tarefaCalDrop(e, novaData) {
-    e.preventDefault();
-    e.currentTarget.style.background = 'var(--surface)';
-    if (!_tarefaCalDragSrc) return;
-    const src = _tarefaCalDragSrc;
-    _tarefaCalDragSrc = null;
-    if (src.kind === 'etapa') {
-      updateEtapaPrazoInline(src.livroId, src.idx, novaData);
-    } else {
-      const ev = events.find(x => x.id === src.id);
-      if (!ev) return;
-      ev.data = novaData;
-      save('gc-events', events);
-      buildTarefas();
-      buildColabTarefas();
-      buildPrioridades();
-      refreshCalendars();
-    }
-  }
-  
-  /* ── MOBILE NAV ── */
-  function toggleMobileNav() {
-    const sidebar = document.querySelector('.sidebar');
-    const overlay = document.getElementById('mobile-nav-overlay');
-    const isOpen = sidebar && sidebar.classList.contains('mobile-open');
-    if (sidebar) sidebar.classList.toggle('mobile-open');
-    if (overlay) overlay.style.display = isOpen ? 'none' : 'block';
-  }
-  function closeMobileNav() {
-    const sidebar = document.querySelector('.sidebar');
-    const overlay = document.getElementById('mobile-nav-overlay');
-    if (sidebar) sidebar.classList.remove('mobile-open');
-    if (overlay) overlay.style.display = 'none';
-  }
-  
-  function showPage(id, btn) {
-    closeMobileNav();
-    let el = document.getElementById('page-' + id);
-    // Fallback de segurança: se a página não existir (ex: link antigo/salvo
-    // para uma aba removida), cai na aba Tarefas em vez de deixar tela em branco.
-    if (!el) {
-      id = 'tarefas';
-      el = document.getElementById('page-tarefas');
-      btn = Array.from(document.querySelectorAll('.nav-item')).find(b => (b.getAttribute('onclick')||'').includes("'tarefas'"));
-    }
-    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-    if (el) el.classList.add('active');
-    if (btn) btn.classList.add('active');
-    localStorage.setItem('gc-current-page', id);
-    if (id === 'visao') { buildPrioridades(); window.scrollTo({top:0,behavior:'instant'}); }
-    if (id === 'tarefas') { buildTarefas(); }
-  
-  
-    if (id === 'colab-gisella') { loadGcal(); renderNotas('gisella'); setTimeout(() => renderNotas('gisella'), 300); setTimeout(countMentoriasSemana, 800); buildColabTarefas(); }
-    if (id === 'colab-milena')  { renderNotas('milena');  buildColabTarefas(); }
-    if (id === 'colab-luiggi') { renderNotas('luiggi'); buildColabTarefas(); }
-    if (id === 'conteudo-menu') { buildConteudoCalSemana(); }
-    if (id === 'eventos') { buildCalendar('cal-eventos', getFilter('eventos')); buildEventosList(); }
-    if (id === 'links') { renderLinks(); }
-  }
-  
-  function showPageSection(pageId, sectionId) {
-    const navBtn = Array.from(document.querySelectorAll('.nav-item')).find(b => (b.getAttribute('onclick')||'').includes("'"+pageId+"'"));
-    showPage(pageId, navBtn);
-    setTimeout(() => {
-      const el = document.getElementById(sectionId);
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 80);
-  }
-  
-  function closeModal(id) {
-    document.getElementById(id).classList.remove('open');
-  }
-  
-  function updateQaFields() {
-    const tipo = document.getElementById('qa-tipo').value;
-    if (tipo === 'livro' && !window._editingEtapa) {
-      const empresa = ['editora','leia','gisella'].find(key => document.getElementById('qa-emp-'+key)?.checked) || 'editora';
-      document.getElementById('qa-tipo').value = 'tarefa';
-      closeModal('modal-quickadd');
-      setTimeout(() => openAddLivro(empresa), 60);
-      return;
-    }
-    ['tarefa','evento','projeto','conteudo','livro'].forEach(t => {
-      const el = document.getElementById('qa-fields-' + t);
-      if (el) el.style.display = t === tipo ? 'block' : 'none';
-    });
-    if (tipo === 'conteudo') updateQaConteudoRede();
-    if (tipo === 'tarefa') updateQaRecorrenciaFields();
-  }
+}
 
-  function updateQaRecorrenciaFields() {
-    const kind = getQaVal('qa-recorrencia') || 'none';
-    const weekdays = document.getElementById('qa-recorrencia-weekdays');
-    const mentoring = document.getElementById('qa-recorrencia-mentoring');
-    if (weekdays) weekdays.style.display = kind === 'weekdays' ? 'block' : 'none';
-    if (mentoring) mentoring.style.display = kind === 'googleMentoring' ? 'block' : 'none';
-  }
-  
-  function updateQaConteudoRede() {
-    const rede = document.getElementById('qa-c-rede')?.value;
-    const isEmanda = rede === 'emanda';
-    const organico = document.getElementById('qa-c-organico-wrap');
-    const tipoWrap = document.getElementById('qa-c-tipo-wrap');
-    const copyWrap = document.getElementById('qa-c-copy-wrap');
-    if (organico) organico.style.display = isEmanda ? 'none' : '';
-    if (tipoWrap) tipoWrap.style.display = isEmanda ? 'none' : '';
-    if (copyWrap) copyWrap.style.display = isEmanda ? 'none' : '';
-    if (isEmanda) {
-      const tipoSel = document.getElementById('qa-c-tipo');
-      if (tipoSel) tipoSel.value = 'emailmkt';
-    }
-  }
-  
-  function updateMcRede() {
-    const rede = document.getElementById('mc-rede')?.value;
-    const isEmanda = rede === 'emanda';
-    const organico = document.getElementById('mc-organico-wrap');
-    const tipoWrap = document.getElementById('mc-tipo-wrap');
-    const copyWrap = document.getElementById('mc-copy-wrap');
-    if (organico) organico.style.display = isEmanda ? 'none' : '';
-    if (tipoWrap) tipoWrap.style.display = isEmanda ? 'none' : '';
-    if (copyWrap) copyWrap.style.display = isEmanda ? 'none' : '';
-    if (isEmanda) {
-      const tipoSel = document.getElementById('mc-tipo');
-      if (tipoSel) tipoSel.value = 'emailmkt';
-    }
-  }
-  
-  function updateDocsLink() {
-    const val = document.getElementById('mm-docs').value.trim();
-    const link = document.getElementById('mm-docs-open');
-    if (link) { link.href = val; link.style.display = val ? 'inline' : 'none'; }
-  }
-  function openModal(id) { document.getElementById(id).classList.add('open'); }
-  
-  // Modal não fecha ao clicar fora (mantém informações)
-  document.querySelectorAll('.modal-overlay').forEach(m => {
-    m.addEventListener('click', e => {
-      // Não fecha ao clicar fora para não perder dados
-    });
-  });
-  
-  /* ── CHECKLIST ── */
-  function toggleCheck(cb) {
-    const label = cb.closest('.check-item');
-    cb.checked ? label.classList.add('done') : label.classList.remove('done');
-    autoSave();
-  }
-  function addCheckItem(listId) {
-    const list = document.getElementById(listId);
-    const label = document.createElement('label');
-    label.className = 'check-item';
-    label.innerHTML = '<input type="checkbox" onchange="toggleCheck(this)"> <span contenteditable="true">Nova tarefa</span>';
-    list.appendChild(label);
-    label.querySelector('span').focus();
-  }
-  
-  function addAlert() {
-    const div = document.createElement('div');
-    div.className = 'alert-item normal';
-    div.innerHTML = `<div class="alert-left"><div class="alert-empresa" contenteditable="true">Empresa</div><div class="alert-title" contenteditable="true">Descreva o alerta</div></div><span class="alert-prazo" contenteditable="true">prazo</span><span class="badge b-gray">novo</span>`;
-    document.getElementById('alerts-list').appendChild(div);
-    div.querySelector('.alert-title').focus();
-  }
-  
-  /* ── CALENDAR ── */
-  const CAL_STATE = {};
-  const MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
-  const DOWS = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
-  
-  function buildCalendar(id, filter) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    if (!CAL_STATE[id]) { const n = new Date(); CAL_STATE[id] = {y:n.getFullYear(), m:n.getMonth(), filter}; }
-    else { CAL_STATE[id].filter = filter; }
-    const {y, m} = CAL_STATE[id];
-    const today = new Date(); today.setHours(0,0,0,0);
-    const first = new Date(y, m, 1).getDay();
-    const days = new Date(y, m+1, 0).getDate();
-    const prevDays = new Date(y, m, 0).getDate();
-  
-    // Eventos do Google Calendar em memória (não salvos)
-    const gcalEventsNative = [
-      ...(window.gcalEventsCache || []).map(ev => ({
-        id: 'gcal-' + ev.start + '-' + ev.title.slice(0,10).replace(/\s/g,''),
-        titulo: ev.title,
-        empresa: 'gisella',
-        tipo: 'evento',
-        data: ev.start,
-        dataFim: ev.end,
-        startTime: ev.startTime,
-        gcal: true,
-        link: ev.link,
-        _sharedCal: ev._sharedCal || null,
-      })),
-      ...(gcalLeiaCache || []).map(ev => ({
-        id: 'gcal-leia-' + ev.start + '-' + (ev.title||'x').slice(0,10).replace(/\s/g,''),
-        titulo: ev.title || ev.summary || '(sem título)',
-        empresa: 'leia',
-        tipo: 'evento',
-        data: ev.start,
-        dataFim: ev.end || ev.start,
-        gcal: true,
-        startTime: ev.startTime,
-        endTime: ev.endTime,
-      })),
-    ];
-  
-    let html = `<div class="cal-header"><button class="cal-nav" onclick="calNav('${id}',-1)">‹</button><div class="cal-month">${MESES[m]} ${y}</div><button class="cal-nav" onclick="calNav('${id}',1)">›</button></div><div class="cal-grid">`;
-    DOWS.forEach(d => html += `<div class="cal-dow">${d}</div>`);
-    for (let i = first-1; i >= 0; i--) html += `<div class="cal-day other-month"><div class="cal-num">${prevDays-i}</div></div>`;
-    for (let d = 1; d <= days; d++) {
-      const ds = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-      const isToday = new Date(y,m,d).getTime() === today.getTime();
-      const feriadoNome = isFeriado(ds) ? getFeriadoNome(ds) : null;
-      const showConteudos = (id === 'cal-conteudo' || id === 'cal-visao');
-      const showEventos = (id !== 'cal-conteudo');
-      const _calFilter = CAL_STATE[id] ? CAL_STATE[id].filter : filter;
-      const dayConteudos = showConteudos
-        ? conteudos.filter(c => !isConteudoFinalizado(c) && c.dataPost === ds && (_calFilter === 'all' || (c.empresa||'').split(',').includes(_calFilter)))
-        : [];
-      const allEventsRaw = showEventos ? [...events, ...gcalEventsNative] : [];
-      // Deduplicar por id (gcal ids são strings como 'gcal-...')
-      const seenIds = new Set();
-      const allEvents = allEventsRaw.filter(e => {
-        const k = String(e.id);
-        if (seenIds.has(k)) return false;
-        seenIds.add(k);
-        return true;
-      });
-      const _evFilter = CAL_STATE[id] ? CAL_STATE[id].filter : filter;
-      const dayEvs = showEventos ? allEvents.filter(e => {
-        if (e.tipo !== 'evento') return false;          // só eventos, nunca tarefas/projetos/etc
-        const eStart = e.data || '';
-        const eEnd = e.dataFim || e.data || '';
-        if (!eStart) return false;
-        if (!(ds >= eStart && ds <= eEnd)) return false;
-        if (id === 'cal-eventos' && _evFilter !== 'all' && !(e.empresa||'').split(',').includes(_evFilter)) return false;
-        if (id !== 'cal-visao' && id !== 'cal-eventos' && filter !== 'all' && !(e.empresa||'').split(',').includes(filter)) return false;
-        return true;
-      }) : [];
-      let evHtml = '';
-      if (feriadoNome) evHtml += `<div class="cal-event" style="background:#FEF3DA;color:#7A5200;font-size:9px;" title="${feriadoNome}">🏖 ${feriadoNome.split(' ')[0]}</div>`;
-      const contColors = {editora:{bg:'rgba(120,20,20,0.12)',color:'#7b1414'},leia:{bg:'rgba(60,10,80,0.12)',color:'#3c0a50'},gisella:{bg:'rgba(100,100,100,0.15)',color:'#111111'}};
-      const _maxItems = (id === 'cal-visao') ? 99 : 3;
-      evHtml += dayConteudos.slice(0,_maxItems).map(c => {
-        const cc = contColors[c.empresa||'editora']||contColors.editora;
-        return `<div class="cal-event" style="background:${cc.bg};color:${cc.color};cursor:pointer;font-style:italic;" onclick="event.stopPropagation();openConteudo(${c.id})">✏ ${c.nome}</div>`;
-      }).join('');
-      evHtml += dayEvs.slice(0,_maxItems).map(e => {
-        if (e._gcal || e.gcal) {
-          const time = e.startTime ? `${e.startTime} ` : '';
-          let gcalBg, gcalColor, gcalBorder;
-          if (e._sharedCal) {
-            gcalBg = e._sharedCal.bg; gcalColor = e._sharedCal.color; gcalBorder = e._sharedCal.color;
-          } else if (e.empresa === 'leia') {
-            gcalBg = 'var(--leia-bg)'; gcalColor = 'var(--leia)'; gcalBorder = 'var(--leia)';
-          } else {
-            gcalBg = 'var(--gisella-bg)'; gcalColor = 'var(--gisella)'; gcalBorder = 'var(--gisella)';
-          }
-          const calLabel = e._sharedCal ? `[${e._sharedCal.label}] ` : '';
-          return `<div class="cal-event" style="background:${gcalBg};color:${gcalColor};border-left:2px solid ${gcalBorder};cursor:default;" title="${e.titulo}${e._sharedCal?' ['+e._sharedCal.label+']':''} (Google Calendar)">${time}${calLabel}${e.titulo}</div>`;
-        }
-        return `<div class="cal-event ev-${e.empresa}" onclick="event.stopPropagation();openEditEvent(${e.id})" style="cursor:pointer;">${e.titulo}</div>`;
-      }).join('');
-      const total = dayConteudos.length + dayEvs.length;
-      // Collect ALL events for this day for modal
-      const allDayEvs = [...dayConteudos.map(c=>({type:'conteudo',c})), ...dayEvs.map(e=>({type:'evento',e}))];
-      const moreCount = (id === 'cal-visao') ? 0 : allDayEvs.length - 3;
-      // Store day data in global cache keyed by calId+date
-      if (!window._calDayCache) window._calDayCache = {};
-      window._calDayCache[id+'_'+ds] = allDayEvs;
-      if (moreCount > 0) evHtml += `<div onclick="event.stopPropagation();openDayModalFromCache('${id}','${ds}')" style="font-size:10px;color:var(--text-soft);padding:1px 4px;cursor:pointer;border-radius:4px;background:var(--bg);">+${moreCount} mais</div>`;
-      html += `<div class="cal-day${isToday?' today':''}${feriadoNome?' feriado-day':''}" onclick="quickAddDate('${ds}')" title="${feriadoNome||''}"><div class="cal-num">${d}</div>${evHtml}</div>`;
-    }
-    const rem = (first + days) % 7;
-    if (rem > 0) for (let i = 1; i <= 7-rem; i++) html += `<div class="cal-day other-month"><div class="cal-num">${i}</div></div>`;
-    html += '</div>';
-    const sharedLegend = GCAL_SHARED_CALS.map(cal =>
-      `<div class="cal-legend-item"><div class="cal-legend-dot" style="background:${cal.color};"></div>${cal.label}</div>`
-    ).join('');
-    if (filter === 'all') html += `<div class="cal-legend"><div class="cal-legend-item"><div class="cal-legend-dot" style="background:var(--editora);"></div>Editora</div><div class="cal-legend-item"><div class="cal-legend-dot" style="background:var(--leia);"></div>Léia</div><div class="cal-legend-item"><div class="cal-legend-dot" style="background:var(--gisella);"></div>GC</div><div class="cal-legend-item"><div class="cal-legend-dot" style="background:var(--gisella);opacity:0.5;border:1px solid var(--gisella);"></div>Google Cal</div>${sharedLegend}</div>`;
-    el.innerHTML = html;
-  }
-  
-  function calNav(id, dir) {
-    CAL_STATE[id].m += dir;
-    if (CAL_STATE[id].m > 11) { CAL_STATE[id].m = 0; CAL_STATE[id].y++; }
-    if (CAL_STATE[id].m < 0) { CAL_STATE[id].m = 11; CAL_STATE[id].y--; }
-    buildCalendar(id, CAL_STATE[id].filter);
-    if (id === 'cal-eventos') buildEventosList();
-  }
-  
-  function initCalendars() {
-    buildCalendar('cal-visao','all');
-    buildCalendar('cal-editora','editora');
-    buildCalendar('cal-leia','leia');
-    buildCalendar('cal-gisella','gisella');
-    buildCalendar('cal-eventos','all');
-    buildCalendar('cal-conteudo','all');
-  }
-  function refreshCalendars() { Object.keys(CAL_STATE).forEach(id => buildCalendar(id, CAL_STATE[id].filter)); }
-  
-  /* ── QUICK ADD ── */
-  function quickAddDate(ds) { openQuickAdd(); document.getElementById('qa-prazo').value = ds; }
-  
-  function fmtDate(val) {
-    if (!val) return '—';
-    const [y,m,d] = val.split('-').map(Number);
-    const ms = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
-    const today = new Date(); today.setHours(0,0,0,0);
-    const diff = Math.round((new Date(y,m-1,d) - today) / 86400000);
-    if (diff === 0) return 'hoje'; if (diff === 1) return 'amanhã';
-    if (diff < 0) return `${d} ${ms[m-1]}`;
-    if (diff <= 7) return `${diff} dias`;
-    return `${d} ${ms[m-1]}`;
-  }
-  
-  function fmtDateTarefa(val) {
-    if (!val) return '—';
-    const [y,m,d] = val.split('-').map(Number);
-    const ms = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
-    const today = new Date(); today.setHours(0,0,0,0);
-    const diff = Math.round((new Date(y,m-1,d) - today) / 86400000);
-    if (diff === 0) return 'hoje'; if (diff === 1) return 'amanhã';
-    if (diff < 0) return `${d} ${ms[m-1]} (atrasado)`;
-    if (diff <= 7) return `${diff} dias`;
-    return `${d} ${ms[m-1]}`;
-  }
-  
-  function automaticTaskOwner(title, fallback = '') {
-    const normalized = String(title || '')
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-      .trim().toLowerCase();
-    if (normalized.includes('devolutiva')) return 'Milena';
-    if (/ajustes? no sistema/.test(normalized)) return 'Luiggi';
-    return fallback;
-  }
-  
-  // Corrige também registros antigos. Assim, ao abrir o dashboard, tarefas de
-  // devolutiva passam para a agenda da Milena e ajustes do sistema para Luiggi.
-  function applyAutomaticTaskOwners() {
-    let eventsChanged = false;
-    events.forEach(event => {
-      if (event.tipo !== 'tarefa') return;
-      const owner = automaticTaskOwner(event.titulo, event.responsavel || '');
-      if (owner !== (event.responsavel || '')) {
-        event.responsavel = owner;
-        eventsChanged = true;
-      }
-    });
-    if (eventsChanged) save('gc-events', events);
-  
-    let booksChanged = false;
-    livros.forEach(book => (book.etapas || []).forEach(stage => {
-      const owner = automaticTaskOwner(stage.nome, stage.resp || '');
-      if (owner !== (stage.resp || '')) {
-        stage.resp = owner;
-        booksChanged = true;
-      }
-    }));
-    if (booksChanged) save('gc-livros', livros);
-  
-    let projectsChanged = false;
-    projetos.forEach(project => (project.tarefas || []).forEach(task => {
-      const owner = automaticTaskOwner(task.nome, task.resp || '');
-      if (owner !== (task.resp || '')) {
-        task.resp = owner;
-        projectsChanged = true;
-      }
-    }));
-    if (projectsChanged) save('gc-projetos', projetos);
-  }
-  
-  let editingEventId = null;
-  
-  function openQuickAdd() {
-    editingEventId = null;
-    window._editingEtapa = null;
-    document.getElementById('qa-modal-title').textContent = 'Adicionar item';
-    const delBtnQa = document.getElementById('qa-delete-btn');
-    if (delBtnQa) delBtnQa.style.display = 'none';
-    document.getElementById('qa-submit-btn').textContent = 'Adicionar';
-    window._addingToProjetoId = null;
-    window._addingToMenteeId = null;
-    document.getElementById('qa-titulo').value = '';
-    document.getElementById('qa-titulo').placeholder = 'Descreva...';
-    setEmpresasChecked('qa-emp-', 'editora');
-    // Auto-detect tipo from current active page
-    const activePage = document.querySelector('.page.active');
-    const pageId = activePage ? activePage.id : '';
-    let defaultTipo = 'tarefa';
-    if (pageId === 'page-tarefas') defaultTipo = 'tarefa';
-    else if (pageId === 'page-conteudo-menu') defaultTipo = 'conteudo';
-    else if (pageId === 'page-eventos') defaultTipo = 'evento';
-    else if (pageId === 'page-livros') defaultTipo = 'livro';
-    else if (pageId === 'page-projetos') defaultTipo = 'projeto';
-    document.getElementById('qa-tipo').value = defaultTipo;
-    const urgenteEl = document.getElementById('qa-urgente');
-    if (urgenteEl) urgenteEl.checked = false;
-    const recurrenceEl = document.getElementById('qa-recorrencia');
-    if (recurrenceEl) recurrenceEl.value = 'none';
-    document.querySelectorAll('.qa-recorrencia-day').forEach(day => { day.checked = false; });
-    const mentoringOffset = document.getElementById('qa-mentoring-offset');
-    if (mentoringOffset) mentoringOffset.value = '1';
-    // Reset all fields
-    ['qa-l-autor','qa-l-ilustrador','qa-l-publico','qa-l-faixa','qa-l-paginas',
-     'qa-l-tiragem','qa-l-isbn','qa-l-formato','qa-l-colecao','qa-l-editora','qa-l-sinopse'].forEach(id => {
-      const el = document.getElementById(id); if(el) el.value = '';
-    });
-    ['editora','leia','gisella'].forEach(e => { const cb = document.getElementById('qa-l-emp-'+e); if(cb) cb.checked = false; });
-    const lcb = document.getElementById('qa-l-lancamento'); if(lcb) lcb.value = '';
-    ['qa-prazo','qa-evento-inicio','qa-hora-inicio','qa-data-fim','qa-hora-fim',
-     'qa-proj-inicio','qa-proj-fim','qa-c-dataprod','qa-c-datapost','qa-c-hora','qa-c-link'].forEach(id => {
-      const el = document.getElementById(id); if(el) el.value = '';
-    });
-    ['qa-observacao','qa-observacao-evento','qa-observacao-projeto','qa-observacao-conteudo',
-     'qa-c-copy','qa-c-legenda'].forEach(id => {
-      const el = document.getElementById(id); if(el) el.value = '';
-    });
-    ['qa-responsavel','qa-responsavel-evento','qa-responsavel-projeto','qa-responsavel-conteudo'].forEach(id => {
-      const el = document.getElementById(id); if(el) el.value = '';
-    });
-    // Auto-fill responsavel com o usuário logado
-    const _cuKey = window._currentUser || localStorage.getItem('gc-session-user') || '';
-    const _cuName = (LOGIN_USERS[_cuKey] && LOGIN_USERS[_cuKey].name) || window._currentUserName || '';
-    if (_cuName) {
-      ['qa-responsavel','qa-responsavel-evento','qa-responsavel-projeto','qa-responsavel-conteudo'].forEach(id => {
-        const el = document.getElementById(id); if(el) el.value = _cuName;
-      });
-    }
-    updateQaFields();
-    // Esconder comentários ao criar nova tarefa
-    const comWrapNew = document.getElementById('qa-comentarios-wrap');
-    if (comWrapNew) comWrapNew.style.display = 'none';
-    // Populate livro tipo-autoria selector (if livro tab is opened)
-    const tipoAutoriaSel2 = document.getElementById('nl-tipo-autoria');
-    if (tipoAutoriaSel2 && mentees && mentees.length > 0 && tipoAutoriaSel2.options.length <= 1) {
-      const ms2 = [...mentees].sort((a,b)=>a.name.localeCompare(b.name,'pt-BR'));
-      tipoAutoriaSel2.innerHTML = '<option value="">Não se aplica</option>' +
-        ms2.map(m=>`<option value="${m.id}">${m.name}</option>`).join('');
-    }
-    openModal('modal-quickadd');
-    setTimeout(() => document.getElementById('qa-titulo').focus(), 50);
-  }
-  
-  function openEditEvent(id) {
-    const ev = events.find(x => x.id === id);
-    if (!ev) return;
-    editingEventId = id;
-    document.getElementById('qa-modal-title').textContent = 'Editar item';
-    document.getElementById('qa-submit-btn').textContent = 'Salvar';
-    const delBtn = document.getElementById('qa-delete-btn');
-    if (delBtn) delBtn.style.display = 'inline-block';
-    document.getElementById('qa-titulo').value = ev.titulo || '';
-    setEmpresasChecked('qa-emp-', ev.empresa || 'editora');
-    document.getElementById('qa-tipo').value = ev.tipo || 'evento';
-    document.getElementById('qa-prazo').value = ev.data || '';
-    document.getElementById('qa-hora-inicio').value = ev.horaInicio || '';
-    document.getElementById('qa-data-fim').value = ev.dataFim || '';
-    document.getElementById('qa-hora-fim').value = ev.horaFim || '';
-    document.getElementById('qa-responsavel').value = ev.responsavel || '';
-    document.getElementById('qa-observacao').value = ev.observacao || '';
-    const urgenteEdit = document.getElementById('qa-urgente');
-    if (urgenteEdit) urgenteEdit.checked = !!ev.urgente;
-    const recurrenceEl = document.getElementById('qa-recorrencia');
-    if (recurrenceEl) recurrenceEl.value = 'none';
-    updateQaFields();
-    // Mostrar e popular comentários
-    const comWrap = document.getElementById('qa-comentarios-wrap');
-    if (comWrap) {
-      comWrap.style.display = 'block';
-      renderComentariosTarefa(ev);
-      document.getElementById('qa-comentario-texto').value = '';
-    }
-    openModal('modal-quickadd');
-    setTimeout(() => document.getElementById('qa-titulo').focus(), 50);
-  }
-  
-  /* ── COMENTÁRIOS DE TAREFA ── */
-  function renderComentariosTarefa(ev) {
-    const lista = document.getElementById('qa-comentarios-lista');
-    if (!lista) return;
-    const comentarios = ev.comentarios || [];
-    if (comentarios.length === 0) {
-      lista.innerHTML = '<div style="font-size:12px;color:var(--text-soft);text-align:center;padding:8px 0;">Nenhum comentário ainda.</div>';
-      return;
-    }
-    const cores = { Gisella: 'var(--gisella)', Milena: 'var(--leia)', Luiggi: 'var(--editora)' };
-    lista.innerHTML = comentarios.map((c, i) => `
-      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-          <span style="font-size:11px;font-weight:600;color:${cores[c.autor]||'var(--text-mid)'};">${c.autor}</span>
-          <div style="display:flex;align-items:center;gap:8px;">
-            <span style="font-size:10px;color:var(--text-soft);">${c.data}</span>
-            <button onclick="deleteComentarioTarefa(${i})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:0;line-height:1;" title="Excluir">x</button>
-          </div>
-        </div>
-        <div style="font-size:13px;color:var(--text);white-space:pre-wrap;line-height:1.5;">${c.texto}</div>
-      </div>`).join('');
-    lista.scrollTop = lista.scrollHeight;
-  }
-  
-  function addComentarioTarefa() {
-    if (!editingEventId) return;
-    const ev = events.find(x => x.id === editingEventId);
-    if (!ev) return;
-    const texto = (document.getElementById('qa-comentario-texto').value || '').trim();
-    if (!texto) { document.getElementById('qa-comentario-texto').focus(); return; }
-    const autor = document.getElementById('qa-comentario-autor').value || 'Gisella';
-    const agora = new Date();
-    const data = agora.getDate().toString().padStart(2,'0') + '/' + (agora.getMonth()+1).toString().padStart(2,'0') + ' ' + agora.getHours().toString().padStart(2,'0') + ':' + agora.getMinutes().toString().padStart(2,'0');
-    if (!ev.comentarios) ev.comentarios = [];
-    ev.comentarios.push({ autor, texto, data });
-    save('gc-events', events);
-    document.getElementById('qa-comentario-texto').value = '';
-    renderComentariosTarefa(ev);
-  }
-  
-  function deleteComentarioTarefa(idx) {
-    if (!editingEventId) return;
-    const ev = events.find(x => x.id === editingEventId);
-    if (!ev || !ev.comentarios) return;
-    ev.comentarios.splice(idx, 1);
-    save('gc-events', events);
-    renderComentariosTarefa(ev);
-  }
-  
-  let recurringDeleteEventId = null;
+// App State
+let tasks = [];
+let allActiveTasks = [];
+let categories = [];
+let currentFilter = "all";
+let isEditMode = false;
+let isHistoryMode = false;
+let currentTheme = "default";
 
-  function deleteEventDirect(id) {
-    const ev = events.find(x => x.id === id);
-    if (!ev) return;
-    if (ev.recurrenceTemplateId || ev.recurKey) {
-      recurringDeleteEventId = id;
-      openModal('modal-excluir-recorrencia');
-      return;
-    }
-    deleteEventNow(id);
-  }
+// Selected date format YYYY-MM-DD
+let selectedDate = "";
+let currentCalendarMonth = new Date();
+let currentTrainingCalendarMonth = new Date();
+// A data escolhida dentro do calendário de treinos é independente da data
+// exibida no checklist. Assim, uma atualização das fotos não a joga para hoje.
+let currentTrainingCalendarSelectedDate = "";
+let currentTrainingCalendarRecords = [];
+let trainingThumbnailCacheJob = null;
 
-  function cancelRecurringDeletion() {
-    recurringDeleteEventId = null;
-    closeModal('modal-excluir-recorrencia');
-  }
+// Async transaction locks (prevents double submits)
+let pendingDeletes = new Set();
+let pendingToggles = new Set();
+const immediateCompletionSyncChains = new Map();
+let pendingCompletionSessionRecovery = null;
 
-  function deleteOnlyRecurringOccurrence() {
-    const ev = events.find(x => x.id === recurringDeleteEventId);
-    if (!ev) return cancelRecurringDeletion();
-    const template = recurringTasks.find(item => item.id === ev.recurrenceTemplateId);
-    if (template && ev.recurrenceKey) {
-      template.excludedOccurrenceKeys = [...new Set([...(template.excludedOccurrenceKeys || []), ev.recurrenceKey])];
-      save('gc-recurring-tasks', recurringTasks);
-    } else if (ev.recurKey) {
-      const exclusions = getLegacyRecurringSet('gc-legacy-recur-exclusions');
-      exclusions.add(`${ev.recurKey}:${ev.data}`);
-      saveLegacyRecurringSet('gc-legacy-recur-exclusions', exclusions);
-    }
-    cancelRecurringDeletion();
-    deleteEventNow(ev.id);
-  }
+// Authentication State
+let currentUser = null;
+let currentUsername = "";
+const collaborationIdentityByEmail = new Map();
+const collaborationAvatarByEmail = new Map();
+const collaborationIdentityByUserId = new Map();
+const collaborationAvatarByUserId = new Map();
+const persistentAvatarByUrl = new Map();
+const pendingAvatarCacheUrls = new Set();
+let identifierSetupResolver = null;
 
-  function deleteAllRecurringOccurrences() {
-    const ev = events.find(x => x.id === recurringDeleteEventId);
-    if (!ev) return cancelRecurringDeletion();
-    if (!ev.recurrenceTemplateId && ev.recurKey) {
-      const disabled = getLegacyRecurringSet('gc-legacy-recur-disabled');
-      disabled.add(ev.recurKey);
-      saveLegacyRecurringSet('gc-legacy-recur-disabled', disabled);
-      const removedEvents = events.filter(item => item.recurKey === ev.recurKey);
-      events = events.filter(item => item.recurKey !== ev.recurKey);
-      cancelRecurringDeletion();
-      save('gc-events', events);
-      refreshCalendars(); buildCalendar('cal-eventos', 'all');
-      buildTarefas(); buildColabTarefas(); buildPrioridades();
-      pushUndo(ev.titulo || 'Tarefas recorrentes', () => {
-        disabled.delete(ev.recurKey);
-        saveLegacyRecurringSet('gc-legacy-recur-disabled', disabled);
-        events = [...events, ...removedEvents];
-        save('gc-events', events);
-        buildTarefas(); buildColabTarefas(); buildPrioridades();
-      });
-      return;
-    }
-    const templateId = ev.recurrenceTemplateId;
-    const removedTemplate = recurringTasks.find(item => item.id === templateId);
-    const removedEvents = events.filter(item => item.recurrenceTemplateId === templateId);
-    recurringTasks = recurringTasks.filter(item => item.id !== templateId);
-    events = events.filter(item => item.recurrenceTemplateId !== templateId);
-    cancelRecurringDeletion();
-    save('gc-recurring-tasks', recurringTasks);
-    save('gc-events', events);
-    refreshCalendars(); buildCalendar('cal-eventos', 'all');
-    buildTarefas(); buildColabTarefas(); buildPrioridades(); renderProjetos();
-    pushUndo(ev.titulo || 'Tarefas recorrentes', () => {
-      if (removedTemplate) recurringTasks.push(removedTemplate);
-      events = [...events, ...removedEvents];
-      save('gc-recurring-tasks', recurringTasks);
-      save('gc-events', events);
-      buildTarefas(); buildColabTarefas(); buildPrioridades();
-    });
-  }
+function getCollaborationIdentityCacheKey(userId = currentUser?.id || localPrefs.getItem("checklist_last_user_id")) {
+    return userId ? `checklist_identity_cache_${userId}` : "";
+}
 
-  function deleteEventNow(id) {
-    const ev = events.find(x => x.id === id);
-    if (!ev) return;
-    const snapEv = [...events];
-    const snapPr = projetos.map(p => ({...p, tarefas: [...(p.tarefas||[])]}));
-    const snapMentees = mentees.map(m => ({...m, tasks: [...(m.tasks||[])]}));
-  
-    // If this is a gcal auto-task, blacklist its key so it's never recreated
-    if (ev.gcalKey) addToGcalBlacklist(ev.gcalKey);
-  
-    // Remove from mentee tasks
-    mentees.forEach(m => {
-      if (m.tasks) m.tasks = m.tasks.filter(t => t.id !== id.toString());
-    });
-    events = events.filter(x => x.id !== id);
-    projetos.forEach(p => { if (p.tarefas) p.tarefas = p.tarefas.filter(t => t.eventId !== id); });
-  
-    // Salvar localmente imediatamente — localStorage é a fonte da verdade
-    localStorage.setItem('gc-events',   JSON.stringify(events));
-    localStorage.setItem('gc-projetos', JSON.stringify(projetos));
-    localStorage.setItem('gc-mentees',  JSON.stringify(mentees));
-    localStorage.setItem('gc-mentees-marco0', JSON.stringify(menteesMarco0));
-    _lastLocalSave['gc-events'] = _lastLocalSave['gc-projetos'] = _lastLocalSave['gc-mentees'] = Date.now();
-  
-    // Atualizar UI imediatamente
-    buildTarefas(); buildColabTarefas(); renderProjetos(); buildHomeCards(); buildPrioridades();
-    ['editora','leia','gisella'].forEach(emp => { if (document.getElementById('tarefas-empresa-'+emp)) buildTarefasEmpresa(emp); });
-  
-    // Undo disponível imediatamente
-    pushUndo(ev.titulo || 'Tarefa', () => {
-      events = snapEv; projetos = snapPr; mentees = snapMentees;
-      localStorage.setItem('gc-events',   JSON.stringify(events));
-      localStorage.setItem('gc-projetos', JSON.stringify(projetos));
-      localStorage.setItem('gc-mentees',  JSON.stringify(mentees));
-      if (window.fbSave) {
-        window.fbSave('gc-events',   events);
-        window.fbSave('gc-projetos', projetos);
-        window.fbSave('gc-mentees',  mentees);
-      }
-      buildTarefas(); buildColabTarefas(); renderProjetos(); buildHomeCards();
-      ['editora','leia','gisella'].forEach(emp => { if (document.getElementById('tarefas-empresa-'+emp)) buildTarefasEmpresa(emp); });
-    });
-  
-    // Firebase em background — quando confirmar, atualiza _fbts_ com o ts real
-    if (window.fbSave) {
-      Promise.all([
-        window.fbSave('gc-events',   events),
-        window.fbSave('gc-projetos', projetos),
-        window.fbSave('gc-mentees',  mentees),
-      ]).catch(e => console.warn('fbSave delete error:', e));
-      // fbSave já atualiza _fbts_ após confirmar — nada mais necessário
-    }
-  }
-  
-  function deleteCurrentEvent() {
-    if (!editingEventId) return;
-    const id = editingEventId;
-    closeModal('modal-quickadd');
-    editingEventId = null;
-    deleteEventDirect(id);
-  }
-  
-  function getQaVal(id) { const el = document.getElementById(id); return el ? el.value : ''; }
-  
-  async function submitQuickAdd() {
-    const empresa = getEmpresaStr('qa-emp-', 'editora');
-    const tipo = getQaVal('qa-tipo');
-    const titulo = getQaVal('qa-titulo').trim();
-    if (!titulo) { document.getElementById('qa-titulo').focus(); return; }
-  
-    // Se estamos editando uma etapa de livro
-    if (window._editingEtapa) {
-      const {livroId, idx} = window._editingEtapa;
-      const l = livros.find(x => x.id === livroId);
-      if (l && l.etapas[idx]) {
-        const previousPrazo = l.etapas[idx].prazo || '';
-        const nextPrazo = getQaVal('qa-prazo');
-        l.etapas[idx].nome = titulo;
-        l.etapas[idx].resp = getQaVal('qa-responsavel');
-        if (previousPrazo !== nextPrazo) await updateEtapaPrazoInline(livroId, idx, nextPrazo);
-        else {
-          save('gc-livros', livros);
-          renderLivros();
-          buildTarefas();
-        }
-        buildColabTarefas();
-      }
-      window._editingEtapa = null;
-      closeModal('modal-quickadd');
-      return;
-    }
-  
-    if (tipo === 'projeto') {
-      const proj = {
-        id: Date.now(), tarefas: [], expandido: true, nome: titulo, empresa,
-        status: getQaVal('qa-proj-status')||'pendente',
-        responsavel: getQaVal('qa-responsavel-projeto'),
-        inicio: getQaVal('qa-proj-inicio'), fim: getQaVal('qa-proj-fim'),
-        observacao: getQaVal('qa-observacao-projeto'),
-      };
-      if (editingEventId) {
-        const i = projetos.findIndex(x => x.id === editingEventId);
-        if (i > -1) projetos[i] = {...projetos[i], ...proj};
-        editingEventId = null;
-      } else { projetos.push(proj); }
-      save('gc-projetos', projetos); renderProjetos();
-      closeModal('modal-quickadd'); return;
-    }
-  
-    if (tipo === 'livro') {
-      const emps = ['editora','leia','gisella'].filter(e => {
-        const cb = document.getElementById('qa-l-emp-'+e); return cb && cb.checked;
-      });
-      const empresaStr = emps.length > 0 ? emps.join(',') : getQaVal('qa-empresa');
-      const tipopubEl = document.querySelector('input[name="qa-l-tipopub"]:checked');
-      const tipopub = tipopubEl ? tipopubEl.value : 'lancamento';
-      const etapasUsar = tipopub === 'reimpressao' ? ETAPAS_REIMP : ETAPAS_DEFAULT;
-      const lancamentoDate = getQaVal('qa-l-lancamento');
-      const livro = {
-        id: Date.now(), titulo, empresa: empresaStr, expandido: true, tipopub,
-        info: {
-          autor: getQaVal('qa-l-autor'), ilustrador: getQaVal('qa-l-ilustrador'),
-          publico: getQaVal('qa-l-publico'), faixa: getQaVal('qa-l-faixa'),
-          paginas: getQaVal('qa-l-paginas'), tiragem: getQaVal('qa-l-tiragem'),
-          isbn: getQaVal('qa-l-isbn'), formato: getQaVal('qa-l-formato'),
-          colecao: getQaVal('qa-l-colecao'), editora: getQaVal('qa-l-editora'),
-          lancamento: lancamentoDate, sinopse: getQaVal('qa-l-sinopse'),
-          os: getQaVal('qa-l-os'), ano: getQaVal('qa-l-ano'),
-        },
-        etapas: etapasUsar.map(nome => ({nome, feito: false, prazo: ''}))
-      };
-      livros.push(livro);
-      // Auto-criar evento de lançamento
-      if (lancamentoDate) {
-        const primeiraEmp = empresaStr.split(',')[0] || 'editora';
-        events.push({
-          id: Date.now() + 1,
-          empresa: primeiraEmp,
-          titulo: 'Lançamento ' + titulo,
-          tipo: 'evento',
-          data: lancamentoDate,
-          dataFim: lancamentoDate,
-          observacao: 'Criado automaticamente ao cadastrar livro',
-        });
-        save('gc-events', events);
-        refreshCalendars();
-      }
-      save('gc-livros', livros);
-      renderLivros();
-      buildPrioridades();
-      closeModal('modal-quickadd');
-      return;
-    }
-  
-    if (tipo === 'conteudo') {
-      const c = {
-        id: Date.now(), done: false, nome: titulo, empresa,
-        rede: getQaVal('qa-c-rede'), tipo: getQaVal('qa-c-tipo'),
-        status: getQaVal('qa-c-status'), responsavel: getQaVal('qa-responsavel-conteudo'),
-        dataProd: getQaVal('qa-c-dataprod'), dataPost: getQaVal('qa-c-datapost'),
-        hora: getQaVal('qa-c-hora'), link: getQaVal('qa-c-link'), copy: getQaVal('qa-c-copy'),
-        legenda: getQaVal('qa-c-legenda'), observacao: getQaVal('qa-observacao-conteudo'),
-      };
-      if (editingEventId) {
-        const i = conteudos.findIndex(x => x.id === editingEventId);
-        if (i > -1) conteudos[i] = {...conteudos[i], ...c};
-        editingEventId = null;
-      } else {
-        c.etapasStatus = prazosIniciaisDoConteudo(c.rede, c.dataPost, c.empresa);
-        conteudos.push(c);
-      }
-      save('gc-conteudos', conteudos); renderConteudos();
-      refreshCalendars();
-      buildConteudoCalSemana();
-      buildCalendar('cal-conteudo', 'all');
-      buildVisaoConteudos();
-      buildTarefas();
-      buildColabTarefas();
-      buildPrioridades();
-      closeModal('modal-quickadd'); return;
-    }
-  
-    const selectedResponsavel = tipo === 'evento' ? getQaVal('qa-responsavel-evento') : getQaVal('qa-responsavel');
-    const responsavel = tipo === 'tarefa' ? automaticTaskOwner(titulo, selectedResponsavel) : selectedResponsavel;
-    const observacao = tipo === 'evento' ? getQaVal('qa-observacao-evento') : getQaVal('qa-observacao');
-    const urgenteVal = document.getElementById('qa-urgente') ? document.getElementById('qa-urgente').checked : false;
-    const recurrenceKind = tipo === 'tarefa' ? (getQaVal('qa-recorrencia') || 'none') : 'none';
-    if (!editingEventId && recurrenceKind !== 'none') {
-      const weekdays = [...document.querySelectorAll('.qa-recorrencia-day:checked')].map(day => Number(day.value));
-      const anchorDate = getQaVal('qa-prazo');
-      if (recurrenceKind === 'interval15' && !anchorDate) {
-        alert('Informe a primeira data para repetir esta tarefa a cada 15 dias.');
-        return;
-      }
-      if (recurrenceKind === 'weekdays' && weekdays.length === 0) {
-        alert('Selecione pelo menos um dia da semana.');
-        return;
-      }
-      recurringTasks.push({
-        id: `rec-${Date.now()}`,
-        titulo, empresa, responsavel, observacao, urgente: urgenteVal,
-        kind: recurrenceKind, anchorDate, weekdays,
-        mentoringOffset: Number(getQaVal('qa-mentoring-offset') || 1),
-      });
-      save('gc-recurring-tasks', recurringTasks);
-      ensureCustomRecurringTasks(window.gcalEventsCache || []);
-      closeModal('modal-quickadd');
-      return;
-    }
-    const eventData = {
-      empresa, titulo, tipo,
-      data: tipo === 'tarefa' ? getQaVal('qa-prazo') : getQaVal('qa-evento-inicio'),
-      horaInicio: getQaVal('qa-hora-inicio'),
-      dataFim: getQaVal('qa-data-fim'), horaFim: getQaVal('qa-hora-fim'),
-      responsavel, observacao,
-      urgente: tipo === 'tarefa' ? urgenteVal : undefined,
-    };
-  
-    if (editingEventId) {
-      const i = events.findIndex(x => x.id === editingEventId);
-      if (i > -1) events[i] = {...events[i], ...eventData};
-      editingEventId = null;
-    } else {
-      const newEv = { id: Date.now(), ...eventData };
-      events.push(newEv);
-      if (tipo === 'tarefa' && window._addingToProjetoId) {
-        const p = projetos.find(x => x.id === window._addingToProjetoId);
-        if (p) {
-          if (!p.tarefas) p.tarefas = [];
-          p.tarefas.push({nome: titulo, feito: false, resp: responsavel, eventId: newEv.id});
-          newEv.projetoId = window._addingToProjetoId;
-          save('gc-projetos', projetos);
-          save('gc-events', events);
-          buildTarefas();
-          buildColabTarefas();
-          buildPrioridades();
-          renderProjetos();
-          closeModal('modal-quickadd');
-          window._addingToProjetoId = null;
-          window._addingToMenteeId = null;
-          return;
-        }
-      }
-      if (tipo === 'tarefa' && window._addingToMenteeId) {
-        const prog = window._addingToMenteeProgram || 'planodiretor';
-        const arr  = prog === 'marco0' ? menteesMarco0 : mentees;
-        const m    = arr.find(x => x.id === window._addingToMenteeId);
-        if (m) {
-          if (!m.tasks) m.tasks = [];
-          m.tasks.push({id: newEv.id.toString(), titulo, done: false,
-            resp: newEv.responsavel || '', prazo: newEv.data || ''});
-          newEv.menteeId = window._addingToMenteeId;
-          save('gc-events', events);
-          if (prog === 'marco0') save('gc-mentees-marco0', menteesMarco0);
-          else save('gc-mentees', mentees);
-          buildTarefas(); buildColabTarefas(); buildPrioridades();
-          renderMenteeList(); renderMarco0List();
-          window._addingToMenteeId = null;
-          window._addingToMenteeProgram = null;
-          window._addingToProjetoId = null;
-          closeModal('modal-quickadd');
-          return;
-        }
-      }
-    } // end else (new event)
-    window._addingToProjetoId = null;
-    window._addingToMenteeId = null;
-  
-    save('gc-events', events);
-    refreshCalendars();
-    buildCalendar('cal-eventos', 'all');
-    buildTarefas();
-    buildColabTarefas();
-    buildPrioridades();
-    // Notify if task assigned to someone
-    if (tipo === 'tarefa' && !editingEventId) {
-      const resp = automaticTaskOwner(getQaVal('qa-titulo').trim(), getQaVal('qa-responsavel'));
-      if (resp) notifyTaskAssigned(getQaVal('qa-titulo').trim(), resp);
-    }
-    // Se for edição de tarefa vinculada a projeto, sincronizar nome e responsável
-    if (editingEventId && tipo === 'tarefa') {
-      projetos.forEach(p => {
-        (p.tarefas||[]).forEach(t => {
-          if (t.eventId === editingEventId) {
-            t.nome = titulo;
-            t.resp = responsavel;
-            t.feito = !!(events.find(x=>x.id===editingEventId)||{}).arquivada;
-          }
-        });
-      });
-      save('gc-projetos', projetos);
-      renderProjetos();
-    } else {
-      renderProjetos();
-    }
-    editingEventId = null;
-    closeModal('modal-quickadd');
-  }
-  
-  
-  /* ── LIVROS ── */
-  let addLivroEmpresa = 'editora';
-  let editingLivroId = null;
-  const CRONOGRAMA_EDITORIAL = [
-    ['Briefing', -110, 'Gisella'],
-    ['Escolha do ilustrador', -103, 'Gisella'],
-    ['Texto em andamento', -98, 'Gisella'],
-    ['Reunião de alinhamento de conceito', -94, 'Gisella'],
-    ['Pré-diagramação', -92, 'Gisella'],
-    ['Texto preparado', -88, 'Gisella'],
-    ['Esboços', -74, 'Gisella'],
-    ['Texto finalizado', -68, 'Gisella'],
-    ['Estado da arte — coloração', -63, 'Gisella'],
-    ['Finalização das ilustrações', -38, 'Gisella'],
-    ['ISBN + Código de barras + Ficha catalográfica', -36, 'Gisella'],
-    ['Diagramação final', -34, 'Gisella'],
-    ['UV', -33, 'Gisella'],
-    ['Envio para gráfica (boneco)', -32, 'Gisella'],
-    ['Plano de divulgação e lançamento', -30, 'Milena'],
-    ['Receber boneco', -29, 'Gisella'],
-    ['Revisar boneco', -27, 'Gisella'],
-    ['Aplicar revisão final', -25, 'Gisella'],
-    ['Ajuste fino', -24, 'Gisella'],
-    ['Reenviar para gráfica', -23, 'Gisella'],
-    ['Enviar contrato para assinatura', -22, 'Gisella'],
-    ['Aprovar para impressão', -20, 'Gisella'],
-    ['Fazer marca-página', -18, 'Milena'],
-    ['Enviar marca-página para gráfica', -16, 'Milena'],
-    ['Receber o estoque', -5, 'Milena'],
-    ['Receber o marca-página', -5, 'Milena'],
-    ['Cadastrar no sistema', -5, 'Milena'],
-    ['Lançamento', 0, ''],
-    ['Liberar no site', 1, 'Milena'],
-    ['Post avisando sobre o novo livro', 1, 'Milena'],
-  ];
-
-  function parseDashboardDate(value) {
-    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
-    return match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12) : null;
-  }
-  function dashboardDateString(date) {
-    return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
-  }
-  function addCalendarDays(date, days) {
-    const next = new Date(date);
-    next.setDate(next.getDate() + Number(days || 0));
-    return next;
-  }
-  function moveToNextWeekday(date) {
-    const next = new Date(date);
-    if (next.getDay() === 6) next.setDate(next.getDate() + 2);
-    if (next.getDay() === 0) next.setDate(next.getDate() + 1);
-    return next;
-  }
-  function nextAvailableEditorialDate(candidate, previousDate, occupied) {
-    let next = moveToNextWeekday(candidate);
-    if (previousDate && next <= previousDate) next = moveToNextWeekday(addCalendarDays(previousDate, 1));
-    while (occupied.has(dashboardDateString(next))) next = moveToNextWeekday(addCalendarDays(next, 1));
-    return next;
-  }
-  function criarCronogramaEditorial(lancamentoDate) {
-    const lancamento = parseDashboardDate(lancamentoDate);
-    if (!lancamento) return [];
-    const occupied = new Set();
-    let previousDate = null;
-    return CRONOGRAMA_EDITORIAL.map(([nome, offsetDays, resp]) => {
-      const prazoDate = nextAvailableEditorialDate(addCalendarDays(lancamento, offsetDays), previousDate, occupied);
-      const prazo = dashboardDateString(prazoDate);
-      occupied.add(prazo);
-      previousDate = prazoDate;
-      return { nome, feito: false, prazo, resp, offsetDays };
-    });
-  }
-  function openAddLivroTodos() {
-    openAddLivro('editora');
-  }
-  
-  function openAddLivro(emp) {
-    addLivroEmpresa = emp;
-    editingLivroId = null;
-    document.querySelector('#modal-livro .modal-title').textContent = 'Novo livro · Ficha Técnica';
-    document.querySelector('#modal-livro .btn-primary').textContent = 'Criar livro';
-    ['nl-titulo','nl-autor','nl-ilustrador','nl-publico','nl-faixa','nl-paginas','nl-tiragem','nl-valor','nl-isbn','nl-formato','nl-colecao','nl-editora','nl-sinopse','nl-os','nl-ano','nl-lancamento'].forEach(id => {
-      const field = document.getElementById(id);
-      if (field) field.value = '';
-    });
-    ['editora','leia','gisella'].forEach(e => {
-      const cb = document.getElementById('nl-emp-'+e);
-      if (cb) cb.checked = (e === emp);
-    });
-    // Populate tipo de autoria
-    const tas = document.getElementById('nl-tipo-autoria');
-    if (tas) {
-      const ms = [...(mentees||[])].sort((a,b)=>a.name.localeCompare(b.name,'pt-BR'));
-      tas.innerHTML = '<option value="">Não se aplica</option>' + ms.map(m=>`<option value="${m.id}">${m.name}</option>`).join('');
-      tas.value = '';
-    }
-    openModal('modal-livro');
-    setTimeout(() => document.getElementById('nl-titulo').focus(), 50);
-  }
-  
-  
-  function submitAddLivro() {
-    const titulo = document.getElementById('nl-titulo').value.trim();
-    if (!titulo) { document.getElementById('nl-titulo').focus(); return; }
-    const autor = document.getElementById('nl-autor').value.trim();
-    const ano = document.getElementById('nl-ano')?.value.trim() || '';
-    const lancamentoDate = document.getElementById('nl-lancamento').value;
-    if (!autor) { document.getElementById('nl-autor').focus(); return; }
-    if (!ano) { document.getElementById('nl-ano').focus(); return; }
-    if (!lancamentoDate) { document.getElementById('nl-lancamento').focus(); return; }
-    // Get selected empresas from checkboxes (or fall back to addLivroEmpresa)
-    const checkboxes = ['editora','leia','gisella'].filter(e => {
-      const cb = document.getElementById('nl-emp-'+e);
-      return cb && cb.checked;
-    });
-    const empresas = checkboxes.length > 0 ? checkboxes : [addLivroEmpresa || 'editora'];
-    const empresaStr = empresas.join(',');
-    const tipopub = document.querySelector('input[name="nl-tipopub"]:checked')?.value || 'lancamento';
-    const menteeOpt = document.querySelector('input[name="nl-mentee-opt"]:checked')?.value;
-    const menteeIdSel = menteeOpt === 'sim' ? parseInt(document.getElementById('nl-mentee-id')?.value||'0')||null : null;
-    const tipoAutoriaVal = document.getElementById('nl-tipo-autoria')?.value || '';
-    const tipoAutoriaMenteeId = tipoAutoriaVal ? parseInt(tipoAutoriaVal)||null : null;
-    const livro = {
-      id: editingLivroId || 0, titulo, empresa: empresaStr, expandido: true,
-      tipopub, menteeId: menteeIdSel, tipoAutoriaMenteeId: tipoAutoriaMenteeId,
-      info: {
-        autor,
-        ilustrador: document.getElementById('nl-ilustrador').value.trim(),
-        publico: document.getElementById('nl-publico').value.trim(),
-        faixa: document.getElementById('nl-faixa').value.trim(),
-        paginas: document.getElementById('nl-paginas').value.trim(),
-        tiragem: document.getElementById('nl-tiragem').value.trim(),
-        valor: document.getElementById('nl-valor').value.trim(),
-        isbn: document.getElementById('nl-isbn').value.trim(),
-        formato: document.getElementById('nl-formato').value.trim(),
-        colecao: document.getElementById('nl-colecao').value.trim(),
-        editora: document.getElementById('nl-editora').value.trim(),
-        lancamento: lancamentoDate,
-        sinopse: document.getElementById('nl-sinopse').value.trim(),
-        os: document.getElementById('nl-os')?.value.trim()||'',
-        ano,
-      },
-      etapas: editingLivroId ? (livros.find(x=>x.id===editingLivroId)||{etapas:[]}).etapas : criarCronogramaEditorial(lancamentoDate)
-    };
-    const _wasEditing = !!editingLivroId;
-    let _newLivroId = null;
-    if (editingLivroId) {
-      const i = livros.findIndex(x=>x.id===editingLivroId);
-      if (i>-1) {
-        const livroExistente = livros[i];
-        const lancamentoAnterior = livroExistente.info?.lancamento || '';
-        if (lancamentoAnterior !== lancamentoDate) {
-          const conclusaoPorNome = new Map((livroExistente.etapas || []).map(etapa => [etapa.nome, !!etapa.feito]));
-          livroExistente.etapas = criarCronogramaEditorial(lancamentoDate).map(etapa => ({
-            ...etapa,
-            feito: conclusaoPorNome.get(etapa.nome) || false,
-          }));
-        }
-        livroExistente.titulo = livro.titulo;
-        livroExistente.empresa = livro.empresa;
-        livroExistente.info = livro.info;
-        livroExistente.tipopub = tipopub;
-        livroExistente.tipoAutoriaMenteeId = tipoAutoriaMenteeId;
-      }
-      editingLivroId = null;
-    } else {
-      livro.id = Date.now();
-      _newLivroId = livro.id;
-      livros.push(livro);
-      console.log('Novo livro criado, id:', livro.id, '_newLivroId:', _newLivroId);
-    }
-    save('gc-livros', livros);
-    renderLivros();
-    buildPrioridades();
-    closeModal('modal-livro');
-    if (_newLivroId) setTimeout(() => openEtapasPrazos(_newLivroId), 800);
-    // Reset modal
-    document.querySelector('#modal-livro .modal-title').textContent = 'Novo livro · Ficha Técnica';
-    document.querySelector('#modal-livro .btn-primary').textContent = 'Criar livro';
-    ['nl-titulo','nl-autor','nl-ilustrador','nl-publico','nl-faixa','nl-paginas','nl-tiragem','nl-valor','nl-isbn','nl-formato','nl-colecao','nl-editora','nl-sinopse','nl-os','nl-ano'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
-    document.getElementById('nl-lancamento').value = '';
-    const lancRad = document.getElementById('nl-tipopub-lanc'); if(lancRad) lancRad.checked=true;
-    const naoRad = document.querySelector('input[name="nl-mentee-opt"][value="nao"]'); if(naoRad) naoRad.checked=true;
-    const menteeWrap = document.getElementById('nl-mentee-wrap'); if(menteeWrap) menteeWrap.style.display='none';
-    // Populate tipo-autoria with mentees
-    const tipoAutoriaSel = document.getElementById('nl-tipo-autoria');
-    if (tipoAutoriaSel) {
-      const ms = [...(mentees||[])].sort((a,b)=>a.name.localeCompare(b.name,'pt-BR'));
-      tipoAutoriaSel.innerHTML = '<option value="">Não se aplica</option>' +
-        ms.map(m=>`<option value="${m.id}">${m.name}</option>`).join('');
-      tipoAutoriaSel.value = '';
-    }
-  }
-  
-  const EMP_BADGE_L = {editora:'b-editora',leia:'b-leia',gisella:'b-gisella'};
-  const EMP_SHORT_L = {editora:'Editora',leia:'Léia',gisella:'GC'};
-  
-  function renderLivroEtapas(l) {
-    const sorted = l.etapas.map((e,i)=>({e,i})).sort((a,b)=> a.e.feito===b.e.feito?0:a.e.feito?-1:1);
-    const today2 = new Date(); today2.setHours(0,0,0,0);
-    return sorted.map(({e,i}) => {
-      const prazoColor = e.prazo && !e.feito ? (() => {
-        const diff = Math.round((new Date(e.prazo+'T00:00:00')-today2)/86400000);
-        return diff<0?'var(--danger)':diff===0?'var(--gisella)':diff<=7?'var(--warn)':'var(--text-soft)';
-      })() : 'var(--text-soft)';
-      return '<div class="livro-etapa-row" style="'+(e.feito?'opacity:0.6;':'')+'">' +
-        '<input type="checkbox" '+(e.feito?'checked':'')+' onchange="toggleEtapa('+l.id+','+i+')" onclick="event.stopPropagation()">' +
-        '<span class="livro-etapa-nome'+(e.feito?' done':'')+'" style="flex:1;">['+l.titulo+'] '+e.nome+'</span>' +
-        '<span style="font-size:11px;color:'+(prazoColor||'var(--text-soft)')+';font-weight:'+(e.prazo?'500':'400')+';">'+(e.prazo?fmtDate(e.prazo):'—')+'</span>' +
-        '<select onchange="setEtapaResp('+l.id+','+i+',this.value)" onclick="event.stopPropagation()" '+
-          'style="font-size:10px;border:1px solid var(--border);border-radius:6px;padding:2px 4px;background:var(--bg);color:'+(e.resp?'#000':'var(--text-soft)')+';cursor:pointer;max-width:80px;">' +
-          '<option value="" '+((!e.resp)?'selected':'')+'>—</option>' +
-          '<option value="Gisella" '+(e.resp==='Gisella'?'selected':'')+'>Gisella</option>' +
-          '<option value="Milena" '+(e.resp==='Milena'?'selected':'')+'>Milena</option>' +
-          '<option value="Luiggi" '+(e.resp==='Luiggi'?'selected':'')+'>Luiggi</option>' +
-        '</select>' +
-      '</div>';
-    }).join('');
-  }
-  
-  function livroCardHtml(l, draggable) {
-    const done = l.etapas.filter(e => e.feito).length;
-    const pct = Math.round(done / l.etapas.length * 100);
-    const proxima = l.etapas.find(e => !e.feito);
-    const emps = (l.empresa||'editora').split(',');
-    const empBadges = emps.map(e => `<span class="badge ${EMP_BADGE_L[e]||'b-gray'}" style="font-size:10px;">${EMP_SHORT_L[e]||e}</span>`).join(' ');
-    const dragAttrs = draggable ? `draggable="true" ondragstart="livrosDragStart(event,${l.id})" ondragover="livrosDragOver(event,${l.id})" ondrop="livrosDrop(event,${l.id})"` : '';
-    return `<div class="livro-card" ${dragAttrs} onclick="toggleLivro(${l.id})" style="cursor:pointer;">
-      <div class="livro-header">
-        ${draggable ? '<span onclick="event.stopPropagation()" style="cursor:grab;color:var(--text-soft);font-size:14px;padding-right:4px;" title="Arrastar para reordenar">⠿</span>' : ''}
-        <div class="livro-titulo" onclick="event.stopPropagation();openLivroFicha(${l.id})" style="cursor:pointer;text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--border-mid);" title="Abrir ficha técnica">${l.titulo}</div>
-        ${empBadges}
-        <div class="livro-progress-wrap">
-          <div class="livro-progress"><div class="livro-progress-fill" style="width:${pct}%;"></div></div>
-          <span style="font-size:11px;color:var(--text-soft);">${pct}%</span>
-        </div>
-        ${proxima ? `<span style="font-size:11px;color:var(--text-soft);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${proxima.nome}</span>` : '<span class="badge b-ok" style="font-size:10px;">concluído</span>'}
-        <button onclick="event.stopPropagation();openEtapasPrazos(${l.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:11px;padding:2px 6px;" title="Definir prazos das etapas">📅</button>
-        <button onclick="event.stopPropagation();openLivroFicha(${l.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:2px 6px;" title="Editar ficha">✎</button>
-        <button onclick="event.stopPropagation();duplicarLivro(${l.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:2px 6px;" title="Duplicar">⧉</button>
-        <button onclick="event.stopPropagation();deleteLivro(${l.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:2px 6px;" title="Excluir">×</button>
-        <span class="livro-toggle" onclick="event.stopPropagation();toggleLivro(${l.id})">${l.expandido ? '▾' : '▸'}</span>
-      </div>
-      <div class="livro-body${l.expandido?' open':''}">
-        ${l.info ? `<div style="padding:8px 0 4px;display:flex;flex-wrap:wrap;gap:6px;">${l.info.autor?`<span class="badge b-gray">Autor: ${l.info.autor}</span>`:''}${l.info.valor?`<span class="badge b-ok">Valor: ${l.info.valor}</span>`:''}${l.info.lancamento?`<span class="badge b-info">Lançamento: ${fmtDate(l.info.lancamento)}</span>`:''}${l.tipopub?`<span class="badge ${l.tipopub==='reimpressao'?'b-warn':'b-editora'}">${l.tipopub==='reimpressao'?'Reimpressão':'Lançamento'}</span>`:''}${l.info.os?`<span class="badge b-gray">OS: ${l.info.os}</span>`:''}${l.info.ano?`<span class="badge b-gray">Ano: ${l.info.ano}</span>`:''}</div>` : ''}
-        ${renderLivroEtapas(l)}
-        <button class="add-btn" style="margin-top:8px;font-size:12px;" onclick="adicionarEtapa(${l.id})">+ etapa</button>
-      </div>
-    </div>`;
-  }
-  
-  function renderLivros() {
-    const _lf = getFilter('livros');
-    let livrosFiltrados = _lf==='all' ? livros : livros.filter(l=>(l.empresa||'').split(',').includes(_lf));
-  
-    // Separar ativos (< 100%) e arquivados (100%)
-    function isPct100(l) {
-      if (!l.etapas || l.etapas.length === 0) return false;
-      return l.etapas.every(e => e.feito);
-    }
-    const ativos = livros.filter(l => !isPct100(l));
-    const arquivados100 = livros.filter(l => isPct100(l));
-    const ativosFilt = livrosFiltrados.filter(l => !isPct100(l));
-    const arqFilt = livrosFiltrados.filter(l => isPct100(l));
-  
-    // Render visao geral
-    const visaoLivrosEl = document.getElementById('livros-visao');
-    if (visaoLivrosEl) {
-      visaoLivrosEl.innerHTML = ativosFilt.length===0
-        ? '<div style="padding:1rem;text-align:center;color:var(--text-soft);font-size:13px;">Nenhum livro em produção.</div>'
-        : ativosFilt.map(l => livroCardHtml(l, true)).join('');
-    }
-    // Arquivados da visão geral
-    const visaoArqEl = document.getElementById('livros-visao-arquivados');
-    const visaoArqBtn = document.getElementById('livros-visao-arq-btn');
-    const visaoArqCnt = document.getElementById('livros-visao-arq-count');
-    if (visaoArqEl) visaoArqEl.innerHTML = arqFilt.map(l => livroCardHtml(l, true)).join('');
-    if (visaoArqBtn) visaoArqBtn.style.display = arqFilt.length > 0 ? 'flex' : 'none';
-    if (visaoArqCnt) visaoArqCnt.textContent = arqFilt.length;
-  
-    // Render unified todos page
-    const todosEl = document.getElementById('livros-todos');
-    if (todosEl) {
-      todosEl.innerHTML = ativosFilt.length===0
-        ? '<div style="padding:1rem;text-align:center;color:var(--text-soft);font-size:13px;">Nenhum livro em produção. Use "+ novo livro" para adicionar.</div>'
-        : ativosFilt.map(l => livroCardHtml(l, true)).join('');
-    }
-    // Arquivados 100% na página livros
-    const arqListEl = document.getElementById('livros-arquivados-list');
-    const arqBtn = document.getElementById('livros-arq-btn');
-    const arqCnt = document.getElementById('livros-arq-count');
-    if (arqListEl) arqListEl.innerHTML = arqFilt.map(l => livroCardHtml(l, true)).join('');
-    if (arqBtn) arqBtn.style.display = arqFilt.length > 0 ? 'flex' : 'none';
-    if (arqCnt) arqCnt.textContent = arqFilt.length;
-  
-    ['editora','leia','gisella'].forEach(emp => {
-      const el = document.getElementById('livros-' + emp);
-      if (!el) return;
-      const lista = livros.filter(l => (l.empresa||'').split(',').includes(emp));
-      const ativos = lista.filter(l => !isPct100(l));
-      const arq    = lista.filter(l => isPct100(l));
-      if (ativos.length === 0 && arq.length === 0) {
-        el.innerHTML = '<div style="padding:1rem;text-align:center;color:var(--text-soft);font-size:13px;">Nenhum livro em produção. Use "+ novo livro" para adicionar.</div>';
-        return;
-      }
-      let out = ativos.map(l => livroCardHtml(l, true)).join('');
-      if (arq.length > 0) {
-        out += `<button class="archived-toggle" onclick="toggleArqEmpresa('${emp}')" style="margin-top:8px;"><span id="arq-emp-arrow-${emp}">▸</span> Arquivados (${arq.length})</button>
-        <div id="arq-emp-${emp}" style="display:none;margin-top:8px;">${arq.map(l => livroCardHtml(l, true)).join('')}</div>`;
-      }
-      el.innerHTML = out;
-    });
-  
-    buildLivrosCalSemana();
-  }
-  
-  function toggleArqEmpresa(emp) {
-    const el = document.getElementById('arq-emp-' + emp);
-    const arrow = document.getElementById('arq-emp-arrow-' + emp);
-    if (!el) return;
-    const open = el.style.display === 'none';
-    el.style.display = open ? 'block' : 'none';
-    if (arrow) arrow.textContent = open ? '▾' : '▸';
-  }
-  
-  function toggleLivro(id) { const l = livros.find(x => x.id===id); if(l) { l.expandido=!l.expandido; save('gc-livros',livros); renderLivros(); } }
-  
-  function openLivroFicha(id) {
-    const l = livros.find(x=>x.id===id);
-    if (!l) return;
-    editingLivroId = id;
-    addLivroEmpresa = (l.empresa||'editora').split(',')[0];
-    const emps = (l.empresa||'editora').split(',');
-    ['editora','leia','gisella'].forEach(e => {
-      const cb = document.getElementById('nl-emp-'+e);
-      if (cb) cb.checked = emps.includes(e);
-    });
-    const info = l.info||{};
-    document.getElementById('nl-titulo').value = l.titulo||'';
-    const tipopubEdit = l.tipopub || 'lancamento';
-    const lancRad = document.getElementById('nl-tipopub-lanc');
-    const reimpRad = document.getElementById('nl-tipopub-reimp');
-    if (lancRad) lancRad.checked = tipopubEdit === 'lancamento';
-    if (reimpRad) reimpRad.checked = tipopubEdit === 'reimpressao';
-    const nlOs = document.getElementById('nl-os'); if(nlOs) nlOs.value = info.os||'';
-    const nlAno = document.getElementById('nl-ano'); if(nlAno) nlAno.value = info.ano||'';
-    document.getElementById('nl-autor').value = info.autor||'';
-    document.getElementById('nl-ilustrador').value = info.ilustrador||'';
-    document.getElementById('nl-publico').value = info.publico||'';
-    document.getElementById('nl-faixa').value = info.faixa||'';
-    document.getElementById('nl-paginas').value = info.paginas||'';
-    document.getElementById('nl-tiragem').value = info.tiragem||'';
-    document.getElementById('nl-valor').value = info.valor||'';
-    document.getElementById('nl-isbn').value = info.isbn||'';
-    document.getElementById('nl-formato').value = info.formato||'';
-    document.getElementById('nl-colecao').value = info.colecao||'';
-    document.getElementById('nl-editora').value = info.editora||'';
-    document.getElementById('nl-lancamento').value = info.lancamento||'';
-    document.getElementById('nl-sinopse').value = info.sinopse||'';
-    document.querySelector('#modal-livro .modal-title').textContent = 'Ficha Técnica · ' + l.titulo;
-    document.querySelector('#modal-livro .btn-primary').textContent = 'Salvar alterações';
-    // Populate and set tipo de autoria
-    const tasEdit = document.getElementById('nl-tipo-autoria');
-    if (tasEdit) {
-      const ms = [...(mentees||[])].sort((a,b)=>a.name.localeCompare(b.name,'pt-BR'));
-      tasEdit.innerHTML = '<option value="">Não se aplica</option>' + ms.map(m=>`<option value="${m.id}">${m.name}</option>`).join('');
-      tasEdit.value = l.tipoAutoriaMenteeId ? l.tipoAutoriaMenteeId.toString() : '';
-    }
-    openModal('modal-livro');
-  }
-  function deleteLivro(id) {
-    const l = livros.find(x=>x.id===id);
-    if (!l) return;
-    const snap = [...livros];
-    livros = livros.filter(x=>x.id!==id);
-    save('gc-livros', livros); renderLivros();
-    pushUndo(l.titulo||'Livro', ()=>{ livros=snap; save('gc-livros',livros); renderLivros(); });
-  }
-  function toggleEtapa(id, i) { 
-    const l=livros.find(x=>x.id===id); 
-    if(l) { 
-      const wasFeito = l.etapas[i].feito;
-      l.etapas[i].feito=!l.etapas[i].feito; 
-      save('gc-livros',livros); renderLivros(); buildTarefas(); buildColabTarefas(); buildPrioridades(); 
-      if (!wasFeito && l.etapas[i].feito) {
-        const userName = window._currentUserName || localStorage.getItem('gc-session-name') || '';
-        notifyTaskCompleted(`[${l.titulo}] ${l.etapas[i].nome}`, userName);
-      }
-    } 
-  }
-  function setPrazoEtapa(id,i,val) { updateEtapaPrazoInline(id, i, val); }
-  function deleteEtapa(id,i) { const l=livros.find(x=>x.id===id); if(l) { l.etapas.splice(i,1); save('gc-livros',livros); renderLivros(); } }
-  function setEtapaResp(id,i,resp) { const l=livros.find(x=>x.id===id); if(l) { l.etapas[i].resp=resp; save('gc-livros',livros); buildColabTarefas(); } }
-  
-  /* ── MENTEES ── */
-  let currentMenteeId = null;
-  let currentMenteeProgram = 'planodiretor'; // 'planodiretor' | 'marco0'
-  
-  function getMenteeArray() {
-    return currentMenteeProgram === 'marco0' ? menteesMarco0 : mentees;
-  }
-  function saveMenteeArray() {
-    if (currentMenteeProgram === 'marco0') {
-      save('gc-mentees-marco0', menteesMarco0);
-    } else {
-      save('gc-mentees', mentees);
-    }
-  }
-  
-  function getInitials(name) { return name.split(' ').slice(0,2).map(w=>w[0]||'').join('').toUpperCase(); }
-  
-  const S_BADGE = {'ok':'b-ok','indiv. pend.':'b-warn','sem contato':'b-danger','aguardando':'b-gray'};
-  
-  function renderMenteeList() {
-    const el = document.getElementById('mentee-list-rendered');
-    if (!el) return;
-    const cntM2 = document.getElementById('cnt-mentoradas'); if(cntM2) cntM2.textContent = mentees.length;
-    const menteesSorted = [...mentees].sort((a,b) => a.name.localeCompare(b.name, 'pt-BR'));
-    el.innerHTML = menteesSorted.map(m => {
-      return `<div class="mentee-list-item" onclick="openMenteeModal(${m.id})">
-        <div class="avatar">${getInitials(m.name)}</div>
-        <div style="flex:1;min-width:0;">
-          <div class="mentee-name">${m.name}</div>
-          ${m.docsLink ? `<a href="${m.docsLink}" target="_blank" onclick="event.stopPropagation();" style="font-size:11px;color:var(--gisella);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;">📄 docs</a>` : ''}
-        </div>
-        <button class="mentee-delete-btn" onclick="event.stopPropagation();deleteMentee(${m.id},'planodiretor')" title="Descadastrar">×</button>
-      </div>`;
-    }).join('');
-    renderMarco0List();
-  }
-  
-  function renderMarco0List() {
-    const el = document.getElementById('marco0-list-rendered');
-    if (!el) return;
-    const menteesSorted = [...menteesMarco0].sort((a,b) => a.name.localeCompare(b.name, 'pt-BR'));
-    if (menteesSorted.length === 0) {
-      el.innerHTML = '<div style="font-size:13px;color:var(--text-soft);padding:8px;">Nenhuma mentorada cadastrada.</div>';
-      return;
-    }
-    el.innerHTML = menteesSorted.map(m => {
-      return `<div class="mentee-list-item" onclick="openMenteeModal(${m.id},'marco0')">
-        <div class="avatar">${getInitials(m.name)}</div>
-        <div style="flex:1;min-width:0;">
-          <div class="mentee-name">${m.name}</div>
-        </div>
-        <button class="mentee-delete-btn" onclick="event.stopPropagation();deleteMentee(${m.id},'marco0')" title="Descadastrar">×</button>
-      </div>`;
-    }).join('');
-  }
-  
-  function openMenteeModal(id, program) {
-    currentMenteeProgram = program || 'planodiretor';
-    const arr = getMenteeArray();
-    const m = arr.find(x=>x.id===id);
-    if (!m) return;
-    currentMenteeId = id;
-    document.getElementById('mm-avatar').textContent = getInitials(m.name);
-    document.getElementById('mm-name').textContent = m.name;
-    document.getElementById('mm-notes').value = m.notes||'';
-    document.getElementById('mm-docs').value = m.docsLink||'';
-    updateDocsLink();
-    document.getElementById('mm-sdate').value = new Date().toISOString().slice(0,10);
-    document.getElementById('mm-snotes').value = '';
-    renderMenteeSessions(m);
-    renderMenteeLivros();
-    // Reset tabs
-    document.querySelectorAll('.modal-tab').forEach(t=>t.classList.remove('active'));
-    document.querySelectorAll('.modal-tab-content').forEach(t=>t.classList.remove('active'));
-    document.querySelector('.modal-tab').classList.add('active');
-    document.getElementById('mtab-notas').classList.add('active');
-    openModal('modal-mentee');
-  }
-  
-  function saveMenteeField() {
-    const m = getMenteeArray().find(x=>x.id===currentMenteeId);
-    if (!m) return;
-    m.notes = document.getElementById('mm-notes').value;
-    m.docsLink = document.getElementById('mm-docs').value.trim();
-    saveMenteeArray();
-    if (currentMenteeProgram === 'marco0') renderMarco0List(); else renderMenteeList();
-  }
-  
-  const MS = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
-  function fmtDatePt(val) { if(!val) return '—'; const [y,mo,d]=val.split('-').map(Number); return `${d} ${MS[mo-1]} ${y}`; }
-  
-  function renderMenteeSessions(m) {
-    const el = document.getElementById('mm-sessions-list');
-    if (!m.sessions||m.sessions.length===0) { el.innerHTML='<div style="font-size:13px;color:var(--text-soft);">Nenhuma sessão registrada.</div>'; return; }
-    el.innerHTML = [...m.sessions].sort((a,b)=>b.date.localeCompare(a.date)).map(s=>`
-      <div class="session-item">
-        <div class="session-date">${fmtDatePt(s.date)}<button class="session-delete" onclick="deleteSession('${s.id}')">×</button></div>
-        <div class="session-notes">${s.notes}</div>
-      </div>`).join('');
-  }
-  
-  function addMenteeSession() {
-    const m = getMenteeArray().find(x=>x.id===currentMenteeId);
-    if (!m) return;
-    const notes = document.getElementById('mm-snotes').value.trim();
-    if (!notes) { document.getElementById('mm-snotes').focus(); return; }
-    if (!m.sessions) m.sessions=[];
-    m.sessions.push({id:Date.now().toString(), date:document.getElementById('mm-sdate').value, notes});
-    saveMenteeArray();
-    document.getElementById('mm-snotes').value='';
-    renderMenteeSessions(m);
-  }
-  
-  function deleteSession(sid) {
-    const m = getMenteeArray().find(x=>x.id===currentMenteeId);
-    if (!m) return;
-    m.sessions = m.sessions.filter(s=>s.id!==sid);
-    saveMenteeArray();
-    renderMenteeSessions(m);
-  }
-  
-  function renderMenteeTasks(m) {
-    const el = document.getElementById('mm-tasks-list');
-    if (!el) return;
-    if (!m.tasks||m.tasks.length===0) { el.innerHTML='<div style="font-size:13px;color:var(--text-soft);margin-bottom:8px;">Nenhuma tarefa vinculada.</div>'; return; }
-    el.innerHTML = m.tasks.map(t => {
-      // Sync done state from global events
-      const ev = events.find(x => x.id.toString() === t.id);
-      const done = ev ? !!ev.arquivada : !!t.done;
-      const resp  = t.resp  || ev?.responsavel || '';
-      const prazo = t.prazo || ev?.data        || '';
-      const prazoLabel = prazo ? ` · <span style="color:var(--text-soft);font-size:11px;">${prazo}</span>` : '';
-      const respLabel  = resp  ? ` · <span style="font-size:11px;font-weight:500;color:var(--gisella);">${resp}</span>` : '';
-      return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;">
-        <input type="checkbox" ${done?'checked':''} onclick="event.stopPropagation();" onchange="toggleMenteeTask('${t.id}')" style="accent-color:var(--gisella);width:14px;height:14px;flex-shrink:0;cursor:pointer;">
-        <span style="flex:1;${done?'text-decoration:line-through;color:var(--text-soft);':''}">${t.titulo}${respLabel}${prazoLabel}</span>
-        <button onclick="deleteMenteeTask('${t.id}')" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:0 2px;">×</button>
-      </div>`;
-    }).join('');
-  }
-  
-  function openAddMenteeTask() {
-    if (!currentMenteeId) return;
-    const m = getMenteeArray().find(x => x.id === currentMenteeId);
-    if (!m) return;
-    window._addingToMenteeId = currentMenteeId;
-    window._addingToMenteeProgram = currentMenteeProgram;
-    closeModal('modal-mentee');
-    openQuickAdd();
-    setTimeout(() => {
-      document.getElementById('qa-tipo').value = 'tarefa';
-      document.getElementById('qa-emp-gisella').checked = true;
-      updateQaFields();
-      const titulo = document.getElementById('qa-titulo');
-      if (titulo) { titulo.placeholder = `Tarefa para ${m.name}...`; titulo.focus(); }
-      window._postQuickAddMenteeId = currentMenteeId;
-      window._postQuickAddMenteeProgram = currentMenteeProgram;
-    }, 80);
-  }
-  
-  function cancelMenteeTaskAdd() {
-    const row = document.getElementById('mm-task-add-row');
-    if (row) row.remove();
-  }
-  
-  function addMenteeTaskInline() {
-    const m = getMenteeArray().find(x=>x.id===currentMenteeId);
-    if (!m) return;
-    const input = document.getElementById('mm-task-input-inline');
-    const titulo = (input?.value||'').trim();
-    if (!titulo) { input?.focus(); return; }
-    const resp  = document.getElementById('mm-task-resp-inline')?.value || '';
-    const prazo = document.getElementById('mm-task-prazo-inline')?.value || '';
-    if (!m.tasks) m.tasks=[];
-    const newEv = {id:Date.now(), empresa:'gisella', titulo:`[${m.name}] ${titulo}`, tipo:'tarefa',
-      data:prazo, responsavel:resp, menteeId:m.id};
-    events.push(newEv);
-    m.tasks.push({id:newEv.id.toString(), titulo, done:false, resp, prazo});
-    saveMenteeArray(); save('gc-events',events);
-    cancelMenteeTaskAdd();
-    renderMenteeTasks(m);
-    buildTarefas(); buildColabTarefas();
-    renderMarco0List();
-  }
-  
-  function addMenteeTask() {
-    const m = getMenteeArray().find(x=>x.id===currentMenteeId);
-    if (!m) return;
-    const titulo = document.getElementById('mm-task-input').value.trim();
-    if (!titulo) return;
-    if (!m.tasks) m.tasks=[];
-    const task = {id:Date.now().toString(), titulo, done:false};
-    m.tasks.push(task);
-    // Also add to global events
-    events.push({id:Date.now()+1, empresa:'gisella', titulo:`[${m.name}] ${titulo}`, data:'', menteeId:m.id});
-    saveMenteeArray(); save('gc-events',events);
-    document.getElementById('mm-task-input').value='';
-    renderMenteeTasks(m); buildTarefas();
-  buildColabTarefas();
-  renderProjetos();
-  initKanban();
-  }
-  
-  function toggleMenteeTask(tid) {
-    const m = getMenteeArray().find(x=>x.id===currentMenteeId);
-    if (!m||!m.tasks) return;
-    const t = m.tasks.find(x=>x.id===tid);
-    if (t) {
-      t.done=!t.done;
-      // Sync with global events
-      const ev = events.find(x=>x.id.toString()===tid);
-      if (ev) { ev.arquivada = t.done; save('gc-events',events); buildTarefas(); buildColabTarefas(); }
-      save('gc-mentees',mentees);
-      renderMenteeTasks(m);
-    }
-  }
-  
-  function deleteMenteeTask(tid) {
-    const m = getMenteeArray().find(x=>x.id===currentMenteeId);
-    if (!m||!m.tasks) return;
-    m.tasks = m.tasks.filter(x=>x.id!==tid);
-    events = events.filter(x=>x.id.toString()!==tid);
-    saveMenteeArray(); save('gc-events',events);
-    renderMenteeTasks(m); buildTarefas(); buildColabTarefas();
-  }
-  
-  let _addingMenteeProgram = 'planodiretor';
-  
-  function openAddMentee(program) {
-    _addingMenteeProgram = program || 'planodiretor';
-    document.getElementById('new-mentee-name').value = '';
-    document.getElementById('new-mentee-docs').value = '';
-    const title = document.querySelector('#modal-add-mentee .modal-title');
-    if (title) title.textContent = program === 'marco0' ? 'Cadastrar mentorada · Marco 0' : 'Cadastrar mentorada · Plano Diretor';
-    openModal('modal-add-mentee');
-    setTimeout(() => document.getElementById('new-mentee-name').focus(), 80);
-  }
-  
-  function submitAddMentee() {
-    const name = document.getElementById('new-mentee-name').value.trim();
-    if (!name) { document.getElementById('new-mentee-name').focus(); return; }
-    const docsLink = document.getElementById('new-mentee-docs').value.trim();
-    const newMentee = { id: Date.now(), name, status: 'ok', notes: '', sessions: [], tasks: [], docsLink };
-    if (_addingMenteeProgram === 'marco0') {
-      menteesMarco0.push(newMentee);
-      save('gc-mentees-marco0', menteesMarco0);
-      renderMarco0List();
-    } else {
-      mentees.push(newMentee);
-      save('gc-mentees', mentees);
-      renderMenteeList();
-    }
-    closeModal('modal-add-mentee');
-  }
-  
-  function deleteMentee(id, program) {
-    const prog = program || 'planodiretor';
-    const arr  = prog === 'marco0' ? menteesMarco0 : mentees;
-    const m    = arr.find(x=>x.id===id);
-    if (!m) return;
-    const snap = [...arr];
-    if (prog === 'marco0') {
-      menteesMarco0 = menteesMarco0.filter(x=>x.id!==id);
-      save('gc-mentees-marco0', menteesMarco0);
-      renderMarco0List();
-    } else {
-      mentees = mentees.filter(x=>x.id!==id);
-      save('gc-mentees', mentees);
-      renderMenteeList();
-    }
-    pushUndo(m.name, () => {
-      if (prog === 'marco0') {
-        menteesMarco0 = snap; save('gc-mentees-marco0', menteesMarco0); renderMarco0List();
-      } else {
-        mentees = snap; save('gc-mentees', mentees); renderMenteeList();
-      }
-    });
-  }
-  
-  /* ── CONTEUDO ── */
-  let currentConteudoId = null;
-  const ST_MAP = {copy:{l:'Copy criada',c:'s-copy'},gravado:{l:'Gravado',c:'s-gravado'},edicao:{l:'Para editar',c:'s-edicao'},aprovado:{l:'Para aprovar',c:'s-aprovado'},agendado:{l:'Para agendar',c:'s-agendado'},postado:{l:'Para postar',c:'s-postado'}};
-  const REDE_L = {instagram:'Instagram',tiktok:'TikTok',youtube:'YouTube',substack:'Substack',emanda:'Emanda'};
-  const TIPO_L = {reel:'Reel',foto:'Foto',dump:'Dump',card:'Card',carrossel:'Carrossel',story:'Story',emailmkt:'Email mkt',video:'Vídeo'};
-  const EMP_B = {editora:'b-editora',leia:'b-leia',gisella:'b-gisella'};
-  const EMP_S = {editora:'Editora',leia:'Léia',gisella:'GC'};
-  
-  // Etapas padrão de um conteúdo (baseadas no fluxo de status)
-  const CONTEUDO_ETAPAS_PADRAO = ['Copy criada','Gravado','Para editar','Para aprovar','Para agendar','Para postar'];
-  const CONTEUDO_ETAPAS_KEYS   = ['copy','gravado','edicao','aprovado','agendado','postado'];
-  const EMANDA_ETAPAS_PADRAO = ['Definir o tema do e-mail','Criar o gancho principal','Planejar a estrutura do e-mail','Escrever o email','Providenciar os banners','Definir CTAs','Organizar links de destino','Criar o email mkt','Enviar um teste','Testar os botões e links','Disparar para a base'];
-  const EMANDA_ETAPAS_KEYS   = ['tema','gancho','estrutura','escrever','banners','ctas','links','criar','teste','testar','disparar'];
-  
-  // Na criação de um conteúdo, os prazos do fluxo padrão acompanham a data de
-  // postagem. Tarefas atribuídas nunca ficam no fim de semana: sábado vai
-  // para sexta e domingo vai para a segunda-feira seguinte.
-  function prazoUtilAntesDaPostagem(dataPostagem, diasAntes) {
-    if (!dataPostagem || !/^\d{4}-\d{2}-\d{2}$/.test(dataPostagem)) return '';
-  
-    const [ano, mes, dia] = dataPostagem.split('-').map(Number);
-    const data = new Date(ano, mes - 1, dia);
-    data.setDate(data.getDate() - diasAntes);
-  
-    if (data.getDay() === 6) data.setDate(data.getDate() - 1); // sábado → sexta
-    if (data.getDay() === 0) data.setDate(data.getDate() + 1); // domingo → segunda
-  
-    const y = data.getFullYear();
-    const m = String(data.getMonth() + 1).padStart(2, '0');
-    const d = String(data.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  }
-  
-  function prazosIniciaisDoConteudo(rede, dataPostagem, empresa = '') {
-    // O fluxo de e-mail tem etapas próprias e não usa Edição/Aprovação/Agendamento.
-    if (rede === 'emanda') return {};
-
-    // Conteúdos da GC Estratégias já nascem com todo o fluxo organizado:
-    // uma etapa por dia, terminando na data de postagem. A liberação para cada
-    // pessoa continua sequencial em getConteudoEtapasLiberadas / Checklist.
-    if (String(empresa).split(',').includes('gisella')) {
-      const prazoEm = diasAntes => dataPostagem ? prazoUtilAntesDaPostagem(dataPostagem, diasAntes) : '';
-      return {
-        copy:     { prazo: prazoEm(5), resp: 'Gisella' },
-        gravado:  { prazo: prazoEm(4), resp: 'Gisella' },
-        edicao:   { prazo: prazoEm(3), resp: 'Luiggi' },
-        aprovado: { prazo: prazoEm(2), resp: 'Gisella' },
-        agendado: { prazo: prazoEm(1), resp: 'Milena' },
-        postado:  { prazo: prazoEm(0), resp: 'Milena' },
-      };
-    }
-  
-    return {
-      edicao: {
-        prazo: dataPostagem ? prazoUtilAntesDaPostagem(dataPostagem, 2) : '',
-        resp: 'Luiggi',
-      },
-      aprovado: {
-        prazo: dataPostagem ? prazoUtilAntesDaPostagem(dataPostagem, 1) : '',
-        resp: 'Milena',
-      },
-      agendado: {
-        prazo: dataPostagem ? prazoUtilAntesDaPostagem(dataPostagem, 1) : '',
-        resp: 'Milena',
-      },
-      postado: {
-        prazo: dataPostagem ? prazoUtilAntesDaPostagem(dataPostagem, 0) : '',
-        resp: 'Milena',
-      },
-    };
-  }
-  
-  function getConteudoEtapasByRede(c) {
-    if ((c.rede||'') === 'emanda') {
-      if (!c.etapasStatus) c.etapasStatus = {};
-      return EMANDA_ETAPAS_PADRAO.map((nome, i) => ({
-        key: EMANDA_ETAPAS_KEYS[i], nome,
-        feito: !!c.etapasStatus[EMANDA_ETAPAS_KEYS[i]]?.feito,
-        resp:  c.etapasStatus[EMANDA_ETAPAS_KEYS[i]]?.resp  || '',
-        prazo: c.etapasStatus[EMANDA_ETAPAS_KEYS[i]]?.prazo || '',
-      }));
-    }
-    return null; // use default
-  }
-  
-  function getConteudoEtapas(c) {
-    const etapasDaRede = getConteudoEtapasByRede(c);
-    if (etapasDaRede) return etapasDaRede;
-    // Fluxo padrão com o estado salvo em c.etapasStatus.
-    if (!c.etapasStatus) c.etapasStatus = {};
-    return CONTEUDO_ETAPAS_PADRAO.map((nome, i) => ({
-      key: CONTEUDO_ETAPAS_KEYS[i],
-      nome,
-      feito: !!c.etapasStatus[CONTEUDO_ETAPAS_KEYS[i]]?.feito,
-      resp:  c.etapasStatus[CONTEUDO_ETAPAS_KEYS[i]]?.resp  || '',
-      prazo: c.etapasStatus[CONTEUDO_ETAPAS_KEYS[i]]?.prazo || '',
-    }));
-  }
-
-  // No fluxo de conteúdo, apenas a próxima etapa pendente vira uma tarefa
-  // ativa. As etapas já concluídas permanecem disponíveis como histórico.
-  function getConteudoEtapasLiberadas(c) {
-    const etapas = getConteudoEtapas(c);
-    const nextPendingIndex = etapas.findIndex(etapa => !etapa.feito);
-    if (nextPendingIndex < 0) return etapas;
-    return etapas.filter((etapa, index) => etapa.feito || index === nextPendingIndex);
-  }
-  
-  // Conteúdo não possui check próprio: ele é concluído automaticamente quando
-  // todas as tarefas/etapas do seu fluxo estiverem concluídas.
-  function isConteudoFinalizado(c) {
-    const etapas = getConteudoEtapas(c);
-    return etapas.length > 0 && etapas.every(etapa => etapa.feito === true);
-  }
-  
-  function atualizarConclusaoConteudo(c) {
-    const etapas = getConteudoEtapas(c);
-    const finalizado = etapas.length > 0 && etapas.every(etapa => etapa.feito === true);
-    c.done = finalizado;
-  
-    if (finalizado) {
-      c.status = 'encerrar';
-    } else if (c.status === 'encerrar') {
-      const ultimaEtapaConcluida = [...etapas].reverse().find(etapa => etapa.feito);
-      c.status = ultimaEtapaConcluida?.key || 'copy';
-    }
-    return finalizado;
-  }
-  
-  function conteudoCardHtml(c, showEmpresa) {
-    const etapas = getConteudoEtapas(c);
-    const done = etapas.filter(e => e.feito).length;
-    const pct = etapas.length > 0 ? Math.round(done / etapas.length * 100) : 0;
-    const proxima = etapas.find(e => !e.feito);
-    const finalizado = isConteudoFinalizado(c);
-    const empBadges = empBadgesHtml(c.empresa);
-    const isOpen = c.expandido;
-  
-    return `<div class="conteudo-card${finalizado?' style="opacity:0.55;"':''}">
-      <div class="conteudo-header" onclick="toggleConteudo(${c.id})">
-        <span class="conteudo-titulo" title="${c.nome}">${c.nome}</span>
-        ${showEmpresa ? empBadges : ''}
-        <span class="rede-badge rede-${c.rede}" style="flex-shrink:0;font-size:10px;">${REDE_L[c.rede]||c.rede||''}</span>
-        <span style="font-size:11px;color:var(--text-soft);flex-shrink:0;">${TIPO_L[c.tipo]||c.tipo||''}</span>
-        <div class="conteudo-progress-wrap">
-          <div class="conteudo-progress"><div class="conteudo-progress-fill" style="width:${pct}%;"></div></div>
-          <span style="font-size:11px;color:var(--text-soft);">${pct}%</span>
-        </div>
-        ${proxima && !finalizado ? `<span style="font-size:11px;color:var(--text-soft);max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0;">${proxima.nome}</span>` : (finalizado ? '<span class="badge b-ok" style="font-size:10px;">concluído</span>' : '')}
-        <button onclick="event.stopPropagation();openConteudoEtapasPrazos(${c.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:13px;padding:2px 4px;flex-shrink:0;" title="Editar prazos e responsáveis">📅</button>
-        <button onclick="event.stopPropagation();openConteudo(${c.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:2px 4px;flex-shrink:0;" title="Editar">✎</button>
-        <button onclick="event.stopPropagation();duplicarConteudo(${c.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:2px 4px;flex-shrink:0;" title="Duplicar">⧉</button>
-        <button onclick="event.stopPropagation();deleteConteudo(${c.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:2px 4px;flex-shrink:0;" title="Excluir">×</button>
-        <span class="conteudo-toggle">${isOpen?'▾':'▸'}</span>
-      </div>
-      <div class="conteudo-body${isOpen?' open':''}">
-        ${renderConteudoEtapasInline(c, etapas)}
-      </div>
-    </div>`;
-  }
-  
-  function contentStageLink(c, key) {
-    if (key === 'edicao') return String(c.link || '').trim();
-    if (key === 'gravado') return String(c.observacao || '').trim();
-    return '';
-  }
-
-  function validContentStageLink(value) {
+function loadCollaborationIdentityCache() {
+    const key = getCollaborationIdentityCacheKey();
+    if (!key) return;
     try {
-      const url = new URL(String(value || '').trim());
-      return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : '';
-    } catch (_) {
-      return '';
-    }
-  }
-
-  function contentStageLinkButton(c, key) {
-    const link = validContentStageLink(contentStageLink(c, key));
-    if (!link) return '';
-    return `<a href="${link.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" title="Abrir link" style="color:var(--gisella);font-size:14px;text-decoration:none;line-height:1;">🔗</a>`;
-  }
-
-  function requestContentStageLink(c, key) {
-    if (key !== 'edicao' && key !== 'gravado') return true;
-    const current = contentStageLink(c, key);
-    const label = key === 'edicao' ? 'Link da edição' : 'Link do gravado';
-    const value = window.prompt(`${label}:`, current);
-    if (value === null) return false;
-    const link = validContentStageLink(value);
-    if (!link) {
-      alert('Informe um link válido, começando com http:// ou https://.');
-      return false;
-    }
-    if (key === 'edicao') c.link = link;
-    else c.observacao = link;
-    return true;
-  }
-
-  function renderConteudoEtapasInline(c, etapas) {
-    // Feitas sobem pro topo
-    const sorted = [...etapas].sort((a,b) => {
-      if (a.feito && !b.feito) return -1;
-      if (!a.feito && b.feito) return 1;
-      return 0;
-    });
-    return sorted.map(e => {
-      const cor = e.feito ? 'var(--text-soft)' : (e.prazo ? (() => {
-        const diff = Math.round((new Date(e.prazo+'T00:00:00') - new Date().setHours(0,0,0,0)) / 86400000);
-        return diff < 0 ? 'var(--danger)' : diff <= 7 ? 'var(--warn)' : 'var(--text)';
-      })() : 'var(--text)');
-      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);${e.feito?'opacity:0.55;':''}">
-        <input type="checkbox" ${e.feito?'checked':''} onchange="toggleConteudoEtapa(${c.id},'${e.key}')"
-          style="accent-color:var(--gisella);width:15px;height:15px;flex-shrink:0;cursor:pointer;">
-        <span style="flex:1;font-size:13px;color:${cor};${e.feito?'text-decoration:line-through;':''}">${e.nome} ${contentStageLinkButton(c, e.key)}</span>
-        <select onchange="setConteudoEtapaResp(${c.id},'${e.key}',this.value)"
-          style="font-size:11px;border:1px solid var(--border);border-radius:6px;padding:2px 4px;background:var(--bg);color:var(--text-soft);">
-          <option value="" ${!e.resp?'selected':''}>—</option>
-          <option value="Gisella" ${e.resp==='Gisella'?'selected':''}>Gisella</option>
-          <option value="Milena" ${e.resp==='Milena'?'selected':''}>Milena</option>
-          <option value="Luiggi" ${e.resp==='Luiggi'?'selected':''}>Luiggi</option>
-        </select>
-        <input type="date" value="${e.prazo||''}" onchange="setConteudoEtapaPrazo(${c.id},'${e.key}',this.value)"
-          style="font-size:12px;border:1px solid var(--border);border-radius:6px;padding:3px 6px;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;width:130px;">
-      </div>`;
-    }).join('');
-  }
-  
-  function toggleConteudo(id) {
-    const c = conteudos.find(x => x.id === id);
-    if (!c) return;
-    c.expandido = !c.expandido;
-    save('gc-conteudos', conteudos);
-    renderConteudos();
-  }
-  
-  function toggleConteudoEtapa(id, key) {
-    const c = conteudos.find(x => x.id === id);
-    if (!c) return;
-    if (!c.etapasStatus) c.etapasStatus = {};
-    if (!c.etapasStatus[key]) c.etapasStatus[key] = {};
-    const wasFeito = c.etapasStatus[key].feito;
-    if (!wasFeito && !requestContentStageLink(c, key)) {
-      renderConteudos();
-      buildTarefas();
-      buildColabTarefas();
-      return;
-    }
-    c.etapasStatus[key].feito = !c.etapasStatus[key].feito;
-    const etapas = getConteudoEtapas(c);
-    // A próxima pessoa nunca recebe uma etapa vencida. Quando a etapa anterior
-    // for concluída depois do prazo, a nova tarefa passa para hoje (ou para a
-    // segunda-feira quando hoje for domingo).
-    if (c.etapasStatus[key].feito) {
-      const proxima = etapas.find(etapa => !etapa.feito);
-      const dataDeLiberacao = prazoUtilAntesDaPostagem(dashboardDate(), 0);
-      if (proxima && (!proxima.prazo || proxima.prazo < dataDeLiberacao)) {
-        c.etapasStatus[proxima.key].prazo = dataDeLiberacao;
-      }
-    }
-    const ultimaEtapaConcluida = [...etapas].reverse().find(etapa => etapa.feito);
-    c.status = c.etapasStatus[key].feito ? key : (ultimaEtapaConcluida?.key || 'copy');
-    atualizarConclusaoConteudo(c);
-    save('gc-conteudos', conteudos);
-    renderConteudos();
-    buildTarefas();
-    buildColabTarefas();
-    // Notify if completed
-    if (!wasFeito && c.etapasStatus[key].feito) {
-      const etapaNome = CONTEUDO_ETAPAS_PADRAO[CONTEUDO_ETAPAS_KEYS.indexOf(key)] || key;
-      const userName = window._currentUserName || localStorage.getItem('gc-session-name') || '';
-      notifyTaskCompleted(`[${c.nome}] ${etapaNome}`, userName);
-    }
-  }
-  
-  function setConteudoEtapaResp(id, key, resp) {
-    const c = conteudos.find(x => x.id === id);
-    if (!c) return;
-    if (!c.etapasStatus) c.etapasStatus = {};
-    if (!c.etapasStatus[key]) c.etapasStatus[key] = {};
-    c.etapasStatus[key].resp = resp;
-    save('gc-conteudos', conteudos);
-    buildTarefas();
-    buildColabTarefas();
-  }
-  
-  function setConteudoEtapaPrazo(id, key, prazo) {
-    const c = conteudos.find(x => x.id === id);
-    if (!c) return;
-    if (!c.etapasStatus) c.etapasStatus = {};
-    if (!c.etapasStatus[key]) c.etapasStatus[key] = {};
-    c.etapasStatus[key].prazo = prazo;
-    save('gc-conteudos', conteudos);
-    buildTarefas();
-    buildColabTarefas();
-  }
-  
-  // Modal de prazos (estilo openEtapasPrazos dos livros)
-  let _epConteudoId = null;
-  function openConteudoEtapasPrazos(id) {
-    const c = conteudos.find(x => x.id === id);
-    if (!c) return;
-    _epConteudoId = id;
-    document.getElementById('modal-cep-subtitulo').textContent = c.nome + ' — prazos e responsáveis';
-    renderCepLista();
-    openModal('modal-conteudo-etapas-prazos');
-  }
-  
-  function renderCepLista() {
-    const c = conteudos.find(x => x.id === _epConteudoId);
-    const el = document.getElementById('modal-cep-lista');
-    if (!c || !el) return;
-    const etapas = getConteudoEtapas(c);
-    // Feitas sobem pro topo
-    const sorted = [...etapas].sort((a,b) => {
-      if (a.feito && !b.feito) return -1;
-      if (!a.feito && b.feito) return 1;
-      return 0;
-    });
-    el.innerHTML = sorted.map(e => {
-      const cor = e.feito ? 'var(--text-soft)' : (e.prazo ? (() => {
-        const diff = Math.round((new Date(e.prazo+'T00:00:00') - new Date().setHours(0,0,0,0)) / 86400000);
-        return diff < 0 ? 'var(--danger)' : diff <= 7 ? 'var(--warn)' : 'var(--text)';
-      })() : 'var(--text)');
-      return `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);${e.feito?'opacity:0.55;':''}">
-        <input type="checkbox" ${e.feito?'checked':''} onchange="toggleConteudoEtapaCep('${e.key}')"
-          style="accent-color:var(--gisella);width:16px;height:16px;flex-shrink:0;cursor:pointer;">
-        <span style="flex:1;font-size:13px;color:${cor};${e.feito?'text-decoration:line-through;':''}">${e.nome} ${contentStageLinkButton(c, e.key)}</span>
-        <select onchange="setConteudoEtapaResp(${_epConteudoId},'${e.key}',this.value)"
-          style="font-size:11px;border:1px solid var(--border);border-radius:6px;padding:2px 4px;background:var(--bg);color:var(--text-soft);cursor:pointer;">
-          <option value="" ${!e.resp?'selected':''}>—</option>
-          <option value="Gisella" ${e.resp==='Gisella'?'selected':''}>Gisella</option>
-          <option value="Milena" ${e.resp==='Milena'?'selected':''}>Milena</option>
-          <option value="Luiggi" ${e.resp==='Luiggi'?'selected':''}>Luiggi</option>
-        </select>
-        <input type="date" value="${e.prazo||''}" onchange="setConteudoEtapaPrazo(${_epConteudoId},'${e.key}',this.value);renderCepLista()"
-          style="font-size:12px;border:1px solid var(--border);border-radius:6px;padding:3px 6px;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;width:130px;">
-      </div>`;
-    }).join('');
-  }
-  
-  function toggleConteudoEtapaCep(key) {
-    toggleConteudoEtapa(_epConteudoId, key);
-    renderCepLista();
-  }
-  
-  function sortConteudosByPriority(lista) {
-    const today = new Date(); today.setHours(0,0,0,0);
-    const todayStr = today.toISOString().slice(0,10);
-    return [...lista].sort((a, b) => {
-      const da = a.dataPost || '';
-      const db = b.dataPost || '';
-      // sem data vai pro final
-      if (!da && !db) return 0;
-      if (!da) return 1;
-      if (!db) return -1;
-      // atrasadas primeiro, depois cronológico
-      return da.localeCompare(db);
-    });
-  }
-  
-  function conteudoPriorityLabel(c) {
-    if (!c.dataPost) return null;
-    const today = new Date(); today.setHours(0,0,0,0);
-    const todayStr = today.toISOString().slice(0,10);
-    const diff = Math.round((new Date(c.dataPost+'T00:00:00') - today) / 86400000);
-    if (diff < 0) return { label: 'Atrasados', color: 'var(--danger)' };
-    if (diff === 0) return { label: 'Hoje', color: 'var(--gisella)' };
-    if (diff === 1) return { label: 'Amanhã', color: 'var(--warn)' };
-    if (diff <= 7) return { label: 'Esta semana', color: 'var(--text-mid)' };
-    return { label: 'Próximos', color: 'var(--text-soft)' };
-  }
-  
-  function cardsHtmlGrouped(lista, showEmpresa) {
-    if (lista.length === 0)
-      return '<div style="padding:1.5rem;text-align:center;color:var(--text-soft);font-size:13px;">Nenhum conteúdo. Use o botão + para adicionar.</div>';
-    const sorted = sortConteudosByPriority(lista);
-    let html = '';
-    let currentLabel = null;
-    sorted.forEach(c => {
-      const lbl = conteudoPriorityLabel(c);
-      const lblText = lbl ? lbl.label : 'Sem data';
-      const lblColor = lbl ? lbl.color : 'var(--text-soft)';
-      if (lblText !== currentLabel) {
-        currentLabel = lblText;
-        html += `<div style="font-size:11px;font-weight:500;color:${lblColor};text-transform:uppercase;letter-spacing:0.09em;padding:8px 0 4px;">${lblText}</div>`;
-      }
-      html += conteudoCardHtml(c, showEmpresa);
-    });
-    return html;
-  }
-  
-  function renderConteudos() {
-    const ativos = conteudos.filter(c => !isConteudoFinalizado(c));
-    const arquivados = conteudos.filter(c => isConteudoFinalizado(c));
-  
-    function cardsHtml(lista, showEmpresa) {
-      return lista.length === 0
-        ? '<div style="padding:1.5rem;text-align:center;color:var(--text-soft);font-size:13px;">Nenhum conteúdo. Use o botão + para adicionar.</div>'
-        : cardsHtmlGrouped(lista, showEmpresa);
-    }
-  
-    // Aba conteúdo unificada
-    const contDiv = document.getElementById('conteudo-tbody');
-    if (contDiv) contDiv.innerHTML = cardsHtml(ativos, true);
-  
-    // Por empresa
-    ['editora','leia','gisella'].forEach(emp => {
-      const el = document.getElementById('conteudo-tbody-'+emp);
-      if (!el) return;
-      const items = ativos.filter(c => (c.empresa||'').split(',').includes(emp));
-      el.innerHTML = cardsHtml(items, false);
-    });
-  
-    // Menu page
-    const _cf = getFilter('conteudo-menu');
-    const ativosMenu = _cf==='all' ? ativos : ativos.filter(c=>(c.empresa||'').split(',').includes(_cf));
-    const menuDiv = document.getElementById('conteudo-tbody-menu');
-    if (menuDiv) menuDiv.innerHTML = cardsHtml(ativosMenu, true);
-  
-    // Arquivados
-    const archMenuCnt = document.getElementById('archived-count-menu');
-    if (archMenuCnt) archMenuCnt.textContent = arquivados.length;
-    const archMenuDiv = document.getElementById('archived-tbody-menu');
-    if (archMenuDiv) archMenuDiv.innerHTML = arquivados.map(c=>conteudoCardHtml(c,true)).join('');
-  
-    const archCnt = document.getElementById('archived-count');
-    if (archCnt) archCnt.textContent = arquivados.length;
-    const archDiv = document.getElementById('archived-tbody');
-    if (archDiv) archDiv.innerHTML = arquivados.map(c=>conteudoCardHtml(c,true)).join('');
-  }
-  
-  function toggleArchivedMenu() {
-    const sec = document.getElementById('archived-section-menu');
-    const arr = document.getElementById('archived-arrow-menu');
-    if (!sec) return;
-    const open = sec.style.display === 'none';
-    sec.style.display = open ? 'block' : 'none';
-    arr.textContent = open ? '▾' : '▸';
-  }
-  
-  function toggleArchived() {
-    const sec = document.getElementById('archived-section');
-    const arr = document.getElementById('archived-arrow');
-    const open = sec.style.display==='none';
-    sec.style.display = open?'block':'none';
-    arr.textContent = open?'▾':'▸';
-  }
-  
-  function openNewConteudo() {
-    currentConteudoId = null;
-    document.getElementById('mc-title').textContent = 'Novo conteúdo';
-    ['mc-nome','mc-responsavel','mc-link','mc-copy','mc-legenda'].forEach(id=>document.getElementById(id).value='');
-    setEmpresasChecked('mc-emp-', 'gisella');
-    document.getElementById('mc-rede').value='instagram';
-    updateMcRede();
-    document.getElementById('mc-tipo').value='reel';
-    document.getElementById('mc-status').value='copy';
-    document.getElementById('mc-dataprod').value='';
-    document.getElementById('mc-datapost').value='';
-    document.getElementById('mc-hora').value='';
-    document.getElementById('mc-observacao').value='';
-    openModal('modal-conteudo');
-    setTimeout(()=>document.getElementById('mc-nome').focus(),50);
-  }
-  
-  function openNewConteudoEmpresa(emp) { openNewConteudo(); setEmpresasChecked('mc-emp-', emp); }
-  
-  function openConteudo(id) {
-    const c = conteudos.find(x=>x.id===id);
-    if (!c) return;
-    currentConteudoId = id;
-    document.getElementById('mc-title').textContent = c.nome;
-    document.getElementById('mc-nome').value=c.nome;
-    setEmpresasChecked('mc-emp-', c.empresa || 'editora');
-    document.getElementById('mc-responsavel').value=c.responsavel||'';
-    document.getElementById('mc-rede').value=c.rede||'instagram';
-    updateMcRede();
-    document.getElementById('mc-tipo').value=c.tipo;
-    document.getElementById('mc-status').value=c.status;
-    document.getElementById('mc-dataprod').value=c.dataProd||'';
-    document.getElementById('mc-datapost').value=c.dataPost||'';
-    document.getElementById('mc-hora').value=c.hora||'';
-    document.getElementById('mc-observacao').value=c.observacao||'';
-    document.getElementById('mc-link').value=c.link||'';
-    document.getElementById('mc-copy').value=c.copy||'';
-    document.getElementById('mc-legenda').value=c.legenda||'';
-    openModal('modal-conteudo');
-  }
-  
-  function saveConteudo() {
-    const nome = document.getElementById('mc-nome').value.trim();
-    if (!nome) { document.getElementById('mc-nome').focus(); return; }
-    const data = {nome, empresa:getEmpresaStr('mc-emp-','editora'), responsavel:document.getElementById('mc-responsavel').value, rede:document.getElementById('mc-rede').value, tipo:document.getElementById('mc-tipo').value, status:document.getElementById('mc-status').value, dataProd:document.getElementById('mc-dataprod').value, dataPost:document.getElementById('mc-datapost').value, hora:document.getElementById('mc-hora').value, link:document.getElementById('mc-link').value, copy:document.getElementById('mc-copy').value, legenda:document.getElementById('mc-legenda').value, observacao:document.getElementById('mc-observacao').value};
-    if (currentConteudoId) { const i=conteudos.findIndex(x=>x.id===currentConteudoId); if(i>-1) conteudos[i]={...conteudos[i],...data}; }
-    else conteudos.push({
-      id:Date.now(),
-      done:false,
-      etapasStatus: prazosIniciaisDoConteudo(data.rede, data.dataPost, data.empresa),
-      ...data
-    });
-    save('gc-conteudos',conteudos); renderConteudos();
-    refreshCalendars(); buildConteudoCalSemana(); buildVisaoConteudos();
-    buildTarefas(); buildColabTarefas(); buildPrioridades();
-    closeModal('modal-conteudo');
-  }
-  
-  function deleteConteudo(id) {
-    const c = conteudos.find(x => x.id === id);
-    if (!c) return;
-    const snapshot = [...conteudos];
-    conteudos = conteudos.filter(x => x.id !== id);
-    save('gc-conteudos', conteudos);
-    renderConteudos(); buildPrioridades();
-    pushUndo(c.nome || 'Conteúdo', () => {
-      conteudos = snapshot;
-      save('gc-conteudos', conteudos);
-      renderConteudos(); buildPrioridades();
-    });
-  }
-  
-  let _mcdConteudoId = null;
-  
-  function openConteudoDetalhe(id) {
-    const c = conteudos.find(x => x.id === id);
-    if (!c) return;
-    _mcdConteudoId = id;
-    document.getElementById('mcd-title').textContent = c.nome;
-    const empLabel = {editora:'Editora Cassol',leia:'Léia Cassol',gisella:'GC Estratégias'}[c.empresa] || c.empresa;
-    document.getElementById('mcd-subtitulo').textContent = empLabel + ' · ' + (c.rede||'') + (c.tipo ? ' · '+c.tipo : '');
-    document.getElementById('mcd-status').value = c.status || 'copy';
-    document.getElementById('mcd-responsavel').value = c.responsavel || '';
-    document.getElementById('mcd-dataprod').value = c.dataProd || '';
-    document.getElementById('mcd-datapost').value = c.dataPost || '';
-    document.getElementById('mcd-legenda').value = c.legenda || '';
-    renderMcdEtapas(c);
-    openModal('modal-conteudo-detalhe');
-  }
-  
-  function renderMcdEtapas(c) {
-    const el = document.getElementById('mcd-etapas-lista');
-    if (!el) return;
-    const etapas = c.etapas || [];
-    if (etapas.length === 0) {
-      el.innerHTML = '<div style="font-size:12px;color:var(--text-soft);padding:6px 0;">Nenhuma etapa. Adicione abaixo.</div>';
-      return;
-    }
-    el.innerHTML = etapas.map((e, i) => {
-      const cor = e.feito ? 'var(--text-soft)' : (e.prazo ? (() => {
-        const diff = Math.round((new Date(e.prazo+'T00:00:00') - new Date().setHours(0,0,0,0)) / 86400000);
-        return diff < 0 ? 'var(--danger)' : diff <= 7 ? 'var(--warn)' : 'var(--text)';
-      })() : 'var(--text)');
-      return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);${e.feito?'opacity:0.55;':''}">
-        <input type="checkbox" ${e.feito?'checked':''} onchange="toggleMcdEtapa(${i})" style="accent-color:var(--gisella);width:16px;height:16px;flex-shrink:0;cursor:pointer;">
-        <span style="flex:1;font-size:13px;color:${cor};${e.feito?'text-decoration:line-through;':''}">${e.nome}</span>
-        <select onchange="setMcdEtapaResp(${i},this.value)" style="font-size:11px;border:1px solid var(--border);border-radius:6px;padding:2px 4px;background:var(--bg);color:var(--text-soft);">
-          <option value="" ${!e.resp?'selected':''}>—</option>
-          <option value="Gisella" ${e.resp==='Gisella'?'selected':''}>Gisella</option>
-          <option value="Milena" ${e.resp==='Milena'?'selected':''}>Milena</option>
-          <option value="Luiggi" ${e.resp==='Luiggi'?'selected':''}>Luiggi</option>
-        </select>
-        <input type="date" value="${e.prazo||''}" onchange="setMcdEtapaPrazo(${i},this.value)"
-          style="font-size:12px;border:1px solid var(--border);border-radius:6px;padding:3px 6px;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;width:130px;">
-        <button onclick="deleteMcdEtapa(${i})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:0 2px;">×</button>
-      </div>`;
-    }).join('');
-  }
-  
-  function saveConteudoDetalhe() {
-    const c = conteudos.find(x => x.id === _mcdConteudoId);
-    if (!c) return;
-    c.status = document.getElementById('mcd-status').value;
-    c.responsavel = document.getElementById('mcd-responsavel').value;
-    c.dataProd = document.getElementById('mcd-dataprod').value;
-    c.dataPost = document.getElementById('mcd-datapost').value;
-    c.legenda = document.getElementById('mcd-legenda').value;
-    save('gc-conteudos', conteudos);
-    renderConteudos();
-  }
-  
-  function addConteudoEtapa() {
-    const c = conteudos.find(x => x.id === _mcdConteudoId);
-    const inp = document.getElementById('mcd-nova-etapa');
-    const nome = (inp?.value||'').trim();
-    if (!c || !nome) { inp?.focus(); return; }
-    if (!c.etapas) c.etapas = [];
-    c.etapas.push({nome, feito: false, prazo: '', resp: ''});
-    save('gc-conteudos', conteudos);
-    if (inp) inp.value = '';
-    renderMcdEtapas(c);
-  }
-  
-  function toggleMcdEtapa(idx) {
-    const c = conteudos.find(x => x.id === _mcdConteudoId);
-    if (!c || !c.etapas || !c.etapas[idx]) return;
-    c.etapas[idx].feito = !c.etapas[idx].feito;
-    save('gc-conteudos', conteudos);
-    renderMcdEtapas(c);
-    // Notify if completed
-    const user = window._currentUserName || '';
-    const etapa = c.etapas[idx];
-    if (etapa.feito) {
-      addNotif(`✅ Etapa concluída em "${c.nome}": ${etapa.nome}`, 'conteudo');
-    }
-  }
-  
-  function setMcdEtapaResp(idx, resp) {
-    const c = conteudos.find(x => x.id === _mcdConteudoId);
-    if (!c || !c.etapas || !c.etapas[idx]) return;
-    c.etapas[idx].resp = resp;
-    save('gc-conteudos', conteudos);
-  }
-  
-  function setMcdEtapaPrazo(idx, prazo) {
-    const c = conteudos.find(x => x.id === _mcdConteudoId);
-    if (!c || !c.etapas || !c.etapas[idx]) return;
-    c.etapas[idx].prazo = prazo;
-    save('gc-conteudos', conteudos);
-  }
-  
-  function deleteMcdEtapa(idx) {
-    const c = conteudos.find(x => x.id === _mcdConteudoId);
-    if (!c || !c.etapas) return;
-    c.etapas.splice(idx, 1);
-    save('gc-conteudos', conteudos);
-    renderMcdEtapas(c);
-  }
-  
-  /* ── STEIRA ── */
-  let currentSteiraName = null;
-  let _steiraListDragSrc = null;
-  
-  // Migrate old steiraData format to new array-based format with ids
-  function initSteiraList() {
-    if (!steiraData._list) {
-      // First run: populate default items or from old keys
-      const defaults = ['Plano Diretor','Curso solo','Ebook estratégia literária','Plano Diretor 2.0','Workshop avulso'];
-      const existing = Object.keys(steiraData).filter(k => k !== '_list' && !k.startsWith('_'));
-      const names = existing.length > 0 ? existing : defaults;
-      steiraData._list = names.map(name => ({ id: name.replace(/\s/g,'_') + '_' + Date.now(), name }));
-      save('gc-steira', steiraData);
-    }
-  }
-  
-  function renderSteiraList() {
-    initSteiraList();
-    const el = document.getElementById('steira-list');
-    if (!el) return;
-    const list = steiraData._list || [];
-    if (list.length === 0) {
-      el.innerHTML = '<div style="padding:1rem;color:var(--text-soft);font-size:13px;text-align:center;">Nenhum produto cadastrado.</div>';
-      return;
-    }
-    el.innerHTML = list.map((item, idx) => `
-      <div class="steira-item" draggable="true"
-        ondragstart="_steiraListDragSrc=${idx};event.dataTransfer.effectAllowed='move';"
-        ondragover="event.preventDefault()"
-        ondrop="event.preventDefault();steiraListDrop(${idx})">
-        <div style="display:flex;align-items:center;gap:8px;flex:1;cursor:pointer;" onclick="openSteiraById('${item.id}')">
-          <span style="cursor:grab;color:var(--text-soft);font-size:12px;">⠿</span>
-          <span style="font-size:13px;font-weight:500;">${item.name}</span>
-          ${steiraData[item.id]&&steiraData[item.id].link ? `<span id="steira-link-${item.id}" style="font-size:11px;color:var(--gisella);">🔗</span>` : `<span id="steira-link-${item.id}" style="display:none;font-size:11px;color:var(--gisella);">🔗</span>`}
-        </div>
-        <div style="display:flex;align-items:center;gap:4px;">
-          <button onclick="event.stopPropagation();renameSteiraItem('${item.id}')" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:2px 5px;" title="Editar nome">✎</button>
-          <button onclick="event.stopPropagation();duplicateSteiraItem('${item.id}')" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:2px 5px;" title="Duplicar">⧉</button>
-          <button onclick="event.stopPropagation();deleteSteiraItem('${item.id}')" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:2px 5px;" title="Excluir">×</button>
-          <span class="steira-arrow" style="cursor:pointer;" onclick="openSteiraById('${item.id}')">›</span>
-        </div>
-      </div>`).join('');
-  }
-  
-  function steiraListDrop(toIdx) {
-    const fromIdx = _steiraListDragSrc;
-    if (fromIdx === null || fromIdx === toIdx) return;
-    const list = steiraData._list;
-    const [moved] = list.splice(fromIdx, 1);
-    list.splice(toIdx, 0, moved);
-    _steiraListDragSrc = null;
-    save('gc-steira', steiraData);
-    renderSteiraList();
-  }
-  
-  function openSteiraById(id) {
-    initSteiraList();
-    const item = (steiraData._list||[]).find(x => x.id === id);
-    if (!item) return;
-    currentSteiraName = id;
-    const d = steiraData[id]||{};
-    document.getElementById('ms-title').textContent = item.name;
-    document.getElementById('ms-nome').value=d.nome||item.name;
-    document.getElementById('ms-fase').value=d.fase||'';
-    document.getElementById('ms-dores').value=d.dores||'';
-    document.getElementById('ms-preco').value=d.preco||'';
-    document.getElementById('ms-modelo').value=d.modelo||'';
-    document.getElementById('ms-formato').value=d.formato||'';
-    document.getElementById('ms-notes').value=d.notes||'';
-    document.getElementById('ms-link').value=d.link||'';
-    const linkOpen = document.getElementById('ms-link-open');
-    if (linkOpen) { linkOpen.href=d.link||'#'; linkOpen.style.display=d.link?'inline':'none'; }
-    openModal('modal-steira');
-  }
-  
-  function openSteira(nome) {
-    // Legacy compatibility: find item by name
-    initSteiraList();
-    const item = (steiraData._list||[]).find(x => x.name === nome);
-    if (item) { openSteiraById(item.id); return; }
-    // Fallback: use name as id
-    currentSteiraName = nome;
-    const d = steiraData[nome]||{};
-    document.getElementById('ms-title').textContent = nome;
-    document.getElementById('ms-nome').value=d.nome||nome;
-    document.getElementById('ms-fase').value=d.fase||'';
-    document.getElementById('ms-dores').value=d.dores||'';
-    document.getElementById('ms-preco').value=d.preco||'';
-    document.getElementById('ms-modelo').value=d.modelo||'';
-    document.getElementById('ms-formato').value=d.formato||'';
-    document.getElementById('ms-notes').value=d.notes||'';
-    document.getElementById('ms-link').value=d.link||'';
-    const linkOpen = document.getElementById('ms-link-open');
-    if (linkOpen) { linkOpen.href=d.link||'#'; linkOpen.style.display=d.link?'inline':'none'; }
-    openModal('modal-steira');
-  }
-  
-  function saveSteira() {
-    if (!currentSteiraName) return;
-    steiraData[currentSteiraName] = {
-      nome:document.getElementById('ms-nome').value, fase:document.getElementById('ms-fase').value,
-      dores:document.getElementById('ms-dores').value, preco:document.getElementById('ms-preco').value,
-      modelo:document.getElementById('ms-modelo').value, formato:document.getElementById('ms-formato').value,
-      notes:document.getElementById('ms-notes').value,
-      link:document.getElementById('ms-link').value.trim()
-    };
-    // Update name in list
-    const item = (steiraData._list||[]).find(x => x.id === currentSteiraName);
-    if (item && document.getElementById('ms-nome').value.trim()) {
-      item.name = document.getElementById('ms-nome').value.trim();
-    }
-    save('gc-steira',steiraData);
-    renderSteiraList();
-    closeModal('modal-steira');
-  }
-  
-  function addSteiraItem() {
-    const nome = prompt('Nome do produto:');
-    if (!nome||!nome.trim()) return;
-    initSteiraList();
-    const id = 'steira_' + Date.now();
-    steiraData._list.push({ id, name: nome.trim() });
-    save('gc-steira', steiraData);
-    renderSteiraList();
-  }
-  
-  function renameSteiraItem(id) {
-    initSteiraList();
-    const item = (steiraData._list||[]).find(x => x.id === id);
-    if (!item) return;
-    const newName = prompt('Novo nome:', item.name);
-    if (!newName || !newName.trim()) return;
-    item.name = newName.trim();
-    if (steiraData[id]) steiraData[id].nome = newName.trim();
-    save('gc-steira', steiraData);
-    renderSteiraList();
-  }
-  
-  function duplicateSteiraItem(id) {
-    initSteiraList();
-    const item = (steiraData._list||[]).find(x => x.id === id);
-    if (!item) return;
-    const newId = 'steira_' + Date.now();
-    const newItem = { id: newId, name: item.name + ' (cópia)' };
-    steiraData._list.push(newItem);
-    if (steiraData[id]) steiraData[newId] = { ...steiraData[id], nome: newItem.name };
-    save('gc-steira', steiraData);
-    renderSteiraList();
-  }
-  
-  function deleteSteiraItem(id) {
-    initSteiraList();
-    const item = (steiraData._list||[]).find(x => x.id === id);
-    if (!item) return;
-    if (!confirm('Excluir "' + item.name + '"?')) return;
-    steiraData._list = steiraData._list.filter(x => x.id !== id);
-    delete steiraData[id];
-    save('gc-steira', steiraData);
-    renderSteiraList();
-  }
-  
-  /* ── TAREFAS ── */
-  // openGroups persiste entre rebuilds para manter estado dos grupos abertos
-  const openGroups = {};
-  
-  function buildTarefas() {
-    const el = document.getElementById('tarefas-container');
-    buildTarefasCalSemana();
-    if (!el) return;
-  
-    // Salvar estado dos grupos abertos ANTES de rebuildar
-    ['atrasadas','hoje','semana','proxSemana','proximas',
-     'arq-atrasadas','arq-hoje','arq-semana','arq-proxSemana','arq-proximas'].forEach(k => {
-      const el2 = document.getElementById('tgrp-' + k);
-      if (el2) openGroups[k] = el2.style.display !== 'none';
-    });
-  
-    const today = new Date(); today.setHours(0,0,0,0);
-    const todayStr2 = today.toISOString().slice(0,10);
-  
-    const _tf = getFilter('tarefas');
-    const _tfc = getFilterColab('tarefas');
-    // Etapas de livros como tarefas virtuais
-    const etapaEvents = [];
-    livros.forEach(l => {
-      (l.etapas||[]).forEach((e,i) => {
-        const empMatch = _tf==='all'||(l.empresa||'').split(',').includes(_tf);
-        if (!empMatch) return;
-        if (_tfc!=='all' && (e.resp||'')!==_tfc) return;
-        etapaEvents.push({
-          id: `livro-${l.id}-${i}`,
-          _livroId: l.id, _etapaIdx: i,
-          titulo: `[${l.titulo}] ${e.nome}`,
-          empresa: l.empresa,
-          data: e.prazo||'',
-          responsavel: e.resp||'',
-          arquivada: e.feito,
-          tipo: 'tarefa',
+        const cached = JSON.parse(localPrefs.getItem(key) || "{}");
+        Object.entries(cached.byEmail || {}).forEach(([email, profile]) => {
+            const normalizedEmail = normalizeAccountEmail(email);
+            if (profile?.username) collaborationIdentityByEmail.set(normalizedEmail, profile.username);
+            if (profile?.avatar) collaborationAvatarByEmail.set(normalizedEmail, profile.avatar);
         });
-      });
-    });
-    // Etapas de conteúdos como tarefas virtuais
-    conteudos.forEach(c => {
-      if (isConteudoFinalizado(c)) return;
-      const empMatch = _tf==='all'||(c.empresa||'').split(',').includes(_tf);
-      if (!empMatch) return;
-      const etapas = getConteudoEtapasLiberadas(c);
-      etapas.forEach(e => {
-        if (_tfc!=='all' && (e.resp||'')!==_tfc) return;
-        etapaEvents.push({
-          id: `cont-${c.id}-${e.key}`,
-          _conteudoId: c.id, _conteudoKey: e.key,
-          titulo: `[${c.nome}] ${e.nome}`,
-          empresa: c.empresa,
-          data: e.prazo||'',
-          responsavel: e.resp||'',
-          arquivada: e.feito,
-          tipo: 'tarefa',
+        Object.entries(cached.byUserId || {}).forEach(([userId, profile]) => {
+            const normalizedUserId = String(userId);
+            if (profile?.username) collaborationIdentityByUserId.set(normalizedUserId, profile.username);
+            if (profile?.avatar) collaborationAvatarByUserId.set(normalizedUserId, profile.avatar);
         });
-      });
-    });
-    const ativas = [
-      ...events.filter(e=>!e.arquivada && e.tipo === 'tarefa' && (_tf==='all'||(e.empresa||'').split(',').includes(_tf)) && (_tfc==='all'||(e.responsavel||'')===_tfc)),
-      ...etapaEvents.filter(e=>!e.arquivada)
-    ];
-    const arquivadas = [
-      ...events.filter(e=>e.arquivada && e.tipo === 'tarefa' && (_tf==='all'||(e.empresa||'').split(',').includes(_tf)) && (_tfc==='all'||(e.responsavel||'')===_tfc)),
-      ...etapaEvents.filter(e=>e.arquivada)
-    ];
-  
-    const EMP_BADGE = {editora:'b-editora',leia:'b-leia',gisella:'b-gisella'};
-    const EMP_LABEL = {editora:'Editora Cassol',leia:'Léia Cassol',gisella:'GC Estratégias'};
-  
-    function tarefaRow(e, isArquivada) {
-      const prazoColor = !isArquivada && e.data ? (() => {
-        const diff = Math.round((new Date(e.data+'T00:00:00')-today)/86400000);
-        return diff < 0 ? 'var(--danger)' : diff === 0 ? 'var(--gisella)' : diff <= 7 ? 'var(--warn)' : 'var(--text-soft)';
-      })() : 'var(--text-soft)';
-      const isEtapa = e._livroId !== undefined || e._conteudoId !== undefined;
-      return `<tr style="${isArquivada?'opacity:0.5;':''}">
-        <td onclick="event.stopPropagation();" style="width:44px;text-align:center;">
-          <input type="checkbox" ${isArquivada?'checked':''}
-              onclick="event.stopPropagation();"
-              onchange="${e._conteudoId!==undefined?`toggleConteudoEtapa(${e._conteudoId},'${e._conteudoKey}')`:e._livroId!==undefined?`toggleEtapa(${e._livroId},${e._etapaIdx})`:`toggleTarefaArquivada(${e.id})`}"
-              style="accent-color:var(--gisella);width:18px;height:18px;cursor:pointer;display:block;margin:0 auto;"
-              title="${isArquivada?'Desmarcar':'Marcar como concluída'}">
-        </td>
-        <td style="font-weight:500;${!isArquivada && e._livroId !== undefined ? `color:${((e.empresa||'').split(',')[0]==='editora'?'var(--editora)':(e.empresa||'').split(',')[0]==='leia'?'var(--leia)':'var(--gisella)')};` : ''}${isArquivada?'text-decoration:line-through;color:var(--text-soft);':''}">
-          <span>${e.titulo}</span>
-          ${e.projetoId?`<span style="font-size:10px;color:var(--text-soft);display:block;">${(projetos.find(p=>p.id===e.projetoId)||{}).nome||''}</span>`:''}
-          ${e._conteudoId!==undefined?`<button onclick="openConteudoEtapasPrazos(${e._conteudoId})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:1px 4px;margin-left:2px;" title="Ver prazos">📅</button>`:!e._livroId?`<button onclick="openEditEvent(${e.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:1px 4px;margin-left:2px;" title="Editar">✎</button>`:`<button onclick="openEditEtapa(${e._livroId},${e._etapaIdx})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:1px 4px;" title="Editar">✎</button>`}
-          ${e.urgente ? '<span title="Urgente" style="font-size:14px;vertical-align:middle;">❗</span>' : ''}
-          ${!isEtapa?`<button onclick="event.stopPropagation();duplicarEvento(${e.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:1px 4px;" title="Duplicar">⧉</button>`:''}
-          ${!isEtapa && e.id ? `<button onclick="event.stopPropagation();deleteEventDirect(${e.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:1px 4px;" title="Excluir">×</button>` : (e._livroId!==undefined ? `<button onclick="event.stopPropagation();deleteEtapa(${e._livroId},${e._etapaIdx})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:1px 4px;" title="Excluir">×</button>` : '')}
-          ${!isEtapa ? comentarioBubble(e.id, e.comentarios) : ''}
-        </td>
-        <td>
-          ${empBadgesHtml(e.empresa)}
-          ${e.responsavel?`<span style="font-size:11px;font-weight:500;padding:1px 6px;border-radius:10px;display:inline-block;margin-top:2px;background:${e.responsavel==='Gisella'?'var(--gisella-bg)':e.responsavel==='Milena'?'var(--leia-bg)':'var(--editora-bg)'};color:#000;">${e.responsavel}</span>`:''}
-        </td>
-        <td style="font-size:12px;color:${prazoColor};font-weight:500;">${e.data?fmtDateTarefa(e.data):'—'}</td>
-      </tr>`;
-    }
-  
-    if (ativas.length===0 && arquivadas.length===0) {
-      el.innerHTML='<div style="padding:2rem;text-align:center;color:var(--text-soft);">Nenhuma tarefa. Use o botão + para adicionar.</div>';
-      return;
-    }
-  
-    ativas.sort((a,b) => {
-      const urgentDiff = Number(!!b.urgente) - Number(!!a.urgente);
-      return urgentDiff || (a.data||'9').localeCompare(b.data||'9');
-    });
-    arquivadas.sort((a,b)=>(b.data||'').localeCompare(a.data||''));
-  
-    // Calcular limites de semana corretamente (segunda a domingo)
-    const dow = today.getDay(); // 0=dom,1=seg...6=sab
-    // Fim desta semana = próximo domingo (ou hoje se for domingo)
-    const daysToSunday = dow === 0 ? 0 : 7 - dow;
-    const fimSemAtual = new Date(today); fimSemAtual.setDate(today.getDate() + daysToSunday);
-    fimSemAtual.setHours(23,59,59,999);
-    const fimSemAtualStr = fimSemAtual.toISOString().slice(0,10);
-    // Fim da próxima semana
-    const fimProxSem = new Date(fimSemAtual); fimProxSem.setDate(fimSemAtual.getDate() + 7);
-    const fimProxSemStr = fimProxSem.toISOString().slice(0,10);
-  
-    // Separar atrasadas de hoje
-    const groups = {urgentes:[], atrasadas:[], hoje:[], semana:[], proxSemana:[], proximas:[]};
-    ativas.forEach(t=>{
-      if (t.urgente) { groups.urgentes.push(t); return; }
-      if (!t.data) { groups.proximas.push(t); return; }
-      const diff = Math.round((new Date(t.data+'T00:00:00')-today)/86400000);
-      if (diff < 0)                      groups.atrasadas.push(t);
-      else if (diff === 0)               groups.hoje.push(t);
-      else if (t.data <= fimSemAtualStr) groups.semana.push(t);
-      else if (t.data <= fimProxSemStr)  groups.proxSemana.push(t);
-      else                               groups.proximas.push(t);
-    });
-  
-    // Arquivadas por grupo
-    const arqGroups = {atrasadas:[], hoje:[], semana:[], proxSemana:[], proximas:[]};
-    arquivadas.forEach(t=>{
-      if (!t.data) { arqGroups.proximas.push(t); return; }
-      const diff = Math.round((new Date(t.data+'T00:00:00')-today)/86400000);
-      if (diff < 0)                      arqGroups.atrasadas.push(t);
-      else if (diff === 0)               arqGroups.hoje.push(t);
-      else if (t.data <= fimSemAtualStr) arqGroups.semana.push(t);
-      else if (t.data <= fimProxSemStr)  arqGroups.proxSemana.push(t);
-      else                               arqGroups.proximas.push(t);
-    });
-  
-    function tableHtml(items, isArq) {
-      return `<div class="table-wrap"><table><thead><tr><th style="width:40px;"></th><th>Tarefa</th><th>Empresa</th><th>Prazo</th></tr></thead>
-      <tbody>${items.map(t=>tarefaRow(t,isArq||false)).join('')}</tbody></table></div>`;
-    }
-  
-    function arqToggle(key, items) {
-      if (!items.length) return '';
-      const wasOpen = openGroups['arq-'+key];
-      return `<div style="margin-top:6px;">
-        <button class="archived-toggle" onclick="toggleTarefaGroup('arq-${key}')"><span id="tgrp-arrow-arq-${key}">${wasOpen?'▾':'▸'}</span> Concluídas (${items.length})</button>
-        <div id="tgrp-arq-${key}" style="display:${wasOpen?'block':'none'};margin-top:6px;">${tableHtml(items,true)}</div>
-      </div>`;
-    }
-  
-    function renderGroup(label, items, color, key) {
-      const total = items.length + (arqGroups[key]||[]).length;
-      if (total === 0) return '';
-      return `<div style="margin-bottom:1.5rem;">
-        <div style="font-size:11px;font-weight:500;color:${color};text-transform:uppercase;letter-spacing:0.09em;margin-bottom:8px;">${label}${items.length ? ' · ' + items.length : ''}</div>
-        ${items.length ? tableHtml(items,false) : ''}
-        ${arqToggle(key, arqGroups[key]||[])}</div>`;
-    }
-  
-    function renderGroupCollapsible(label, items, color, key) {
-      const total = items.length + (arqGroups[key]||[]).length;
-      if (total === 0) return '';
-      const wasOpen = openGroups[key] !== undefined ? openGroups[key] : false;
-      return `<div style="margin-bottom:1.5rem;">
-        <button class="archived-toggle" style="color:${color};font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:0.09em;" onclick="toggleTarefaGroup('${key}')">
-          <span id="tgrp-arrow-${key}">${wasOpen?'▾':'▸'}</span> ${label}${items.length ? ' · ' + items.length : ''}
-        </button>
-        <div id="tgrp-${key}" style="display:${wasOpen?'block':'none'};margin-top:8px;">
-          ${items.length ? tableHtml(items,false) : ''}
-          ${arqToggle(key, arqGroups[key]||[])}
-        </div>
-      </div>`;
-    }
-  
-    let html = '';
-    if (groups.urgentes.length > 0) {
-      html += renderGroup(`❗ Urgentes · ${groups.urgentes.length}`, groups.urgentes, 'var(--danger)', 'urgentes');
-    }
-    if (groups.atrasadas.length > 0 || arqGroups.atrasadas.length > 0) {
-      html += renderGroup(`⚠️ Atrasadas · ${groups.atrasadas.length}`, groups.atrasadas, 'var(--danger)', 'atrasadas');
-    }
-    html += renderGroup('Hoje', groups.hoje, 'var(--gisella)', 'hoje')
-      + renderGroup('Esta semana', groups.semana, 'var(--warn)', 'semana')
-      + renderGroupCollapsible('Próxima semana', groups.proxSemana, 'var(--text-mid)', 'proxSemana')
-      + renderGroupCollapsible('Próximas', groups.proximas, 'var(--text-soft)', 'proximas');
-  
-    ['editora','leia','gisella'].forEach(emp => { if(document.getElementById('tarefas-empresa-'+emp)) buildTarefasEmpresa(emp); });
-  
-    el.innerHTML = html;
-  }
-  
-  function toggleTarefaGroup(key) {
-    const el = document.getElementById('tgrp-' + key);
-    const arrow = document.getElementById('tgrp-arrow-' + key);
-    if (!el) return;
-    const open = el.style.display === 'none';
-    el.style.display = open ? 'block' : 'none';
-    if (arrow) arrow.textContent = open ? '▾' : '▸';
-    openGroups[key] = open; // persist state
-  }
-  
-  function toggleTarefaArquivada(id) {
-    const e = events.find(x=>x.id===id);
-    if (!e) return;
-    const wasArquivada = !!e.arquivada;
-    e.arquivada = !e.arquivada;
-    // Save via save() so _lastLocalSave is set (prevents echo from onSnapshot)
-    save('gc-events', events);
-    // Notification when completing
-    if (!wasArquivada) {
-      const userName = window._currentUserName || localStorage.getItem('gc-session-name') || '';
-      if (typeof notifyTaskCompleted === 'function') notifyTaskCompleted(e.titulo, userName);
-      // Open the completed sub-group so user sees where task went
-      const today2 = new Date(); today2.setHours(0,0,0,0);
-      const key = e.data
-        ? (Math.round((new Date(e.data+'T00:00:00')-today2)/86400000) < 0 ? 'atrasadas'
-          : Math.round((new Date(e.data+'T00:00:00')-today2)/86400000) === 0 ? 'hoje'
-          : Math.round((new Date(e.data+'T00:00:00')-today2)/86400000) <= 7 ? 'semana' : 'proximas')
-        : 'proximas';
-      openGroups['arq-'+key] = true;
-    }
-    buildTarefas();
-    buildColabTarefas();
-    buildPrioridades();
-    ['editora','leia','gisella'].forEach(emp => {
-      if (document.getElementById('tarefas-empresa-'+emp)) buildTarefasEmpresa(emp);
-    });
-  }
-  
-  function toggleTarefasArquivadas() {
-    const sec = document.getElementById('tarq-section');
-    const arr = document.getElementById('tarq-arrow');
-    if (!sec) return;
-    const open = sec.style.display==='none';
-    sec.style.display = open?'block':'none';
-    arr.textContent = open?'▾':'▸';
-  }
-  
-  /* ── DATE ── */
-  const DIAS = ['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado'];
-  const MESES_PT = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
-  const now = new Date();
-  const dateEl = document.getElementById('today-date-text');
-  if (dateEl) dateEl.textContent = `${DIAS[now.getDay()]}, ${now.getDate()} de ${MESES_PT[now.getMonth()]}`;
-  
-  // Alert counters
-  // Alert counters (elements may not exist)
-  try {
-    const cntU = document.getElementById('cnt-urgentes');
-    const cntA = document.getElementById('cnt-atencao');
-    const cntM = document.getElementById('cnt-mentoradas');
-    if (cntU) cntU.textContent = document.querySelectorAll('.alert-item.urgente').length;
-    if (cntA) cntA.textContent = document.querySelectorAll('.alert-item.atencao').length;
-    if (cntM) cntM.textContent = mentees.length;
-  } catch(e) {}
-  
-  /* ── AUTOSAVE ── */
-  let saveTimer;
-  function autoSave() {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(()=>{
-      const el = document.getElementById('last-saved');
-      if (el) { const t=new Date(); el.textContent=`salvo às ${t.getHours()}:${String(t.getMinutes()).padStart(2,'0')}`; }
-    }, 800);
-  }
-  document.addEventListener('input', autoSave);
-  document.addEventListener('change', autoSave);
-  
-  /* ── FILTROS ── */
-  const pageFilters = {};
-  
-  function setFilter(pageId, empresa, btn) {
-    pageFilters[pageId] = empresa;
-    // Update button styles
-    const bar = document.getElementById('filter-bar-' + pageId);
-    if (bar) bar.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-    if (btn) btn.classList.add('active');
-    // Rebuild relevant section
-    if (pageId === 'tarefas') buildTarefas();
-    if (pageId === 'eventos') { buildCalendar('cal-eventos', empresa); buildEventosList(); }
-    if (pageId === 'conteudo-menu') {
-      renderConteudos();
-      const _wrap = document.getElementById('cal-conteudo-wrap');
-      if (_wrap && _wrap.dataset.view === 'mes') buildCalendar('cal-conteudo', empresa);
-      else buildConteudoCalSemana();
-    }
-    if (pageId === 'projetos') renderProjetos();
-    if (pageId === 'livros') renderLivros();
-  }
-  
-  function getFilter(pageId) { return pageFilters[pageId] || 'all'; }
-  
-  const pageFiltersColab = {};
-  
-  function setFilterColab(pageId, colab, btn) {
-    pageFiltersColab[pageId] = colab;
-    const bar = document.getElementById('filter-bar-' + pageId + '-colab');
-    if (bar) bar.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-    if (btn) btn.classList.add('active');
-    if (pageId === 'tarefas') buildTarefas();
-  }
-  
-  function getFilterColab(pageId) { return pageFiltersColab[pageId] || 'all'; }
-  
-  function buildEventosList() {
-    const today = new Date().toISOString().slice(0,10);
-    const _ef = getFilter('eventos');
-  
-    // Eventos cadastrados no dash
-    const evDash = events.filter(e => e.tipo === 'evento' && (_ef==='all'||(e.empresa||'').split(',').includes(_ef)));
-  
-    // Eventos do Google Calendar (Gisella + Léia)
-    const gcalAll = [
-      ...(window.gcalEventsCache||[]).map(ev => ({
-        id: 'gcal-g-'+ev.start+'-'+(ev.title||'').slice(0,8).replace(/\s/g,''),
-        titulo: ev.title||'(sem título)', empresa: 'gisella',
-        data: ev.start, dataFim: ev.end||ev.start,
-        startTime: ev.startTime, gcal: true, link: ev.link||''
-      })),
-      ...(gcalLeiaCache||[]).map(ev => ({
-        id: 'gcal-l-'+ev.start+'-'+(ev.title||'').slice(0,8).replace(/\s/g,''),
-        titulo: ev.title||'(sem título)', empresa: 'leia',
-        data: ev.start, dataFim: ev.end||ev.start,
-        startTime: ev.startTime, gcal: true, link: ev.link||''
-      }))
-    ].filter(e => _ef==='all' || e.empresa===_ef);
-  
-    // Merge e ordenar
-    const evList = [...evDash, ...gcalAll];
-    evList.sort((a,b)=>(a.data||'').localeCompare(b.data||''));
-  
-    const proxEl = document.getElementById('eventos-lista-proximos');
-    const passEl = document.getElementById('eventos-lista-passados');
-    const el = document.getElementById('eventos-lista');
-  
-    function evRow(e) {
-      const emp = (e.empresa||'editora').split(',')[0];
-      const cor = emp==='editora'?'var(--editora)':emp==='leia'?'var(--leia)':'var(--gisella)';
-      const label = emp==='editora'?'Editora':emp==='leia'?'Léia':'GC';
-      const gcalBadge = e.gcal ? '<span style="font-size:9px;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:1px 5px;color:var(--text-soft);margin-left:4px;">Google Cal</span>' : '';
-      const time = e.startTime ? ' · '+e.startTime : '';
-      const actions = e.gcal
-        ? (e.link ? '<a href="'+e.link+'" target="_blank" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:11px;text-decoration:none;padding:0 4px;">↗</a>' : '')
-        : '<button onclick="openEditEvent('+e.id+')" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:11px;">✎</button><button onclick="deleteEventDirect('+e.id+')" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:13px;">×</button>';
-      return '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">' +
-        '<div style="width:3px;min-height:32px;background:'+cor+';border-radius:2px;flex-shrink:0;'+(e.gcal?'opacity:0.6;':'')+'"></div>' +
-        '<div style="flex:1;min-width:0;">' +
-          '<div style="font-weight:500;font-size:13px;">'+e.titulo+gcalBadge+'</div>' +
-          '<div style="font-size:11px;color:var(--text-soft);">'+fmtDate(e.data||'')+(e.dataFim&&e.dataFim!==e.data?' – '+fmtDate(e.dataFim):'')+time+' · <span style="color:'+cor+';">'+label+'</span></div>' +
-        '</div>' +
-        actions +
-      '</div>';
-    }
-  
-    if (proxEl) {
-      // Get current calendar month from CAL_STATE
-      const calState = CAL_STATE['cal-eventos'] || {y: new Date().getFullYear(), m: new Date().getMonth()};
-      const calY = calState.y, calM = calState.m;
-      const mesInicio = calY + '-' + String(calM+1).padStart(2,'0') + '-01';
-      const mesFim   = calY + '-' + String(calM+1).padStart(2,'0') + '-' + String(new Date(calY,calM+1,0).getDate()).padStart(2,'0');
-      const MESES_PT = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
-      // Update label
-      const labelEl = document.getElementById('eventos-proximos-label');
-      if (labelEl) labelEl.textContent = MESES_PT[calM] + ' ' + calY;
-      // Filter proximos to current calendar month
-      const proximos = evList.filter(e=>(e.data||'')>=mesInicio && (e.data||'')<=mesFim);
-      // Passados: only from current calendar month, before today
-      const passados = evList.filter(e=>(e.data||'')>=mesInicio && (e.data||'')<today && (e.data||'')<=mesFim).reverse().slice(0,20);
-      proxEl.innerHTML = proximos.length ? proximos.map(evRow).join('') : '<div style="color:var(--text-soft);font-size:13px;padding:8px 0;">Nenhum evento em '+MESES_PT[calM]+'.</div>';
-      if (passEl) passEl.innerHTML = passados.length ? passados.map(evRow).join('') : '<div style="color:var(--text-soft);font-size:13px;padding:8px 0;">Nenhum.</div>';
-      return;
-    }
-    if (el) {
-      if (evList.length === 0) { el.innerHTML = '<div style="padding:1rem;text-align:center;color:var(--text-soft);font-size:13px;">Nenhum evento cadastrado.</div>'; return; }
-      el.innerHTML = evList.map(evRow).join('');
-    }
-  }
-  
-  
-  /* ── PROJETOS ── */
-  let projetos = load('gc-projetos', []);
-  let currentProjetoEmpresa = null;
-  let editingProjetoId = null;
-  
-  function openAddProjeto(emp) {
-    editingProjetoId = null;
-    currentProjetoEmpresa = emp;
-    document.getElementById('mp-title').textContent = 'Novo projeto';
-    document.getElementById('mp-nome').value = '';
-    setEmpresasChecked('mp-emp-', emp || 'editora');
-    document.getElementById('mp-status').value = 'pendente';
-    document.getElementById('mp-resp').value = '';
-    document.getElementById('mp-inicio').value = '';
-    document.getElementById('mp-fim').value = '';
-    document.getElementById('mp-observacao').value = '';
-    document.getElementById('mp-delete-btn').style.display = 'none';
-    openModal('modal-projeto');
-    setTimeout(()=>document.getElementById('mp-nome').focus(), 50);
-  }
-  
-  function submitProjeto() {
-    const nome = document.getElementById('mp-nome').value.trim();
-    if (!nome) { document.getElementById('mp-nome').focus(); return; }
-    const data = {
-      nome,
-      empresa: getEmpresaStr('mp-emp-', 'editora'),
-      status: document.getElementById('mp-status').value,
-      responsavel: document.getElementById('mp-resp').value,
-      inicio: document.getElementById('mp-inicio').value,
-      fim: document.getElementById('mp-fim').value,
-      observacao: document.getElementById('mp-observacao').value.trim(),
-    };
-    if (editingProjetoId) {
-      const i = projetos.findIndex(x=>x.id===editingProjetoId);
-      if (i>-1) projetos[i] = {...projetos[i], ...data};
-    } else {
-      projetos.push({id: Date.now(), tarefas: [], expandido: true, ...data});
-    }
-    save('gc-projetos', projetos);
-    renderProjetos();
-    closeModal('modal-projeto');
-  }
-  
-  const ST_PROJ = {pendente:{l:'Pendente',c:'s-pendente'}, execucao:{l:'Em execução',c:'s-execucao'}, finalizado:{l:'Finalizado',c:'s-finalizado'}};
-  const EMP_LABEL_P = {editora:'Editora Cassol', leia:'Léia Cassol', gisella:'GC Estratégias'};
-  const EMP_BADGE_P = {editora:'b-editora', leia:'b-leia', gisella:'b-gisella'};
-  
-  function projetoHtml(p, showEmpresa) {
-    const st = ST_PROJ[p.status] || {l:p.status, c:'b-gray'};
-    const done = (p.tarefas||[]).filter(t=>t.feito).length;
-    const total = (p.tarefas||[]).length;
-    const today = new Date(); today.setHours(0,0,0,0);
-  
-    function projetoTarefaRow(t, i) {
-      // Buscar o evento correspondente para pegar dados atualizados
-      const ev = t.eventId ? events.find(x => x.id === t.eventId) : null;
-      const data = ev ? ev.data : '';
-      const resp = ev ? (ev.responsavel||'') : (t.resp||'');
-      const isArq = t.feito;
-      const prazoColor = !isArq && data ? (() => {
-        const diff = Math.round((new Date(data+'T00:00:00')-today)/86400000);
-        return diff < 0 ? 'var(--danger)' : diff === 0 ? 'var(--gisella)' : diff <= 7 ? 'var(--warn)' : 'var(--text-soft)';
-      })() : 'var(--text-soft)';
-      const respBg = resp==='Gisella'?'var(--gisella-bg)':resp==='Milena'?'var(--leia-bg)':'var(--editora-bg)';
-      return `<div class="projeto-task-row" style="${isArq?'opacity:0.6;':''}">
-        <input type="checkbox" ${isArq?'checked':''} onchange="toggleProjetoTask(${p.id},${i})" style="accent-color:var(--gisella);width:14px;height:14px;cursor:pointer;flex-shrink:0;">
-        <span class="projeto-task-nome${isArq?' done':''}" style="flex:1;">
-          ${t.nome}
-          ${resp?`<span style="font-size:10px;font-weight:500;padding:1px 5px;border-radius:10px;margin-left:4px;background:${respBg};color:#000;">${resp}</span>`:''}
-        </span>
-        ${data?`<span style="font-size:11px;color:${prazoColor};font-weight:500;">${fmtDate(data)}</span>`:''}
-        ${ev?`<button onclick="openEditEvent(${ev.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:1px 4px;" title="Editar">✎</button>`:''}
-        <button onclick="deleteProjetoTask(${p.id},${i})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:1px 4px;" title="Excluir">×</button>
-      </div>`;
-    }
-  
-    const tarefasHtml = (p.tarefas||[]).map((t,i) => projetoTarefaRow(t,i)).join('');
-    const infoHtml = (p.inicio||p.fim) ? `<div style="font-size:12px;color:var(--text-soft);padding:4px 0 8px;">${p.inicio?'Início: '+fmtDatePt(p.inicio):''}${p.inicio&&p.fim?' · ':''}${p.fim?'Fim: '+fmtDatePt(p.fim):''}</div>` : '';
-  
-    return `<div class="projeto-card" data-projeto-id="${p.id}">
-      <div class="projeto-header" onclick="openProjetoPrazos(${p.id})" style="cursor:pointer;" title="Abrir tarefas e prazos do projeto">
-        <div class="projeto-order-controls" aria-label="Reposicionar projeto" onclick="event.stopPropagation()">
-          <button type="button" onclick="event.stopPropagation();moverProjeto(${p.id},-1)" title="Mover projeto para cima" aria-label="Mover ${p.nome} para cima">↑</button>
-          <span class="projeto-drag-handle" title="Arraste para reposicionar" aria-hidden="true">⠿</span>
-          <button type="button" onclick="event.stopPropagation();moverProjeto(${p.id},1)" title="Mover projeto para baixo" aria-label="Mover ${p.nome} para baixo">↓</button>
-        </div>
-        <div class="projeto-titulo" onclick="event.stopPropagation();openEditProjeto(${p.id})" style="cursor:pointer;text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--border-mid);" title="Abrir ficha do projeto">${p.nome}</div>
-        ${showEmpresa ? empBadgesHtml(p.empresa) : ''}
-        <span class="badge ${st.c}">${st.l}</span>
-        ${total>0 ? `<span style="font-size:11px;color:var(--text-soft);">${done}/${total}</span>` : ''}
-        <button onclick="event.stopPropagation();openProjetoPrazos(${p.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:11px;padding:2px 6px;" title="Definir prazos das tarefas">📅</button>
-        <button onclick="event.stopPropagation();openEditProjeto(${p.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:13px;padding:2px 6px;" title="Editar">&#9998;</button>
-        <button onclick="event.stopPropagation();duplicarProjeto(${p.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:2px 6px;" title="Duplicar">&#10697;</button>
-        <button onclick="event.stopPropagation();deleteProjeto(${p.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:2px 6px;" title="Excluir">&#215;</button>
-      </div>
-      <div style="padding:0 16px 12px;">
-        ${infoHtml}
-        ${tarefasHtml}
-        <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;">
-          <button class="add-btn" onclick="openAddTarefaProjeto(${p.id})">+ adicionar tarefa</button>
-          
-        </div>
-      </div>
-    </div>`;
-  }
-  
-  function renderProjetos() {
-    const _pf = getFilter('projetos');
-    const ativos = projetos.filter(p => p.status !== 'finalizado' && (_pf==='all'||(p.empresa||'').split(',').includes(_pf)));
-    const finalizados = projetos.filter(p => p.status === 'finalizado' && (_pf==='all'||(p.empresa||'').split(',').includes(_pf)));
-  
-    // Visao geral
-    const visaoEl = document.getElementById('projetos-visao');
-    if (visaoEl) visaoEl.innerHTML = ativos.length===0
-      ? '<div style="padding:1rem;text-align:center;color:var(--text-soft);font-size:13px;">Nenhum projeto.</div>'
-      : ativos.map(p=>projetoHtml(p,true)).join('');
-    if (visaoEl && ativos.length) setupProjetoReordering(visaoEl);
-  
-    // Todos page
-    const todosEl = document.getElementById('projetos-todos');
-    if (todosEl) todosEl.innerHTML = ativos.length===0
-      ? '<div style="padding:1rem;text-align:center;color:var(--text-soft);font-size:13px;">Nenhum projeto.</div>'
-      : ativos.map(p=>projetoHtml(p,true)).join('');
-    if (todosEl && ativos.length) setupProjetoReordering(todosEl);
-    const archTodosEl = document.getElementById('projetos-arquivados-todos');
-    const archTodosCnt = document.getElementById('parq-count-todos');
-    if (archTodosCnt) archTodosCnt.textContent = finalizados.length;
-    if (archTodosEl) archTodosEl.innerHTML = finalizados.map(p=>projetoHtml(p,true)).join('');
-  
-    // Per company
-    ['editora','leia','gisella'].forEach(emp => {
-      const el = document.getElementById('projetos-'+emp);
-      if (!el) return;
-      const lista = ativos.filter(p=>(p.empresa||'').split(',').includes(emp));
-      el.innerHTML = lista.length===0
-        ? `<div style="padding:1rem;text-align:center;color:var(--text-soft);font-size:13px;">Nenhum projeto.</div>`
-        : lista.map(p=>projetoHtml(p,false)).join('');
-      if (lista.length) setupProjetoReordering(el);
-      const archEl = document.getElementById('projetos-arquivados-'+emp);
-      const cntEl = document.getElementById('parq-count-'+emp);
-      const arch = finalizados.filter(p=>p.empresa===emp);
-      if (cntEl) cntEl.textContent = arch.length;
-      if (archEl) archEl.innerHTML = arch.map(p=>projetoHtml(p,false)).join('');
-    });
-  
-    buildColabTarefas();
-  }
-  
-  function getProjetosVisiveisAtivos() {
-    const filtro = getFilter('projetos');
-    return projetos.filter(p => p.status !== 'finalizado' && (filtro === 'all' || (p.empresa || '').split(',').includes(filtro)));
-  }
-  
-  function salvarOrdemProjetos(idsOrdenados) {
-    const porId = new Map(projetos.map(p => [String(p.id), p]));
-    const idsVisiveis = new Set(idsOrdenados.map(String));
-    const ordenados = idsOrdenados.map(id => porId.get(String(id))).filter(Boolean);
-    let cursor = 0;
-    projetos = projetos.map(p => idsVisiveis.has(String(p.id)) ? ordenados[cursor++] : p);
-    save('gc-projetos', projetos);
-    renderProjetos();
-  }
-  
-  function moverProjeto(id, direcao) {
-    const visiveis = getProjetosVisiveisAtivos();
-    const atual = visiveis.findIndex(p => String(p.id) === String(id));
-    const destino = atual + direcao;
-    if (atual < 0 || destino < 0 || destino >= visiveis.length) return;
-    [visiveis[atual], visiveis[destino]] = [visiveis[destino], visiveis[atual]];
-    salvarOrdemProjetos(visiveis.map(p => p.id));
-  }
-  
-  function setupProjetoReordering(container) {
-    let dragged = null;
-    const cards = [...container.querySelectorAll(':scope > .projeto-card')];
-  
-    cards.forEach(card => {
-      const handle = card.querySelector('.projeto-drag-handle');
-      if (!handle) return;
-      handle.addEventListener('mousedown', () => card.setAttribute('draggable', 'true'));
-      handle.addEventListener('touchstart', () => card.setAttribute('draggable', 'true'), {passive:true});
-  
-      card.addEventListener('dragstart', event => {
-        dragged = card;
-        card.classList.add('projeto-dragging');
-        event.dataTransfer.effectAllowed = 'move';
-        event.dataTransfer.setData('text/plain', card.dataset.projetoId);
-      });
-      card.addEventListener('dragend', () => {
-        card.classList.remove('projeto-dragging');
-        card.removeAttribute('draggable');
-        dragged = null;
-        container.classList.remove('projeto-reordering');
-      });
-    });
-  
-    container.addEventListener('dragover', event => {
-      if (!dragged) return;
-      event.preventDefault();
-      container.classList.add('projeto-reordering');
-      const siblings = [...container.querySelectorAll(':scope > .projeto-card:not(.projeto-dragging)')];
-      const next = siblings.find(card => event.clientY < card.getBoundingClientRect().top + card.offsetHeight / 2);
-      if (next) container.insertBefore(dragged, next);
-      else container.appendChild(dragged);
-    });
-    container.addEventListener('drop', event => {
-      if (!dragged) return;
-      event.preventDefault();
-      salvarOrdemProjetos([...container.querySelectorAll(':scope > .projeto-card')].map(card => card.dataset.projetoId));
-    });
-  }
-  
-  function toggleProjeto(id) { const p=projetos.find(x=>x.id===id); if(p){p.expandido=!p.expandido; save('gc-projetos',projetos); renderProjetos();} }
-  function deleteCurrentProjeto() {
-    if (!editingProjetoId) return;
-  
-    projetos = projetos.filter(x => x.id !== editingProjetoId);
-    save('gc-projetos', projetos);
-    renderProjetos();
-    closeModal('modal-projeto');
-    editingProjetoId = null;
-  }
-  
-  function deleteProjeto(id) {
-    const p = projetos.find(x=>x.id===id);
-    if (!p) return;
-    const snap = [...projetos];
-    projetos = projetos.filter(x=>x.id!==id);
-    save('gc-projetos',projetos); renderProjetos();
-    pushUndo(p.nome||'Projeto', ()=>{ projetos=snap; save('gc-projetos',projetos); renderProjetos(); });
-  }
-  
-  function openEditProjeto(id) {
-    const p = projetos.find(x=>x.id===id);
-    if (!p) return;
-    editingProjetoId = id;
-    document.getElementById('mp-title').textContent = 'Editar projeto';
-    document.getElementById('mp-nome').value = p.nome;
-    setEmpresasChecked('mp-emp-', p.empresa || 'editora');
-    document.getElementById('mp-status').value = p.status;
-    document.getElementById('mp-resp').value = p.responsavel||'';
-    document.getElementById('mp-inicio').value = p.inicio||'';
-    document.getElementById('mp-fim').value = p.fim||'';
-    document.getElementById('mp-observacao').value = p.observacao||'';
-    document.getElementById('mp-delete-btn').style.display = 'inline-block';
-    openModal('modal-projeto');
-  }
-  
-  function openAddTarefaProjeto(projetoId) {
-    const p = projetos.find(x => x.id === projetoId);
-    if (!p) return;
-    editingEventId = null;
-    openQuickAdd();
-    document.getElementById('qa-tipo').value = 'tarefa';
-    updateQaFields();
-    setEmpresasChecked('qa-emp-', p.empresa || 'editora');
-    document.getElementById('qa-responsavel').value = p.responsavel || '';
-    document.getElementById('qa-modal-title').textContent = 'Nova tarefa · ' + p.nome;
-    window._addingToProjetoId = projetoId;
-  }
-  
-  /* ── MODAL PRAZOS DAS TAREFAS DO PROJETO ── */
-  let _ppProjetoId = null;
-  let _ppDragIdx = null;
-  
-  function openProjetoPrazos(projetoId) {
-    const p = projetos.find(x => x.id === projetoId);
-    if (!p) return;
-    _ppProjetoId = projetoId;
-    document.getElementById('modal-pp-subtitulo').textContent = p.nome + ' — defina prazos e gerencie as tarefas';
-    renderProjetoPrazosLista();
-    openModal('modal-projeto-prazos');
-  }
-  
-  function renderProjetoPrazosLista() {
-    const p = projetos.find(x => x.id === _ppProjetoId);
-    const el = document.getElementById('modal-pp-lista');
-    if (!p || !el) return;
-    const tarefas = (p.tarefas || []).map((t, i) => ({t, i}));
-    tarefas.sort((a, b) => a.t.feito === b.t.feito ? 0 : (a.t.feito ? -1 : 1));
-  
-    el.innerHTML = tarefas.length ? tarefas.map(({t, i}) => {
-      const ev = t.eventId ? events.find(x => x.id === t.eventId) : null;
-      const prazo = ev ? (ev.data || '') : (t.prazo || '');
-      const resp = ev ? (ev.responsavel || '') : (t.resp || '');
-      const cor = t.feito ? 'var(--text-soft)' : (prazo ? (() => {
-        const diff = Math.round((new Date(prazo + 'T00:00:00') - new Date().setHours(0,0,0,0)) / 86400000);
-        return diff < 0 ? 'var(--danger)' : diff <= 7 ? 'var(--warn)' : 'var(--text)';
-      })() : 'var(--text)');
-      return `<div draggable="true" ondragstart="projetoPrazoDragStart(event,${i})" ondragover="event.preventDefault()" ondrop="projetoPrazoDrop(event,${i})"
-        style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);${t.feito?'opacity:0.55;':''}">
-        <span style="cursor:grab;color:var(--text-soft);font-size:12px;flex-shrink:0;">⠿</span>
-        <input type="checkbox" ${t.feito?'checked':''} onchange="toggleProjetoTaskModal(${_ppProjetoId},${i})" style="accent-color:var(--gisella);width:16px;height:16px;flex-shrink:0;cursor:pointer;">
-        <span style="flex:1;font-size:13px;color:${cor};${t.feito?'text-decoration:line-through;':''}">${t.nome}</span>
-        <select onchange="updateProjetoTaskResp(${_ppProjetoId},${i},this.value)" style="font-size:11px;border:1px solid var(--border);border-radius:6px;padding:2px 4px;background:var(--bg);color:var(--text-soft);cursor:pointer;">
-          <option value="" ${!resp?'selected':''}>—</option>
-          <option value="Gisella" ${resp==='Gisella'?'selected':''}>Gisella</option>
-          <option value="Milena" ${resp==='Milena'?'selected':''}>Milena</option>
-          <option value="Luiggi" ${resp==='Luiggi'?'selected':''}>Luiggi</option>
-        </select>
-        <input type="date" value="${prazo}" onchange="updateProjetoTaskPrazo(${_ppProjetoId},${i},this.value)" style="font-size:12px;border:1px solid var(--border);border-radius:6px;padding:3px 6px;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;width:130px;">
-        <button onclick="deleteProjetoTaskModal(${_ppProjetoId},${i})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:0 2px;" title="Excluir">×</button>
-      </div>`;
-    }).join('') : '<div style="padding:1rem;text-align:center;color:var(--text-soft);font-size:13px;">Nenhuma tarefa neste projeto.</div>';
-  }
-  
-  function addProjetoTaskModal() {
-    const p = projetos.find(x => x.id === _ppProjetoId);
-    const input = document.getElementById('pp-nova-tarefa');
-    const nome = (input?.value || '').trim();
-    if (!p || !nome) { input?.focus(); return; }
-    if (!p.tarefas) p.tarefas = [];
-    const taskId = Date.now();
-    p.tarefas.push({nome, feito:false, resp:p.responsavel||'', eventId:taskId});
-    events.push({id:taskId, empresa:p.empresa, titulo:nome, data:p.fim||'', tipo:'tarefa', projetoId:p.id, responsavel:p.responsavel||''});
-    save('gc-projetos', projetos);
-    save('gc-events', events);
-    if (input) input.value = '';
-    renderProjetoPrazosLista();
-    renderProjetos();
-    buildTarefas();
-    buildColabTarefas();
-  }
-  
-  function updateProjetoTaskPrazo(projetoId, idx, prazo) {
-    const p = projetos.find(x => x.id === projetoId);
-    const t = p?.tarefas?.[idx];
-    if (!t) return;
-    t.prazo = prazo;
-    const ev = t.eventId ? events.find(x => x.id === t.eventId) : null;
-    if (ev) ev.data = prazo;
-    save('gc-projetos', projetos);
-    save('gc-events', events);
-    renderProjetos();
-    buildTarefas();
-    buildColabTarefas();
-    renderProjetoPrazosLista();
-  }
-  
-  function updateProjetoTaskResp(projetoId, idx, resp) {
-    const p = projetos.find(x => x.id === projetoId);
-    const t = p?.tarefas?.[idx];
-    if (!t) return;
-    t.resp = resp;
-    const ev = t.eventId ? events.find(x => x.id === t.eventId) : null;
-    if (ev) ev.responsavel = resp;
-    save('gc-projetos', projetos);
-    save('gc-events', events);
-    renderProjetos();
-    buildTarefas();
-    buildColabTarefas();
-  }
-  
-  function toggleProjetoTaskModal(projetoId, idx) {
-    toggleProjetoTask(projetoId, idx);
-    renderProjetoPrazosLista();
-  }
-  
-  function deleteProjetoTaskModal(projetoId, idx) {
-    deleteProjetoTask(projetoId, idx);
-    renderProjetoPrazosLista();
-  }
-  
-  function projetoPrazoDragStart(event, idx) {
-    _ppDragIdx = idx;
-    event.dataTransfer.effectAllowed = 'move';
-  }
-  
-  function projetoPrazoDrop(event, destino) {
-    event.preventDefault();
-    const p = projetos.find(x => x.id === _ppProjetoId);
-    if (!p || _ppDragIdx === null || _ppDragIdx === destino) return;
-    const movida = p.tarefas.splice(_ppDragIdx, 1)[0];
-    p.tarefas.splice(destino, 0, movida);
-    _ppDragIdx = null;
-    save('gc-projetos', projetos);
-    renderProjetos();
-    renderProjetoPrazosLista();
-  }
-  
-  function addProjetoTask(id) {
-    const p = projetos.find(x=>x.id===id);
-    if (!p) return;
-    const input = document.getElementById('ptask-'+id);
-    const nome = input ? input.value.trim() : '';
-    if (!nome) return;
-    if (!p.tarefas) p.tarefas=[];
-    const taskId = Date.now();
-    p.tarefas.push({nome, feito:false, resp:'', eventId: taskId});
-    // Add to events so it appears in tarefas section
-    events.push({
-      id: taskId, empresa: p.empresa,
-      titulo: nome,
-      data: p.fim||'', tipo: 'tarefa',
-      projetoId: id, responsavel: p.responsavel||''
-    });
-    if (input) input.value='';
-    save('gc-projetos', projetos);
-    save('gc-events', events);
-    buildTarefas();
-    renderProjetos();
-  }
-  
-  function toggleProjetoTask(id, i) {
-    const p = projetos.find(x=>x.id===id);
-    if (!p) return;
-    p.tarefas[i].feito = !p.tarefas[i].feito;
-    if (p.tarefas[i].eventId) {
-      const ev = events.find(x => x.id === p.tarefas[i].eventId);
-      if (ev) ev.arquivada = p.tarefas[i].feito;
-      save('gc-events', events);
-    }
-    save('gc-projetos', projetos);
-    renderProjetos();
-    buildTarefas();
-    buildColabTarefas();
-    buildPrioridades();
-  }
-  
-  function setProjetoTaskResp(id, i, resp) {
-    const p = projetos.find(x=>x.id===id);
-    if (!p) return;
-    p.tarefas[i].resp = resp;
-    save('gc-projetos',projetos); buildColabTarefas();
-  }
-  
-  function deleteProjetoTask(id, i) {
-    const p = projetos.find(x=>x.id===id);
-    if (!p) return;
-    const t = p.tarefas[i];
-    if (t && t.eventId) {
-      events = events.filter(x => x.id !== t.eventId);
-      save('gc-events', events);
-      buildTarefas();
-    }
-    p.tarefas.splice(i,1);
-    save('gc-projetos', projetos); renderProjetos();
-  }
-  
-  function toggleProjetosArquivados(emp) {
-    const sec = document.getElementById('projetos-arquivados-'+emp);
-    const arr = document.getElementById('parq-arrow-'+emp);
-    if (!sec) return;
-    sec.style.display = sec.style.display==='none' ? 'block' : 'none';
-    arr.textContent = sec.style.display==='block' ? '▾' : '▸';
-  }
-  
-  function toggleProjetosArquivadosTodos() {
-    const sec = document.getElementById('projetos-arquivados-todos');
-    const arr = document.getElementById('parq-arrow-todos');
-    if (!sec) return;
-    sec.style.display = sec.style.display==='none' ? 'block' : 'none';
-    if (arr) arr.textContent = sec.style.display==='block' ? '▾' : '▸';
-  }
-  
-  /* ── COLABORADORES ── */
-  // Ordem manual das tarefas dos colaboradores
-  let colabOrdem = load('gc-colab-ordem', {});
-  
-  var _colabCalOff = {};
-  function _buildColabCal(key) {
-    var wrap = document.getElementById('colab-cal-semana-' + key);
-    if (!wrap) return;
-    var cor = key==='gisella'?'var(--gisella)':key==='milena'?'var(--leia)':'var(--editora)';
-    var off = _colabCalOff[key] || 0;
-    var hoje = new Date(); hoje.setHours(0,0,0,0);
-    var ini = new Date(hoje);
-    var dw = hoje.getDay();
-    ini.setDate(hoje.getDate() + (dw===0 ? -6 : 1-dw) + (off*7));
-    var dias = Array.from({length:7}, function(_,i){var d=new Date(ini);d.setDate(ini.getDate()+i);return d;});
-    var fim = dias[6];
-    var meses = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
-    var dows  = ['SEG','TER','QUA','QUI','SEX','SÁB','DOM'];
-    var hojeStr = hoje.toISOString().slice(0,10);
-    var rangeLabel = ini.getDate()+' '+meses[ini.getMonth()] + (ini.getMonth()!==fim.getMonth()?' — '+fim.getDate()+' '+meses[fim.getMonth()]:'–'+fim.getDate());
-  
-    var allTarefas = events.filter(function(e){ return e.tipo==='tarefa' && e.responsavel && e.responsavel.toLowerCase()===key; })
-      .map(function(e){ return {_isEtapa:false, id:e.id, titulo:e.titulo, empresa:e.empresa, data:e.data||'', arquivada:!!e.arquivada, urgente:!!e.urgente, tipoTarefa:e.tipoTarefa||''}; });
-    livros.forEach(function(l){ (l.etapas||[]).forEach(function(e,i){
-      if ((e.resp||'').toLowerCase()===key) {
-        allTarefas.push({_isEtapa:true,livroId:l.id,etapaIdx:i,titulo:'['+l.titulo+'] '+e.nome,empresa:l.empresa,data:e.prazo||'',arquivada:!!e.feito,urgente:false,tipoTarefa:''});
-      }
-    }); });
-    // Etapas de conteúdos
-    conteudos.forEach(function(c){
-      if (isConteudoFinalizado(c)) return;
-      var etapas = getConteudoEtapasLiberadas(c);
-      etapas.forEach(function(e){
-        if ((e.resp||'').toLowerCase()===key && e.prazo) {
-          allTarefas.push({_isEtapa:false,_conteudoId:c.id,_conteudoKey:e.key,id:'cont-'+c.id+'-'+e.key,titulo:'['+c.nome+'] '+e.nome,empresa:c.empresa,data:e.prazo,arquivada:!!e.feito,urgente:false,tipoTarefa:''});
-        }
-      });
-    });
-  
-    var navHtml = '<div class="cal-header" style="padding:0 0 10px;border-bottom:none;">' +
-      '<button class="cal-nav" data-k="'+key+'" data-d="-1" onclick="_colabCalOff[this.dataset.k]=(_colabCalOff[this.dataset.k]||0)+Number(this.dataset.d);_buildColabCal(this.dataset.k)">&#8249;</button>' +
-      '<div class="cal-month">'+rangeLabel+'</div>' +
-      '<button class="cal-nav" data-k="'+key+'" data-d="1" onclick="_colabCalOff[this.dataset.k]=(_colabCalOff[this.dataset.k]||0)+Number(this.dataset.d);_buildColabCal(this.dataset.k)">&#8250;</button>' +
-      '</div>';
-  
-    var html = '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;align-items:start;">';
-    dias.forEach(function(dia,idx){
-      var ds = dia.toISOString().slice(0,10);
-      var isT = ds===hojeStr;
-      var dayT = _sortTipo(allTarefas.filter(function(t){return t.data===ds;}));
-      html += '<div ondragover="event.preventDefault();this.style.background=\'var(--gisella-bg)\';" ondragleave="this.style.background=\'var(--surface)\';" ondrop="tarefaCalDrop(event,\''+ds+'\')" style="background:var(--surface);border-radius:10px;padding:8px;min-height:90px;border:1px solid '+(isT?cor:'var(--border)')+';transition:background 0.1s;">';
-      html += '<div style="font-size:10px;color:var(--text-soft);text-transform:uppercase;margin-bottom:4px;">'+dows[idx]+'</div>';
-      html += '<div style="font-size:'+(isT?'16px':'14px')+';font-weight:'+(isT?700:500)+';color:'+(isT?cor:'var(--text)')+';margin-bottom:6px;">'+dia.getDate()+'</div>';
-      if (dayT.length===0) { html += '<div style="font-size:10px;color:var(--text-soft);opacity:0.5;">—</div>'; }
-      dayT.forEach(function(t){
-        var prE=(t.empresa||'').split(',')[0];
-        var c=prE==='editora'?'var(--editora)':prE==='leia'?'var(--leia)':'var(--gisella)';
-        var dragStart=t._isEtapa?'tarefaCalDragStart(event,\'etapa\','+t.livroId+','+t.etapaIdx+')':'tarefaCalDragStart(event,\'evento\','+t.id+',null)';
-        var clickAct=t._isEtapa?'openEditEtapa('+t.livroId+','+t.etapaIdx+')':t._conteudoId?'openConteudoEtapasPrazos('+t._conteudoId+')':'openEditEvent('+t.id+')';
-        var chk=t._isEtapa?'toggleEtapa('+t.livroId+','+t.etapaIdx+')':t._conteudoId?'toggleConteudoEtapa('+t._conteudoId+',\''+t._conteudoKey+'\')':'toggleTarefaArquivada('+t.id+')';
-        html+='<div style="font-size:10px;padding:4px 6px;border-radius:4px;margin-bottom:3px;background:'+c+'15;color:'+c+';border-left:2px solid '+c+';'+(t.arquivada?'opacity:0.45;':'')+'display:flex;align-items:flex-start;gap:4px;">';
-        html+='<input type="checkbox" '+(t.arquivada?'checked':'')+' onchange="'+chk+'" onclick="event.stopPropagation();" style="accent-color:'+c+';flex-shrink:0;margin-top:2px;width:11px;height:11px;cursor:pointer;">';
-        html+='<div draggable="true" ondragstart="'+dragStart+'" onclick="'+clickAct+'" style="flex:1;min-width:0;cursor:pointer;">';
-        html+='<span style="display:block;word-break:break-word;line-height:1.3;'+(t.arquivada?'text-decoration:line-through;':'')+'">'+( t.urgente?'❗ ':'')+(_TIPO_EMOJI[t.tipoTarefa]?_TIPO_EMOJI[t.tipoTarefa]+' ':'')+t.titulo+'</span>';
-        html+='</div></div>';
-      });
-      html += '</div>';
-    });
-    html += '</div>';
-    wrap.innerHTML = navHtml + html;
-  }
-  
-  function buildColabTarefas() {
-    const today = new Date(); today.setHours(0,0,0,0);
-    const colabs = ['Gisella','Milena','Luiggi'];
-    const EMP_BADGE = {editora:'b-editora',leia:'b-leia',gisella:'b-gisella'};
-    const EMP_LABEL = {editora:'Editora Cassol',leia:'Léia Cassol',gisella:'GC Estratégias'};
-  
-    colabs.forEach(colab => {
-      const el = document.getElementById('colab-tarefas-' + colab.toLowerCase());
-      if (!el) return;
-  
-      const colabKey = colab.toLowerCase();
-  
-      const tasks = [];
-  
-      // Build set of eventIds already covered by events array (avoid duplicates)
-      const coveredEventIds = new Set();
-  
-      // From events (primary source)
-      events.filter(e => e.responsavel === colab && e.titulo).forEach(e => {
-        coveredEventIds.add(e.id);
-        tasks.push({id: e.id.toString(), titulo: e.titulo, empresa: e.empresa, data: e.data||'', responsavel: e.responsavel||'', projetoId: e.projetoId||null, arquivada: e.arquivada||false, urgente: e.urgente||false, gcalSource: !!(e.gcalKey || e.recurrenceTemplateId)});
-      });
-  
-      // From livros (etapas not in events)
-      livros.forEach(l => {
-        l.etapas.forEach((e,i) => {
-          const tid = `livro-${l.id}-${i}`;
-          if (e.resp === colab && !e.feito) {
-            tasks.push({id: tid, titulo: `[${l.titulo}] ${e.nome}`, empresa: l.empresa, data: e.prazo||'', responsavel: colab, arquivada: false, urgente: false});
-          }
-        });
-      });
-  
-      // From conteudos (etapas as virtual tasks)
-      conteudos.forEach(c => {
-      if (isConteudoFinalizado(c)) return;
-        const etapas = getConteudoEtapasLiberadas(c);
-        etapas.forEach(e => {
-          if (e.resp === colab) {
-            const tid = `cont-${c.id}-${e.key}`;
-            tasks.push({id: tid, titulo: `[${c.nome}] ${e.nome}`, empresa: c.empresa, data: e.prazo||'', responsavel: colab, arquivada: e.feito, urgente: false});
-          }
-        });
-      });
-  
-      // From projetos — ONLY tasks without eventId (to avoid duplicates with events)
-      projetos.forEach(p => {
-        (p.tarefas||[]).forEach((t,i) => {
-          if (t.eventId && coveredEventIds.has(t.eventId)) return; // already in events
-          const tid = `proj-${p.id}-${i}`;
-          if (t.resp === colab && !t.feito) {
-            tasks.push({id: tid, titulo: `[${p.nome}] ${t.nome}`, empresa: p.empresa, data: p.fim||'', responsavel: colab, arquivada: false, urgente: false});
-          }
-        });
-      });
-  
-      const ativas = tasks.filter(t => !t.arquivada);
-      const arquivadas = tasks.filter(t => t.arquivada);
-  
-      // Ordenar: urgentes primeiro; depois atrasadas → hoje → futuras → sem data.
-      ativas.sort((a,b) => {
-        const urgentDiff = Number(!!b.urgente) - Number(!!a.urgente);
-        if (urgentDiff !== 0) return urgentDiff;
-        if (colab === 'Gisella') {
-          const calendarDiff = Number(!!b.gcalSource) - Number(!!a.gcalSource);
-          if (calendarDiff !== 0) return calendarDiff;
-        }
-        const da = a.data || '9999-99-99';
-        const db = b.data || '9999-99-99';
-        return da.localeCompare(db);
-      });
-  
-      let colabDragSrc = null;
-  
-      function colabRow(t, isArq) {
-        const prazoColor = !isArq && t.data ? (() => {
-          const diff = Math.round((new Date(t.data+'T00:00:00')-today)/86400000);
-          return diff < 0 ? 'var(--danger)' : diff === 0 ? 'var(--gisella)' : diff <= 7 ? 'var(--warn)' : 'var(--text-soft)';
-        })() : 'var(--text-soft)';
-        const numericId = parseInt(t.id);
-        // Para tarefas de projeto, buscar eventId
-        let editEventId = numericId;
-        if (isNaN(numericId) && t.id && t.id.startsWith('proj-')) {
-          const parts = t.id.split('-');
-          const pId = parseInt(parts[1]);
-          const tIdx = parseInt(parts[2]);
-          const proj = projetos.find(x=>x.id===pId);
-          if (proj && proj.tarefas && proj.tarefas[tIdx]) editEventId = proj.tarefas[tIdx].eventId;
-        }
-        const editBtn = editEventId ? `<button onclick="openEditEvent(${editEventId})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:1px 4px;" title="Editar">✎</button>` : '';
-        const delBtn = editEventId && !isNaN(editEventId) ? `<button onclick="deleteEventDirect(${editEventId})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:1px 4px;" title="Excluir">×</button>` : '';
-        return `<tr style="${isArq?'opacity:0.5;':''}"
-          ${!isArq ? `draggable="true" ondragstart="colabTaskDragStart(event,'${t.id}','${colabKey}')" ondragover="event.preventDefault()" ondrop="colabTaskDrop(event,'${t.id}','${colabKey}')"` : ''}>
-          <td onclick="event.stopPropagation();" style="width:44px;">
-            <div style="display:flex;align-items:center;gap:4px;">
-              ${!isArq ? '<span style="cursor:grab;color:var(--text-soft);font-size:12px;">⠿</span>' : ''}
-              <input type="checkbox" ${isArq?'checked':''}
-                onchange="toggleColabTarefaArq('${t.id}',this.checked,'${colabKey}')"
-                style="accent-color:var(--gisella);width:16px;height:16px;cursor:pointer;">
-            </div>
-          </td>
-          <td style="font-weight:500;${!isArq && String(t.id).startsWith('livro-') ? `color:${((t.empresa||'').split(',')[0]==='editora'?'var(--editora)':(t.empresa||'').split(',')[0]==='leia'?'var(--leia)':'var(--gisella)')};` : ''}${isArq?'text-decoration:line-through;color:var(--text-soft);':''}">
-            ${t.urgente ? '<span title="Urgente" style="font-size:13px;vertical-align:middle;margin-right:3px;">❗</span>' : ''}${t.gcalSource ? '<span title="Vinda do Google Calendar" style="font-size:12px;vertical-align:middle;margin-right:4px;">📅</span>' : ''}${t.titulo}
-            ${editBtn}${delBtn}
-          </td>
-          <td>
-            ${empBadgesHtml(t.empresa)}
-            ${t.responsavel?`<span style="font-size:11px;font-weight:500;padding:1px 6px;border-radius:10px;display:inline-block;margin-top:2px;background:${t.responsavel==='Gisella'?'var(--gisella-bg)':t.responsavel==='Milena'?'var(--leia-bg)':'var(--editora-bg)'};color:#000;">${t.responsavel}</span>`:''}
-          </td>
-          <td style="font-size:12px;color:${prazoColor};font-weight:500;">${t.data?fmtDateTarefa(t.data):'—'}</td>
-        </tr>`;
-      }
-  
-      let html = '';
-      if (ativas.length === 0 && arquivadas.length === 0) {
-        html = '<div style="padding:1rem;text-align:center;color:var(--text-soft);font-size:13px;">Nenhuma tarefa atribuída.</div>';
-      } else {
-        if (ativas.length > 0) {
-          html += `<div class="table-wrap" style="margin-bottom:1rem;"><table>
-            <thead><tr><th style="width:32px;"></th><th>Tarefa</th><th>Empresa</th><th>Prazo</th></tr></thead>
-            <tbody id="colab-tbody-${colabKey}">${ativas.map(t=>colabRow(t,false)).join('')}</tbody>
-          </table></div>`;
-        } else {
-          html += '<div style="padding:0.5rem 0 1rem;font-size:13px;color:var(--text-soft);">Nenhuma tarefa pendente.</div>';
-        }
-        if (arquivadas.length > 0) {
-          html += `<button class="archived-toggle" onclick="toggleColabArq('${colabKey}')">
-            <span id="colab-arq-arrow-${colabKey}">▸</span> Arquivadas (${arquivadas.length})
-          </button>
-          <div id="colab-arq-${colabKey}" style="display:none;margin-top:8px;">
-            <div class="table-wrap"><table>
-              <thead><tr><th style="width:32px;"></th><th>Tarefa</th><th>Empresa</th><th>Prazo</th></tr></thead>
-              <tbody>${arquivadas.map(t=>colabRow(t,true)).join('')}</tbody>
-            </table></div>
-          </div>`;
-        }
-      }
-      el.innerHTML = html;
-    });
-    // Build weekly calendars for each colab
-    ['gisella','milena','luiggi'].forEach(function(k){ _buildColabCal(k); });
-  }
-  
-  function colabTaskDragStart(event, taskId, colabKey) {
-    event.dataTransfer.setData('text/plain', JSON.stringify({taskId, colabKey}));
-    event.dataTransfer.effectAllowed = 'move';
-  }
-  
-  function colabTaskDrop(event, targetId, colabKey) {
-    event.preventDefault();
-    try {
-      const data = JSON.parse(event.dataTransfer.getData('text/plain'));
-      if (data.colabKey !== colabKey || data.taskId === targetId) return;
-      // Reorder colabOrdem
-      if (!colabOrdem[colabKey]) colabOrdem[colabKey] = [];
-      const ordem = colabOrdem[colabKey];
-      // Get current tasks for this colab to build full order
-      const el = document.getElementById('colab-tarefas-' + colabKey);
-      if (!el) return;
-      const rows = el.querySelectorAll('tbody tr[draggable]');
-      const ids = Array.from(rows).map(r => {
-        const cb = r.querySelector('input[type=checkbox]');
-        const onch = cb ? cb.getAttribute('onchange') : '';
-        const m = onch ? onch.match(/'([^']+)'/) : null;
-        return m ? m[1] : null;
-      }).filter(Boolean);
-      const fromIdx = ids.indexOf(data.taskId);
-      const toIdx = ids.indexOf(targetId);
-      if (fromIdx === -1 || toIdx === -1) return;
-      ids.splice(fromIdx, 1);
-      ids.splice(toIdx, 0, data.taskId);
-      colabOrdem[colabKey] = ids;
-      save('gc-colab-ordem', colabOrdem);
-      buildColabTarefas();
-    } catch(e) {}
-  }
-  
-  function toggleColabArq(colabKey) {
-    const sec = document.getElementById('colab-arq-' + colabKey);
-    const arr = document.getElementById('colab-arq-arrow-' + colabKey);
-    if (!sec) return;
-    const open = sec.style.display === 'none';
-    sec.style.display = open ? 'block' : 'none';
-    arr.textContent = open ? '▾' : '▸';
-  }
-  
-  function toggleColabTarefaArq(taskId, checked, colabKey) {
-    // Event-based tasks
-    const ev = events.find(x => x.id.toString() === taskId);
-    if (ev) {
-      ev.arquivada = checked;
-      save('gc-events', events);
-      buildColabTarefas();
-      buildTarefas();
-      buildPrioridades();
-      return;
-    }
-    // Livro etapa tasks  (livro-{livroId}-{etapaIdx})
-    if (taskId.startsWith('livro-')) {
-      const parts = taskId.split('-');
-      const livroId = parseInt(parts[1]);
-      const etapaIdx = parseInt(parts[2]);
-      const livro = livros.find(l => l.id === livroId);
-      if (livro && livro.etapas && livro.etapas[etapaIdx] !== undefined) {
-        livro.etapas[etapaIdx].feito = checked;
-        save('gc-livros', livros);
-        buildColabTarefas();
-        buildTarefas();
-        renderLivros();
-      }
-      return;
-    }
-      // Etapas de conteúdo  (cont-{conteudoId}-{etapa})
-    if (taskId.startsWith('cont-')) {
-      const parts = taskId.split('-');
-      const conteudoId = parseInt(parts[1]);
-      const etapaKey = parts.slice(2).join('-');
-      const conteudo = conteudos.find(c => c.id === conteudoId);
-  
-      if (conteudo) {
-        const jaConcluida = Boolean(conteudo.etapasStatus?.[etapaKey]?.feito);
-        if (jaConcluida !== checked) {
-          toggleConteudoEtapa(conteudoId, etapaKey);
-        } else {
-          buildColabTarefas();
-        }
-      }
-      return;
-    }
-    // Projeto tasks  (proj-{projetoId}-{taskIdx})
-    if (taskId.startsWith('proj-')) {
-      const parts = taskId.split('-');
-      const projetoId = parseInt(parts[1]);
-      const taskIdx = parseInt(parts[2]);
-      const proj = projetos.find(p => p.id === projetoId);
-      if (proj && proj.tarefas && proj.tarefas[taskIdx] !== undefined) {
-        proj.tarefas[taskIdx].feito = checked;
-        if (proj.tarefas[taskIdx].eventId) {
-          const ev2 = events.find(x => x.id === proj.tarefas[taskIdx].eventId);
-          if (ev2) { ev2.arquivada = checked; save('gc-events', events); }
-        }
-        save('gc-projetos', projetos);
-        buildColabTarefas();
-        buildTarefas();
-        renderProjetos();
-      }
-      return;
-    }
-    buildColabTarefas();
-  }
-  
-  /* ── FERIADOS ── */
-  const FERIADOS = [
-    // Nacionais fixos
-    '2026-01-01','2026-04-21','2026-05-01','2026-09-07','2026-10-12','2026-11-02','2026-11-15','2026-11-20','2026-12-25',
-    '2025-01-01','2025-04-21','2025-05-01','2025-09-07','2025-10-12','2025-11-02','2025-11-15','2025-11-20','2025-12-25',
-    // Nacionais móveis 2026
-    '2026-02-16','2026-02-17','2026-04-03','2026-04-05',
-    // Nacionais móveis 2025
-    '2025-03-03','2025-03-04','2025-04-18','2025-04-20',
-    // RS / Porto Alegre
-    '2026-09-20', // Farroupilha
-    '2025-09-20',
-    '2026-11-02', // Finados POA
-    '2026-08-09', // Revolução Farroupilha antecipado
-  ];
-  const FERIADOS_NOMES = {
-    '01-01':'Confraternização Universal','04-21':'Tiradentes','05-01':'Dia do Trabalho',
-    '09-07':'Independência do Brasil','10-12':'N. S. Aparecida','11-02':'Finados',
-    '11-15':'Proclamação da República','11-20':'Consciência Negra','12-25':'Natal',
-    '09-20':'Revolução Farroupilha (RS)',
-  };
-  
-  function isFeriado(dateStr) {
-    if (FERIADOS.includes(dateStr)) return true;
-    const mmdd = dateStr.slice(5);
-    return Object.keys(FERIADOS_NOMES).includes(mmdd);
-  }
-  
-  function getFeriadoNome(dateStr) {
-    if (FERIADOS_NOMES[dateStr.slice(5)]) return FERIADOS_NOMES[dateStr.slice(5)];
-    return 'Feriado';
-  }
-  
-  /* ── KANBAN ── */
-  const DIAS_UTEIS = ['Seg','Ter','Qua','Qui','Sex'];
-  
-  function getWeekDays() {
-    const today = new Date(); today.setHours(0,0,0,0);
-    const dow = today.getDay(); // 0=sun
-    const monday = new Date(today);
-    monday.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1));
-    return DIAS_UTEIS.map((label, i) => {
-      const d = new Date(monday);
-      d.setDate(monday.getDate() + i);
-      const key = d.toISOString().slice(0,10);
-      const isToday = d.getTime() === today.getTime();
-      const dd = d.getDate();
-      const mm = d.getMonth()+1;
-      return {label, key, isToday, display: `${String(dd).padStart(2,'0')}/${String(mm).padStart(2,'0')}`};
-    });
-  }
-  
-  function buildKanban(colab) {
-    const board = document.getElementById('kanban-' + colab);
-    if (!board) return;
-    const days = getWeekDays();
-    const colabData = kanbanData[colab] || {};
-    const EMP_B = {editora:'b-editora',leia:'b-leia',gisella:'b-gisella'};
-    const EMP_S = {editora:'Editora',leia:'Léia',gisella:'GC'};
-  
-    board.innerHTML = days.map(day => {
-      const tasks = (colabData[day.key] || []);
-      const taskHtml = tasks.length === 0
-        ? `<div class="kanban-drop-hint">solte aqui</div>`
-        : tasks.map(t => `
-            <div class="kanban-task" draggable="true"
-              ondragstart="dragKanbanTask(event,'${colab}','${day.key}','${t.id}')"
-              ondragend="dragEndKanban(event)">
-              <div class="kanban-task-text">
-                ${t.titulo}
-                <span class="kanban-task-emp badge ${EMP_B[t.empresa]||'b-gray'}">${EMP_S[t.empresa]||t.empresa}</span>
-              </div>
-              <button class="kanban-return" onclick="returnFromKanban('${colab}','${day.key}','${t.id}')" title="Devolver à lista">↩</button>
-            </div>`).join('');
-  
-      return `<div class="kanban-col${day.isToday?' today-col':''}"
-        ondragover="event.preventDefault();this.classList.add('drag-over')"
-        ondragleave="this.classList.remove('drag-over')"
-        ondrop="dropKanbanTask(event,'${colab}','${day.key}')">
-        <div class="kanban-col-header">${day.label}<span class="kanban-col-date">${day.display}</span></div>
-        ${taskHtml}
-      </div>`;
-    }).join('');
-  }
-  
-  let draggedTask = null;
-  
-  function startDragFromList(event, taskId, titulo, empresa) {
-    draggedTask = {taskObj: {id: taskId.toString(), titulo: titulo, empresa: empresa}};
-    dragSource = 'list';
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', taskId.toString());
-  }
-  let dragSource = null;
-  
-  function dragKanbanTask(event, colab, fromDay, taskId) {
-    draggedTask = {colab, fromDay, taskId};
-    dragSource = 'kanban';
-    event.dataTransfer.effectAllowed = 'move';
-  }
-  
-  function dragEndKanban(event) {
-    document.querySelectorAll('.kanban-col').forEach(c => c.classList.remove('drag-over'));
-  }
-  
-  function dropKanbanTask(event, colab, toDay) {
-    event.preventDefault();
-    document.querySelectorAll('.kanban-col').forEach(c => c.classList.remove('drag-over'));
-  
-    if (dragSource === 'list' && draggedTask) {
-      const {taskObj} = draggedTask;
-      if (!kanbanData[colab]) kanbanData[colab] = {};
-      if (!kanbanData[colab][toDay]) kanbanData[colab][toDay] = [];
-      const tid = taskObj.id.toString();
-      // Avoid duplicates
-      const already = Object.values(kanbanData[colab]).flat().some(t => t.id === tid);
-      if (!already) {
-        kanbanData[colab][toDay].push({id: tid, titulo: taskObj.titulo, empresa: taskObj.empresa});
-        const ev = events.find(x => x.id.toString() === tid);
-        if (ev) ev.kanbanDay = toDay;
-        save('gc-events', events);
-        save('gc-kanban', kanbanData);
-      }
-      buildKanban(colab);
-      buildColabTarefas();
-    } else if (dragSource === 'kanban' && draggedTask && draggedTask.colab === colab) {
-      // Moving between days
-      const {fromDay, taskId} = draggedTask;
-      if (!kanbanData[colab]) return;
-      const fromList = kanbanData[colab][fromDay] || [];
-      const task = fromList.find(t => t.id === taskId);
-      if (!task) return;
-      kanbanData[colab][fromDay] = fromList.filter(t => t.id !== taskId);
-      if (!kanbanData[colab][toDay]) kanbanData[colab][toDay] = [];
-      kanbanData[colab][toDay].push(task);
-      save('gc-kanban', kanbanData);
-      buildKanban(colab);
-    }
-    draggedTask = null;
-    dragSource = null;
-  }
-  
-  function returnFromKanban(colab, day, taskId) {
-    if (!kanbanData[colab] || !kanbanData[colab][day]) return;
-    kanbanData[colab][day] = kanbanData[colab][day].filter(t => t.id !== taskId);
-    // Remove kanbanDay from event
-    const ev = events.find(x => x.id.toString() === taskId);
-    if (ev) { delete ev.kanbanDay; save('gc-events', events); }
-    save('gc-kanban', kanbanData);
-    buildKanban(colab);
-    buildColabTarefas();
-  }
-  
-  function initKanban() {
-    // Kanban removido das páginas de colaboradores
-  }
-  
-  
-  /* ── TIPO LIVRO ── */
-  function updateLivroTipo() {
-    const tipo = document.querySelector('input[name="qa-l-tipopub"]:checked');
-    // Nenhum efeito extra necessário - os campos OS e ANO aparecem para ambos
-  }
-  
-  function updateNlTipo() {
-    // Nenhum efeito extra - OS e ANO aparecem para ambos
-  }
-  
-  /* ── PRIORIDADES (VISÃO GERAL) ── */
-  function buildPrioridades() {
-    const el = document.getElementById('prioridades-container');
-    if (!el) return;
-    const today = new Date(); today.setHours(0,0,0,0);
-    const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
-    const tomorrowStr = tomorrow.toISOString().slice(0,10);
-    const todayStr = today.toISOString().slice(0,10);
-    const threeDaysAgo = new Date(today); threeDaysAgo.setDate(today.getDate() - 3);
-  
-    const day2Str = new Date(today.getTime() + 2*24*60*60*1000).toISOString().slice(0,10);
-    // Tarefas: atrasadas + hoje + amanhã + em 2 dias (não feitas)
-    const tarefasPrio = events.filter(e => {
-      if (e.arquivada) return false;
-      if (e.tipo !== 'tarefa') return false;
-      if (!e.data) return false;
-      return e.data <= day2Str; // atrasadas, hoje, amanhã, 2 dias
-    });
-  
-    // Conteúdos pela DATA DE PRODUÇÃO: hoje e amanhã (não feitos)
-    const conteudosPrio = conteudos.filter(c => {
-      if (isConteudoFinalizado(c)) return false;
-      if (!c.dataProd) return false;
-      return c.dataProd === todayStr || c.dataProd === tomorrowStr;
-    });
-  
-    // Arquivados: tarefas dos últimos 3 dias concluídas
-    const tarefasArq = events.filter(e => {
-      if (!e.arquivada) return false;
-      if (e.tipo === 'evento' || e.tipo === 'projeto') return false;
-      if (!e.data) return false;
-      const d = new Date(e.data + 'T00:00:00');
-      return d >= threeDaysAgo && d <= today;
-    });
-    // Conteúdos arquivados pela data de produção
-    const conteudosArq = conteudos.filter(c => {
-      if (!isConteudoFinalizado(c)) return false;
-      if (!c.dataProd) return false;
-      const d = new Date(c.dataProd + 'T00:00:00');
-      return d >= threeDaysAgo && d <= today;
-    });
-  
-    const EMP_BADGE = {editora:'b-editora',leia:'b-leia',gisella:'b-gisella'};
-    const EMP_LABEL = {editora:'Editora Cassol',leia:'Léia Cassol',gisella:'GC Estratégias'};
-  
-    function tarefaRowPrio(e) {
-      const prazoColor = e.data ? (() => {
-        const diff = Math.round((new Date(e.data+'T00:00:00')-today)/86400000);
-        return diff < 0 ? 'var(--danger)' : diff === 0 ? 'var(--gisella)' : 'var(--warn)';
-      })() : 'var(--text-soft)';
-      return `<tr>
-        <td onclick="event.stopPropagation();" style="width:32px;">
-          <input type="checkbox" onchange="toggleTarefaArquivada(${e.id})" style="accent-color:var(--gisella);width:14px;height:14px;cursor:pointer;">
-        </td>
-        <td style="font-weight:500;">
-          ${e.titulo}
-          <button onclick="openEditEvent(${e.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:1px 4px;">✎</button>
-          <button onclick="deleteEventDirect(${e.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:1px 4px;">×</button>
-        </td>
-        <td><span class="badge ${EMP_BADGE[e.empresa]||'b-gray'}">${EMP_LABEL[e.empresa]||e.empresa}</span></td>
-        <td style="font-size:12px;color:${prazoColor};font-weight:500;">${e.data?fmtDateTarefa(e.data):'—'}</td>
-      </tr>`;
-    }
-  
-    function conteudoRowPrio(c) {
-      const prodColor = c.dataProd === todayStr ? 'var(--gisella)' : c.dataProd === tomorrowStr ? 'var(--warn)' : 'var(--text-soft)';
-      const etapas = getConteudoEtapas(c);
-      const concluidas = etapas.filter(etapa => etapa.feito).length;
-      return `<tr onclick="openConteudo(${c.id})">
-        <td style="width:32px;text-align:center;color:var(--text-soft);font-size:10px;">${concluidas}/${etapas.length}</td>
-        <td style="font-weight:500;">${c.nome}
-          <span style="font-size:10px;color:var(--text-soft);display:inline-block;margin-left:4px;">✍ conteúdo</span>
-        </td>
-        <td><span class="badge ${EMP_B[c.empresa]||'b-gray'}">${EMP_S[c.empresa]||c.empresa}</span></td>
-        <td style="font-size:12px;color:${prodColor};font-weight:500;">${c.dataProd?'prod. '+fmtDate(c.dataProd):'—'}</td>
-      </tr>`;
-    }
-  
-    // Combinar tarefas + conteúdos, ordenar por data mais recente primeiro
-    const allItems = [
-      ...tarefasPrio.map(e => ({type:'tarefa', data:e.data, e})),
-      ...conteudosPrio.map(c => ({type:'conteudo', data:c.dataProd, c}))
-    ].sort((a,b) => (a.data||'9999').localeCompare(b.data||'9999'));
-  
-    if (allItems.length === 0) {
-      el.innerHTML = '<div style="padding:1rem;text-align:center;color:var(--text-soft);font-size:13px;">✓ Nenhuma prioridade para hoje ou amanhã.</div>';
-    } else {
-      el.innerHTML = `<div class="table-wrap"><table>
-        <thead><tr><th style="width:32px;"></th><th>Item</th><th>Empresa</th><th>Data</th></tr></thead>
-        <tbody>${allItems.map(item => item.type==='tarefa' ? tarefaRowPrio(item.e) : conteudoRowPrio(item.c)).join('')}</tbody>
-      </table></div>`;
-    }
-  
-    // Arquivados
-    const allArq = [
-      ...tarefasArq.map(e => ({type:'tarefa', data:e.data, e})),
-      ...conteudosArq.map(c => ({type:'conteudo', data:c.dataProd, c}))
-    ].sort((a,b) => (a.data||'9999').localeCompare(b.data||'9999'));
-  
-    const arqBtn = document.getElementById('prio-arq-btn');
-    const arqEl = document.getElementById('prioridades-arquivados');
-    const arqCnt = document.getElementById('prio-arq-count');
-    if (arqBtn) arqBtn.style.display = allArq.length > 0 ? 'flex' : 'none';
-    if (arqCnt) arqCnt.textContent = allArq.length;
-    if (arqEl && allArq.length > 0) {
-      arqEl.innerHTML = `<div class="table-wrap"><table>
-        <thead><tr><th style="width:32px;"></th><th>Item</th><th>Empresa</th><th>Data</th></tr></thead>
-        <tbody>${allArq.map(item => {
-          if (item.type === 'tarefa') {
-            const e = item.e;
-            const EMP_BADGE2 = {editora:'b-editora',leia:'b-leia',gisella:'b-gisella'};
-            const EMP_LABEL2 = {editora:'Editora Cassol',leia:'Léia Cassol',gisella:'GC Estratégias'};
-            return `<tr style="opacity:0.5;"><td onclick="event.stopPropagation();"><input type="checkbox" checked onchange="toggleTarefaArquivada(${e.id})" style="accent-color:var(--gisella);width:14px;height:14px;cursor:pointer;"></td><td style="font-weight:500;text-decoration:line-through;">${e.titulo}</td><td><span class="badge ${EMP_BADGE2[e.empresa]||'b-gray'}">${EMP_LABEL2[e.empresa]||e.empresa}</span></td><td style="font-size:12px;color:var(--text-soft);">${e.data?fmtDateTarefa(e.data):'—'}</td></tr>`;
-          } else {
-            const c = item.c;
-            return `<tr style="opacity:0.5;" onclick="openConteudo(${c.id})"><td style="width:32px;text-align:center;color:var(--ok);">✓</td><td style="font-weight:500;text-decoration:line-through;">${c.nome} <span style="font-size:10px;color:var(--text-soft);">✍</span></td><td><span class="badge ${EMP_B[c.empresa]||'b-gray'}">${EMP_S[c.empresa]||c.empresa}</span></td><td style="font-size:12px;color:var(--text-soft);">${c.dataPost?fmtDate(c.dataPost):'—'}</td></tr>`;
-          }
-        }).join('')}</tbody>
-      </table></div>`;
-    }
-  }
-  
-  function togglePrioridadesArquivadas() {
-    const sec = document.getElementById('prioridades-arquivados');
-    const arr = document.getElementById('prio-arq-arrow');
-    if (!sec) return;
-    const open = sec.style.display === 'none';
-    sec.style.display = open ? 'block' : 'none';
-    if (arr) arr.textContent = open ? '▾' : '▸';
-  }
-  
-  /* ── LIVROS ARQUIVADOS (100%) ── */
-  function toggleLivrosArquivados() {
-    const wrap = document.getElementById('livros-arquivados-wrap');
-    const arr = document.getElementById('livros-arq-arrow');
-    if (!wrap) return;
-    const open = wrap.style.display === 'none';
-    wrap.style.display = open ? 'block' : 'none';
-    if (arr) arr.textContent = open ? '▾' : '▸';
-  }
-  
-  function toggleLivrosArquivadosVisao() {
-    const wrap = document.getElementById('livros-visao-arquivados');
-    const arr = document.getElementById('livros-visao-arq-arrow');
-    if (!wrap) return;
-    const open = wrap.style.display === 'none';
-    wrap.style.display = open ? 'block' : 'none';
-    if (arr) arr.textContent = open ? '▾' : '▸';
-  }
-  
-  /* ── REORDENAR LIVROS (drag) ── */
-  let livrosDragSrc = null;
-  
-  function livrosDragStart(e, id) {
-    livrosDragSrc = id;
-    e.dataTransfer.effectAllowed = 'move';
-  }
-  
-  function livrosDragOver(e, id) {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    document.querySelectorAll('.livro-card').forEach(c=>c.classList.remove('drag-over-livro'));
-    const card = e.currentTarget;
-    if (card) card.classList.add('drag-over-livro');
-  }
-  
-  function livrosDrop(e, id) {
-    e.preventDefault();
-    document.querySelectorAll('.livro-card').forEach(c=>c.classList.remove('drag-over-livro'));
-    if (!livrosDragSrc || livrosDragSrc === id) return;
-    const fromIdx = livros.findIndex(l => l.id === livrosDragSrc);
-    const toIdx = livros.findIndex(l => l.id === id);
-    if (fromIdx === -1 || toIdx === -1) return;
-    const [moved] = livros.splice(fromIdx, 1);
-    livros.splice(toIdx, 0, moved);
-    save('gc-livros', livros);
-    renderLivros();
-    livrosDragSrc = null;
-  }
-  
-  
-  
-  /* ---- GOOGLE CALENDAR ---- */
-  const GCAL_API_KEY       = 'AIzaSyBSQ7t6xtS6va7yaXMVvOKchCl1pkq_Whw';
-  const GCAL_ID            = 'gcestrategiasliterarias@gmail.com';
-  const GCAL_ID_LEIA       = 'assessorialeiacassol@gmail.com';
-  // Agendas compartilhadas — Aceleração Mulher High Ticket e Advanced
-  // ATENÇÃO: substitua os IDs abaixo pelos IDs reais das agendas compartilhadas
-  // O ID fica em: Google Calendar → Configurações da agenda → Integrar agenda → ID da agenda
-  const GCAL_SHARED_CALS = [
-    { id: '1116bdbd4eeaffd1739e5e36020151faabaf15a8c2bd6a5b5472838d82e008bc@group.calendar.google.com', label: 'Aceleração', color: '#5a6272', bg: 'rgba(90,98,114,0.13)' },
-    { id: 'c_3881641b8772cba2844122f540de939114ccd88a9feafa8b5636ac594216f114@group.calendar.google.com', label: 'Advanced',   color: '#5a6272', bg: 'rgba(90,98,114,0.13)'  },
-  ];
-  let gcalSharedCache = []; // cache mesclado das agendas compartilhadas
-  
-  // Semana atual: domingo da semana corrente
-  const GCAL_MONTHS_PT = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
-                           'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
-  const GCAL_DAYS_PT   = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
-  let gcalWeekStart = (function() {
-    const d = new Date(); d.setHours(0,0,0,0);
-    d.setDate(d.getDate() - d.getDay()); // vai para domingo
-    return d;
-  })();
-  let gcalEvents = [];
-  
-  function mapGcalItems(items, calLabel) {
-    return (items || []).map(ev => {
-      const start     = ev.start.dateTime ? ev.start.dateTime.slice(0,10) : ev.start.date;
-      const end       = ev.end.dateTime   ? ev.end.dateTime.slice(0,10)   : ev.end.date;
-      const startTime = ev.start.dateTime ? ev.start.dateTime.slice(11,16) : null;
-      const endTime   = ev.end.dateTime   ? ev.end.dateTime.slice(11,16)   : null;
-      return { title: ev.summary||'(sem título)', start, end, startTime, endTime,
-               description: ev.description||'', location: ev.location||'',
-               link: ev.htmlLink||'', calLabel: calLabel||null };
-    });
-  }
-  
-  async function fetchGcalRange(calId, rangeStart, rangeEnd) {
-    const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events`
-      + `?key=${GCAL_API_KEY}&timeMin=${rangeStart.toISOString()}&timeMax=${rangeEnd.toISOString()}`
-      + `&singleEvents=true&orderBy=startTime&maxResults=250`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.items || [];
-  }
-  
-  async function loadGcal() {
-    const el = document.getElementById('gcal-container');
-    if (!el) return;
-    el.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-soft);font-size:13px;">Carregando...</div>';
-  
-    const weekEnd = new Date(gcalWeekStart);
-    weekEnd.setDate(weekEnd.getDate() + 6);
-    weekEnd.setHours(23,59,59);
-  
-    // Busca um ano à frente para que recorrências vinculadas a mentorias sejam
-    // criadas mesmo quando o evento foi agendado com bastante antecedência.
-    const rangeStart = new Date(); rangeStart.setMonth(rangeStart.getMonth() - 2); rangeStart.setDate(1);
-    const rangeEnd   = new Date(); rangeEnd.setMonth(rangeEnd.getMonth() + 12); rangeEnd.setDate(1);
-  
-    try {
-      // Buscar agenda principal + agendas compartilhadas em paralelo
-      const fetchPromises = [
-        fetchGcalRange(GCAL_ID, rangeStart, rangeEnd),
-        ...GCAL_SHARED_CALS.map(cal => fetchGcalRange(cal.id, rangeStart, rangeEnd).catch(() => null)),
-      ];
-      const results = await Promise.all(fetchPromises);
-  
-      if (!results[0]) {
-        el.innerHTML = '<div style="padding:1rem;color:var(--danger);font-size:13px;">Erro ao carregar agenda GC. Verifique se o calendário está público e a API Key está correta.</div>';
-        return;
-      }
-  
-      // Mapear agenda principal
-      const mapped = mapGcalItems(results[0], null);
-  
-      // Mapear agendas compartilhadas e mesclar
-      gcalSharedCache = [];
-      GCAL_SHARED_CALS.forEach((cal, idx) => {
-        const items = results[idx + 1];
-        if (items) {
-          const sharedMapped = mapGcalItems(items, cal.label).map(ev => ({
-            ...ev, _sharedCal: cal,
-          }));
-          gcalSharedCache = gcalSharedCache.concat(sharedMapped);
-        }
-      });
-  
-      // Cache global = principal + compartilhadas (para calendário mensal e semanal)
-      window.gcalEventsCache = [...mapped, ...gcalSharedCache];
-      gcalEvents = window.gcalEventsCache.filter(ev =>
-        ev.start >= gcalWeekStart.toISOString().slice(0,10) &&
-        ev.start <= weekEnd.toISOString().slice(0,10));
-  
-  
-  
-      // Atualizar todos os calendários da GC em tempo real
-      refreshCalendars();
-      renderGcal();
-      countMentoriasmes();
-      countMentoriasSemana();
-      limparTarefasEventosRemovidos(mapped);
-      criarTarefasEventos(mapped);
-      ensureCustomRecurringTasks(window.gcalEventsCache);
-  
-    } catch(e) {
-      el.innerHTML = `<div style="padding:1rem;color:var(--danger);font-size:13px;">Erro de rede: ${e.message}</div>`;
-    }
-  }
-  
-  function renderGcal() {
-    const el = document.getElementById('gcal-container');
-    const lbl = document.getElementById('gcal-month-label');
-    if (!el) return;
-  
-    // Label
-    const weekEnd = new Date(gcalWeekStart); weekEnd.setDate(weekEnd.getDate() + 6);
-    const fmt = d => d.toLocaleDateString('pt-BR', {day:'2-digit', month:'long', year:'numeric'});
-    const fmtShort = d => d.toLocaleDateString('pt-BR', {day:'2-digit', month:'long'});
-    if (lbl) {
-      const sameMonth = gcalWeekStart.getMonth() === weekEnd.getMonth();
-      lbl.textContent = sameMonth
-        ? `${gcalWeekStart.getDate()} – ${fmt(weekEnd)}`
-        : `${fmtShort(gcalWeekStart)} – ${fmt(weekEnd)}`;
-    }
-  
-    const today = new Date(); today.setHours(0,0,0,0);
-    const todayStr = today.toISOString().slice(0,10);
-    const nowMin = today <= new Date() ? new Date().getHours()*60 + new Date().getMinutes() : -1;
-  
-    const HOUR_START = 9;
-    const HOUR_END   = 22;
-    const TOTAL_HOURS = HOUR_END - HOUR_START; // 13 hours
-    const HOUR_PX = 48; // px per hour — altura fixa sem scroll
-    const TOTAL_PX = TOTAL_HOURS * HOUR_PX;
-  
-    // Separate timed events from all-day events
-    const allDayByDay = {};
-    const timedByDay  = {};
-    gcalEvents.forEach(ev => {
-      if (!ev.startTime) {
-        // all-day: spread across days
-        let cur = new Date(ev.start + 'T12:00:00');
-        const endD = new Date((ev.end || ev.start) + 'T12:00:00');
-        while (cur <= endD) {
-          const ds = cur.toISOString().slice(0,10);
-          if (!allDayByDay[ds]) allDayByDay[ds] = [];
-          allDayByDay[ds].push(ev);
-          cur.setDate(cur.getDate()+1);
-        }
-      } else {
-        const ds = ev.start;
-        if (!timedByDay[ds]) timedByDay[ds] = [];
-        timedByDay[ds].push(ev);
-      }
-    });
-  
-    // Build days array
-    const days = [];
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(gcalWeekStart); d.setDate(d.getDate() + i);
-      days.push(d);
-    }
-  
-    // ── OUTER WRAPPER ──
-    let out = `<div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--surface);">`;
-  
-    // ── DAY HEADERS ──
-    out += `<div style="display:grid;grid-template-columns:44px repeat(7,1fr);border-bottom:1px solid var(--border);">`;
-    out += `<div style="background:var(--surface);"></div>`;
-    days.forEach(day => {
-      const ds = day.toISOString().slice(0,10);
-      const isToday = ds === todayStr;
-      const adEvs = allDayByDay[ds] || [];
-      out += `<div style="padding:6px 4px;text-align:center;border-left:1px solid var(--border);background:${isToday?'var(--gisella-bg)':'var(--surface)'};">
-        <div style="font-size:10px;color:var(--text-soft);font-weight:500;">${GCAL_DAYS_PT[day.getDay()]}</div>
-        <div style="font-size:${isToday?'18px':'15px'};font-weight:${isToday?'700':'400'};color:${isToday?'var(--gisella)':'var(--text)'};">${day.getDate()}</div>
-        <div style="font-size:9px;color:var(--text-soft);">${GCAL_MONTHS_PT[day.getMonth()].slice(0,3)}</div>
-        ${adEvs.map(ev=>{const _ec=ev._sharedCal;const _col=_ec?_ec.color:'var(--gisella)';const _bg=_ec?_ec.bg:'var(--gisella-bg)';return `<div onclick="openGcalEvent(gcalEvents[${gcalEvents.indexOf(ev)}])" style="background:${_bg};color:${_col};border-radius:3px;padding:1px 4px;margin-top:2px;font-size:9px;font-weight:500;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer;" title="${ev.title}${_ec?' ['+_ec.label+']':''}">${_ec?_ec.label+' · ':''}${ev.title}</div>`;}).join('')}
-      </div>`;
-    });
-    out += `</div>`;
-  
-    // ── SCROLLABLE TIME GRID ──
-    out += `<div style="position:relative;">`;
-    out += `<div style="display:grid;grid-template-columns:44px repeat(7,1fr);position:relative;">`;
-  
-    // Hour labels column
-    out += `<div style="position:relative;height:${TOTAL_PX}px;">`;
-    for (let h = HOUR_START; h <= HOUR_END; h++) {
-      const top = (h - HOUR_START) * HOUR_PX;
-      out += `<div style="position:absolute;top:${top}px;left:0;right:0;font-size:9px;color:var(--text-soft);padding-right:4px;text-align:right;transform:translateY(-6px);">${String(h).padStart(2,'0')}:00</div>`;
-    }
-    out += `</div>`;
-  
-    // Day columns
-    days.forEach(day => {
-      const ds = day.toISOString().slice(0,10);
-      const isToday = ds === todayStr;
-      const tevs = timedByDay[ds] || [];
-  
-      out += `<div style="border-left:1px solid var(--border);position:relative;height:${TOTAL_PX}px;background:${isToday?'rgba(26,107,74,0.03)':'var(--surface)'};">`;
-  
-      // Hour grid lines
-      for (let h = HOUR_START; h <= HOUR_END; h++) {
-        const top = (h - HOUR_START) * HOUR_PX;
-        out += `<div style="position:absolute;top:${top}px;left:0;right:0;border-top:1px solid var(--border);"></div>`;
-        if (h < HOUR_END) {
-          const halfTop = top + HOUR_PX/2;
-          out += `<div style="position:absolute;top:${halfTop}px;left:0;right:0;border-top:1px dashed var(--border);opacity:0.5;"></div>`;
-        }
-      }
-  
-      // Current time line
-      if (isToday) {
-        const now = new Date();
-        const nowTotalMin = now.getHours()*60 + now.getMinutes();
-        const startMin = HOUR_START * 60;
-        const endMin = HOUR_END * 60;
-        if (nowTotalMin >= startMin && nowTotalMin <= endMin) {
-          const pct = (nowTotalMin - startMin) / ((HOUR_END - HOUR_START) * 60);
-          const topPx = Math.round(pct * TOTAL_PX);
-          out += `<div style="position:absolute;top:${topPx}px;left:0;right:0;border-top:2px solid var(--gisella);z-index:3;">
-            <div style="position:absolute;left:-4px;top:-4px;width:8px;height:8px;border-radius:50%;background:var(--gisella);"></div>
-          </div>`;
-        }
-      }
-  
-      // Timed events
-      tevs.forEach(ev => {
-        if (!ev.startTime) return;
-        const [sh, sm] = ev.startTime.split(':').map(Number);
-        const [eh, em] = ev.endTime ? ev.endTime.split(':').map(Number) : [sh+1, sm];
-        const startMin = sh*60 + sm;
-        const endMin   = eh*60 + em;
-        const startPx  = Math.max(0, (startMin - HOUR_START*60) / 60 * HOUR_PX);
-        const heightPx = Math.max(20, (endMin - startMin) / 60 * HOUR_PX - 2);
-  
-        if (startMin < HOUR_START*60 || startMin > HOUR_END*60) return;
-  
-        const evIdx = gcalEvents.indexOf(ev);
-        const _sc = ev._sharedCal;
-        const _evColor = _sc ? _sc.color : 'var(--gisella)';
-        const _evBg    = _sc ? _sc.bg    : 'var(--gisella-bg)';
-        const _labelPfx = _sc ? `<span style="font-size:8px;font-weight:700;opacity:0.85;">${_sc.label} · </span>` : '';
-        out += `<div onclick="openGcalEvent(gcalEvents[${evIdx}])" title="${ev.title}${_sc?' ['+_sc.label+']':''}" style="
-          position:absolute;top:${startPx}px;left:2px;right:2px;height:${heightPx}px;
-          background:${_evBg};color:${_evColor};
-          border-left:3px solid ${_evColor};
-          border-radius:4px;padding:2px 4px;
-          font-size:10px;font-weight:500;
-          overflow:hidden;z-index:2;cursor:pointer;
-          box-sizing:border-box;transition:filter 0.1s;"
-          onmouseover="this.style.filter='brightness(0.92)'"
-          onmouseout="this.style.filter=''">
-          <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_labelPfx}${ev.title}</div>
-          <div style="font-size:9px;opacity:0.75;">${ev.startTime}${ev.endTime?' – '+ev.endTime:''}</div>
-        </div>`;
-      });
-  
-      out += `</div>`;
-    });
-  
-    out += `</div></div></div>`;
-    el.innerHTML = out;
-  
-    // Sem scroll — altura fixa
-  }
-  
-  function gcalPrevMonth() {
-    gcalWeekStart = new Date(gcalWeekStart);
-    gcalWeekStart.setDate(gcalWeekStart.getDate() - 7);
-    const weekEnd = new Date(gcalWeekStart); weekEnd.setDate(weekEnd.getDate() + 6);
-    gcalEvents = (window.gcalEventsCache || []).filter(ev =>
-      ev.start >= gcalWeekStart.toISOString().slice(0,10) &&
-      ev.start <= weekEnd.toISOString().slice(0,10));
-    renderGcal();
-  }
-  
-  function gcalNextMonth() {
-    gcalWeekStart = new Date(gcalWeekStart);
-    gcalWeekStart.setDate(gcalWeekStart.getDate() + 7);
-    const weekEnd = new Date(gcalWeekStart); weekEnd.setDate(weekEnd.getDate() + 6);
-    gcalEvents = (window.gcalEventsCache || []).filter(ev =>
-      ev.start >= gcalWeekStart.toISOString().slice(0,10) &&
-      ev.start <= weekEnd.toISOString().slice(0,10));
-    renderGcal();
-  }
-  
-  function openGcalEvent(ev) {
-    document.getElementById('gcal-modal-title').textContent = ev.title;
-    const fmt = ds => ds ? new Date(ds + 'T12:00:00').toLocaleDateString('pt-BR', {weekday:'long', day:'2-digit', month:'long', year:'numeric'}) : '';
-    let rows = '';
-  
-    if (ev.startTime) {
-      // Timed event
-      const dateFmt = fmt(ev.start);
-      const timeStr = ev.startTime + (ev.endTime ? ' – ' + ev.endTime : '');
-      rows += `<div style="display:flex;gap:10px;align-items:flex-start;">
-        <span style="font-size:16px;">🕐</span>
-        <div><div style="font-weight:500;">${dateFmt}</div><div style="color:var(--text-soft);">${timeStr}</div></div>
-      </div>`;
-    } else {
-      // All-day (possibly multi-day)
-      const startFmt = fmt(ev.start);
-      const endFmt   = ev.end && ev.end !== ev.start ? fmt(ev.end) : null;
-      rows += `<div style="display:flex;gap:10px;align-items:flex-start;">
-        <span style="font-size:16px;">📅</span>
-        <div><div style="font-weight:500;">${startFmt}</div>${endFmt?`<div style="color:var(--text-soft);">até ${endFmt}</div>`:''}</div>
-      </div>`;
-    }
-  
-    if (ev.description) {
-      rows += `<div style="display:flex;gap:10px;align-items:flex-start;">
-        <span style="font-size:16px;">📝</span>
-        <div style="color:var(--text-soft);white-space:pre-wrap;">${ev.description}</div>
-      </div>`;
-    }
-  
-    if (ev.location) {
-      rows += `<div style="display:flex;gap:10px;align-items:flex-start;">
-        <span style="font-size:16px;">📍</span>
-        <div>${ev.location}</div>
-      </div>`;
-    }
-  
-    if (ev.link) {
-      rows += `<div style="margin-top:8px;">
-        <a href="${ev.link}" target="_blank" rel="noopener"
-          style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:var(--gisella-bg);color:var(--gisella);border-radius:8px;font-size:13px;font-weight:500;text-decoration:none;border:1px solid var(--gisella-border);">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-          Abrir no Google Calendar
-        </a>
-      </div>`;
-    }
-  
-    document.getElementById('gcal-modal-body').innerHTML = rows;
-    openModal('modal-gcal-event');
-  }
-  
-  /* ---- FIM GOOGLE CALENDAR ---- */
-  
-  
-  
-  /* ── TAREFAS POR EMPRESA ── */
-  function buildTarefasEmpresa(emp) {
-    const el = document.getElementById('tarefas-empresa-' + emp);
-    if (!el) return;
-    const today = new Date(); today.setHours(0,0,0,0);
-    const fimSemana = new Date(today.getTime() + 7*24*60*60*1000);
-    const fimSemanaStr = fimSemana.toISOString().slice(0,10);
-    const todayStr = today.toISOString().slice(0,10);
-  
-    const etapaEvents = [];
-    livros.forEach(l => {
-      (l.etapas||[]).forEach((e,i) => {
-        if (!(l.empresa||'').split(',').includes(emp)) return;
-        etapaEvents.push({
-          id: `livro-${l.id}-${i}`, _livroId: l.id, _etapaIdx: i,
-          titulo: `[${l.titulo}] ${e.nome}`, empresa: l.empresa,
-          data: e.prazo||'', responsavel: e.resp||'',
-          arquivada: e.feito, tipo: 'tarefa',
-        });
-      });
-    });
-  
-    // Só mostra: atrasadas + esta semana (COM data). Sem data e futuras ficam só na aba Tarefas.
-    const todasAtivas = [
-      ...events.filter(e => !e.arquivada && e.tipo==='tarefa' && (e.empresa||'').split(',').includes(emp)),
-      ...etapaEvents.filter(e => !e.arquivada)
-    ].filter(e => e.data && e.data <= fimSemanaStr);
-  
-    const todasArquivadas = [
-      ...events.filter(e => e.arquivada && e.tipo==='tarefa' && (e.empresa||'').split(',').includes(emp)),
-      ...etapaEvents.filter(e => e.arquivada)
-    ].filter(e => e.data && e.data <= fimSemanaStr);
-  
-    const _todayEmp = today.toISOString().slice(0,10);
-    todasAtivas.sort((a,b) => {
-      const da = a.data || '9999-99-99';
-      const db = b.data || '9999-99-99';
-      return da.localeCompare(db);
-    });
-  
-    const cor = emp==='editora' ? 'var(--editora)' : emp==='leia' ? 'var(--leia)' : 'var(--gisella)';
-  
-    function tarefaRowEmp(e, isArq) {
-      const prazoColor = !isArq && e.data ? (() => {
-        const diff = Math.round((new Date(e.data+'T00:00:00')-today)/86400000);
-        return diff<0 ? 'var(--danger)' : diff===0 ? cor : diff<=7 ? 'var(--warn)' : 'var(--text-soft)';
-      })() : 'var(--text-soft)';
-      return `<tr style="${isArq?'opacity:0.5;':''}">
-        <td style="width:44px;text-align:center;" onclick="event.stopPropagation();">
-          <input type="checkbox" ${isArq?'checked':''}
-              onclick="event.stopPropagation();"
-              onchange="${e._livroId!==undefined?`toggleEtapa(${e._livroId},${e._etapaIdx})`:`toggleTarefaArquivada(${e.id})`}"
-              style="accent-color:${cor};width:18px;height:18px;cursor:pointer;display:block;margin:0 auto;">
-        </td>
-        <td style="font-weight:500;${isArq?'text-decoration:line-through;color:var(--text-soft);':''}">
-          ${e.urgente ? '<span title="Urgente" style="font-size:13px;vertical-align:middle;margin-right:3px;">❗</span>' : ''}${e.titulo}
-          ${!e._livroId?`<button onclick="openEditEvent(${e.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:1px 4px;" title="Editar">✎</button>`:`<button onclick="openEditEtapa(${e._livroId},${e._etapaIdx})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:1px 4px;" title="Editar">✎</button>`}
-          ${!e._livroId && e.id ? `<button onclick="event.stopPropagation();deleteEventDirect(${e.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:1px 4px;" title="Excluir">×</button>` : ''}
-          ${!e._livroId ? comentarioBubble(e.id, e.comentarios) : ''}
-        </td>
-        <td style="font-size:12px;color:${prazoColor};font-weight:500;">${e.data?fmtDateTarefa(e.data):'—'}</td>
-        <td>${e.responsavel?`<span style="font-size:11px;padding:1px 6px;border-radius:10px;background:var(--bg);color:var(--text-mid);">${e.responsavel}</span>`:''}</td>
-      </tr>`;
-    }
-  
-    if (todasAtivas.length === 0) {
-      el.innerHTML='<div style="padding:1rem 0;color:var(--text-soft);font-size:13px;">✓ Nenhuma tarefa para esta semana.</div>';
-      return;
-    }
-  
-    // Mostrar só as 3 primeiras, resto expandível
-    const visiveis = todasAtivas.slice(0, 3);
-    const extras   = todasAtivas.slice(3);
-  
-    function tabelaHtml(items) {
-      return `<div class="table-wrap"><table><thead><tr><th style="width:32px;"></th><th>Tarefa</th><th>Prazo</th><th>Responsável</th></tr></thead><tbody>${items.map(t=>tarefaRowEmp(t,false)).join('')}</tbody></table></div>`;
-    }
-  
-    let html = tabelaHtml(visiveis);
-  
-    if (extras.length > 0) {
-      html += `<button class="archived-toggle" onclick="toggleTarefasEmpExtras('${emp}')">
-        <span id="tarq-emp-extras-arrow-${emp}">▸</span> Ver mais esta semana (${extras.length})
-      </button>
-      <div id="tarq-emp-extras-${emp}" style="display:none;margin-top:6px;">${tabelaHtml(extras)}</div>`;
-    }
-  
-    if (todasArquivadas.length > 0) {
-      html += `<div style="margin-top:6px;">
-        <button class="archived-toggle" onclick="toggleTarefasEmpArq('${emp}')"><span id="tarq-emp-arrow-${emp}">▸</span> Concluídas (${todasArquivadas.length})</button>
-        <div id="tarq-emp-arq-${emp}" style="display:none;margin-top:6px;">${tabelaHtml(todasArquivadas)}</div>
-      </div>`;
-    }
-  
-    el.innerHTML = html;
-  }
-  
-  function toggleTarefasEmpArq(emp) {
-    const el = document.getElementById('tarq-emp-arq-' + emp);
-    const arrow = document.getElementById('tarq-emp-arrow-' + emp);
-    if (!el) return;
-    const open = el.style.display === 'none';
-    el.style.display = open ? 'block' : 'none';
-    if (arrow) arrow.textContent = open ? '▾' : '▸';
-  }
-  
-  function toggleTarefasEmpExtras(emp) {
-    const el = document.getElementById('tarq-emp-extras-' + emp);
-    const arrow = document.getElementById('tarq-emp-extras-arrow-' + emp);
-    if (!el) return;
-    const open = el.style.display === 'none';
-    el.style.display = open ? 'block' : 'none';
-    if (arrow) arrow.textContent = open ? '▾' : '▸';
-  }
-  
-  /* ── MODAL PRAZOS ETAPAS ── */
-  let _epLivroId = null;
-  function openEtapasPrazos(livroId) {
-    const l = livros.find(x => x.id === livroId);
-    if (!l) return;
-    _epLivroId = livroId;
-    const el = document.getElementById('modal-ep-lista');
-    const sub = document.getElementById('modal-ep-subtitulo');
-    if (!el || !sub) return;
-    sub.textContent = l.titulo + ' — defina prazos e gerencie as etapas';
-    renderEpLista();
-    openModal('modal-etapas-prazos');
-  }
-  
-  function renderEpLista() {
-    const l = livros.find(x => x.id === _epLivroId);
-    const el = document.getElementById('modal-ep-lista');
-    if (!l || !el) return;
-  
-    // Feitas sobem pro topo, não feitas ficam abaixo
-    const comIdx = l.etapas.map((e, i) => ({e, i}));
-    comIdx.sort((a, b) => {
-      if (a.e.feito && !b.e.feito) return -1;
-      if (!a.e.feito && b.e.feito) return 1;
-      return 0; // mantém ordem original dentro de cada grupo
-    });
-  
-    el.innerHTML = comIdx.map(({e, i}) => {
-      const cor = e.feito ? 'var(--text-soft)' : (e.prazo ? (() => {
-        const diff = Math.round((new Date(e.prazo+'T00:00:00') - new Date().setHours(0,0,0,0)) / 86400000);
-        return diff < 0 ? 'var(--danger)' : diff <= 7 ? 'var(--warn)' : 'var(--text)';
-      })() : 'var(--text)');
-      return `<div draggable="true"
-        ondragstart="epDragStart(event,${i})"
-        ondragover="event.preventDefault()"
-        ondrop="epDrop(event,${i})"
-        style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);${e.feito?'opacity:0.55;':''}cursor:default;">
-        <span style="cursor:grab;color:var(--text-soft);font-size:12px;flex-shrink:0;">⠿</span>
-        <input type="checkbox" ${e.feito?'checked':''} onchange="toggleEtapaModal(${_epLivroId},${i})" style="accent-color:var(--gisella);width:16px;height:16px;flex-shrink:0;cursor:pointer;">
-        <span style="flex:1;font-size:13px;color:${cor};${e.feito?'text-decoration:line-through;':''}" ondblclick="renameEtapaModal(${_epLivroId},${i},this)">${e.nome}</span>
-        <select onchange="setEtapaResp(${_epLivroId},${i},this.value)"
-          style="font-size:11px;border:1px solid var(--border);border-radius:6px;padding:2px 4px;background:var(--bg);color:var(--text-soft);cursor:pointer;">
-          <option value="" ${!e.resp?'selected':''}>—</option>
-          <option value="Gisella" ${e.resp==='Gisella'?'selected':''}>Gisella</option>
-          <option value="Milena" ${e.resp==='Milena'?'selected':''}>Milena</option>
-          <option value="Luiggi" ${e.resp==='Luiggi'?'selected':''}>Luiggi</option>
-        </select>
-        <input type="date" value="${e.prazo||''}"
-          onchange="updateEtapaPrazoInline(${_epLivroId},${i},this.value)"
-          style="font-size:12px;border:1px solid var(--border);border-radius:6px;padding:3px 6px;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;width:130px;">
-        <button onclick="deleteEtapaModal(${_epLivroId},${i})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:0 2px;" title="Excluir">×</button>
-      </div>`;
-    }).join('');
-  }
-  
-  function addEtapaModal() {
-    const l = livros.find(x => x.id === _epLivroId);
-    const input = document.getElementById('ep-nova-etapa');
-    const nome = (input?.value||'').trim();
-    if (!l || !nome) { input?.focus(); return; }
-    l.etapas.push({nome, feito: false, prazo: ''});
-    save('gc-livros', livros);
-    renderLivros();
-    if (input) input.value = '';
-    renderEpLista();
-    // Scroll to bottom
-    const lista = document.getElementById('modal-ep-lista');
-    if (lista) lista.scrollTop = lista.scrollHeight;
-  }
-  
-  let _epDragIdx = null;
-  function epDragStart(e, idx) { _epDragIdx = idx; e.dataTransfer.effectAllowed = 'move'; }
-  function epDrop(e, toIdx) {
-    e.preventDefault();
-    if (_epDragIdx === null || _epDragIdx === toIdx) return;
-    const l = livros.find(x => x.id === _epLivroId);
-    if (!l) return;
-    const moved = l.etapas.splice(_epDragIdx, 1)[0];
-    l.etapas.splice(toIdx, 0, moved);
-    _epDragIdx = null;
-    save('gc-livros', livros);
-    renderLivros();
-    renderEpLista();
-  }
-  
-  function toggleEtapaModal(livroId, idx) {
-    toggleEtapa(livroId, idx);
-    renderEpLista();
-  }
-  
-  function deleteEtapaModal(livroId, idx) {
-    const l = livros.find(x => x.id === livroId);
-    if (!l) return;
-    l.etapas.splice(idx, 1);
-    save('gc-livros', livros);
-    renderLivros();
-    renderEpLista();
-  }
-  
-  function renameEtapaModal(livroId, idx, el) {
-    const l = livros.find(x => x.id === livroId);
-    if (!l) return;
-    const input = document.createElement('input');
-    input.value = l.etapas[idx].nome;
-    input.style.cssText = 'flex:1;font-size:13px;border:1px solid var(--gisella);border-radius:4px;padding:2px 6px;font-family:inherit;';
-    el.replaceWith(input);
-    input.focus();
-    input.select();
-    const save_ = () => {
-      const val = input.value.trim();
-      if (val) { l.etapas[idx].nome = val; save('gc-livros', livros); renderLivros(); }
-      renderEpLista();
-    };
-    input.onblur = save_;
-    input.onkeydown = e => { if(e.key==='Enter') save_(); if(e.key==='Escape') renderEpLista(); };
-  }
-  
-  function escolherAplicacaoDataEtapa(etapaNome) {
-    return new Promise(resolve => {
-      const layer = document.createElement('div');
-      layer.className = 'modal-overlay open';
-      layer.style.zIndex = '10050';
-      layer.innerHTML = `<div class="modal" style="width:460px;">
-        <button class="modal-close" type="button" data-choice="cancel">×</button>
-        <div class="modal-title">Como deseja aplicar esta alteração?</div>
-        <p style="font-size:12px;color:var(--text-soft);margin:6px 0 16px;">${String(etapaNome || 'Etapa').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]))}</p>
-        <label style="display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--border);border-radius:10px;margin-bottom:10px;cursor:pointer;">
-          <input type="radio" name="etapa-date-choice" value="single" checked style="margin-top:2px;accent-color:var(--gisella);">
-          <span><strong style="display:block;font-size:13px;">Alterar somente esta etapa</strong><small style="color:var(--text-soft);">Nenhuma outra data será modificada.</small></span>
-        </label>
-        <label style="display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--border);border-radius:10px;cursor:pointer;">
-          <input type="radio" name="etapa-date-choice" value="following" style="margin-top:2px;accent-color:var(--gisella);">
-          <span><strong style="display:block;font-size:13px;">Recalcular todas as etapas seguintes</strong><small style="color:var(--text-soft);">A nova data vira a referência, respeitando fins de semana, conflitos e ordem.</small></span>
-        </label>
-        <div class="btn-row" style="margin-top:18px;"><button type="button" class="btn" data-choice="cancel">Cancelar</button><button type="button" class="btn btn-primary" data-choice="confirm">Aplicar alteração</button></div>
-      </div>`;
-      document.body.appendChild(layer);
-      const finish = choice => { layer.remove(); resolve(choice); };
-      layer.querySelectorAll('[data-choice="cancel"]').forEach(button => button.addEventListener('click', () => finish(null)));
-      layer.querySelector('[data-choice="confirm"]').addEventListener('click', () => {
-        finish(layer.querySelector('input[name="etapa-date-choice"]:checked')?.value || 'single');
-      });
-      layer.addEventListener('click', event => { if (event.target === layer) finish(null); });
-    });
-  }
-
-  function recalcularEtapasSeguintes(livro, editedIndex, newDateValue) {
-    const referenceDate = parseDashboardDate(newDateValue);
-    if (!referenceDate) return;
-    const editedStage = livro.etapas[editedIndex];
-    const templateByName = new Map(CRONOGRAMA_EDITORIAL.map(item => [item[0], item[1]]));
-    const referenceOffset = Number.isFinite(Number(editedStage.offsetDays))
-      ? Number(editedStage.offsetDays)
-      : Number(templateByName.get(editedStage.nome) || 0);
-    const occupied = new Set(livro.etapas.slice(0, editedIndex + 1).map(stage => stage.prazo).filter(Boolean));
-    let previousDate = referenceDate;
-    for (let index = editedIndex + 1; index < livro.etapas.length; index += 1) {
-      const stage = livro.etapas[index];
-      const stageOffset = Number.isFinite(Number(stage.offsetDays))
-        ? Number(stage.offsetDays)
-        : templateByName.get(stage.nome);
-      const candidate = Number.isFinite(Number(stageOffset))
-        ? addCalendarDays(referenceDate, Math.max(0, Number(stageOffset) - referenceOffset))
-        : addCalendarDays(previousDate, 1);
-      const nextDate = nextAvailableEditorialDate(candidate, previousDate, occupied);
-      stage.prazo = dashboardDateString(nextDate);
-      occupied.add(stage.prazo);
-      previousDate = nextDate;
-    }
-  }
-
-  async function updateEtapaPrazoInline(livroId, idx, val) {
-    const l = livros.find(x => x.id === livroId);
-    if (!l || !l.etapas[idx]) return;
-    const previousValue = l.etapas[idx].prazo || '';
-    if (previousValue === val) return;
-    const choice = idx < l.etapas.length - 1 ? await escolherAplicacaoDataEtapa(l.etapas[idx].nome) : 'single';
-    if (!choice) {
-      renderLivros();
-      renderEpLista();
-      return;
-    }
-    l.etapas[idx].prazo = val;
-    if (choice === 'following' && val) recalcularEtapasSeguintes(l, idx, val);
-    save('gc-livros', livros);
-    renderLivros();
-    buildTarefas();
-    if (_epLivroId === livroId) renderEpLista();
-  }
-  
-  /* ── NOTAS RÁPIDAS ── */
-  function getNotas(colab) {
-    return JSON.parse(localStorage.getItem('gc-notas-' + colab) || '[]');
-  }
-  function saveNotas(colab, notas) {
-    localStorage.setItem('gc-notas-' + colab, JSON.stringify(notas));
-    if (window.fbSave) window.fbSave('gc-notas-' + colab, notas);
-    else console.warn('fbSave not available — nota saved locally only');
-  }
-  
-  function renderNotas(colab) {
-    const el = document.getElementById(colab + '-notas-lista');
-    if (!el) {
-      // Element not in DOM yet — retry after navigation
-      setTimeout(() => renderNotas(colab), 200);
-      return;
-    }
-    const notas = getNotas(colab);
-    if (!notas.length) { el.innerHTML = '<div style="font-size:12px;color:var(--text-soft);padding:4px 0;">Nenhuma nota.</div>'; return; }
-    el.innerHTML = notas.map((n, i) => `
-      <div draggable="true" style="display:flex;align-items:flex-start;gap:6px;padding:6px 0;border-bottom:1px solid var(--border);">
-        <span style="color:var(--text-soft);font-size:13px;flex-shrink:0;margin-top:2px;">•</span>
-        <span style="flex:1;font-size:13px;line-height:1.4;" ondblclick="editNota('${colab}',${i})">${n.texto}</span>
-        <button onclick="editNota('${colab}',${i})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:11px;padding:0 2px;">✎</button>
-        <button onclick="deleteNota('${colab}',${i})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:13px;padding:0 2px;">×</button>
-      </div>`).join('');
-  }
-  
-  function addNotaRapida(colab) {
-    openNotaModal(colab, null);
-  }
-  
-  function editNota(colab, idx) {
-    openNotaModal(colab, idx);
-  }
-  
-  function openNotaModal(colab, idx) {
-    const notas = getNotas(colab);
-    const existing = idx !== null ? notas[idx] : null;
-    let overlay = document.getElementById('modal-nota-rapida');
-    if (!overlay) {
-      overlay = document.createElement('div');
-      overlay.id = 'modal-nota-rapida';
-      overlay.className = 'modal-overlay';
-      overlay.onclick = function(e) { if(e.target===this) this.remove(); };
-      document.body.appendChild(overlay);
-    }
-    overlay.innerHTML = `
-      <div class="modal" style="width:380px;">
-        <button class="modal-close" onclick="document.getElementById('modal-nota-rapida').remove()">×</button>
-        <div class="modal-title">${idx !== null ? 'Editar nota' : 'Nova nota rápida'}</div>
-        <div class="form-group">
-          <textarea class="notes-area" id="nota-texto" placeholder="Escreva aqui..." style="min-height:80px;">${existing ? existing.texto : ''}</textarea>
-        </div>
-        <div class="btn-row">
-          <button class="btn" onclick="document.getElementById('modal-nota-rapida').remove()">Cancelar</button>
-          <button class="btn btn-primary" onclick="saveNotaModal('${colab}',${idx !== null ? idx : 'null'})">Salvar</button>
-        </div>
-      </div>`;
-    overlay.classList.add('open');
-    setTimeout(() => { const t = document.getElementById('nota-texto'); if(t){t.focus();t.selectionStart=t.value.length;} }, 50);
-  }
-  
-  function saveNotaModal(colab, idx) {
-    const texto = (document.getElementById('nota-texto')?.value||'').trim();
-    if (!texto) return;
-    const notas = getNotas(colab);
-    if (idx !== null && idx !== 'null') notas[idx] = { texto };
-    else notas.push({ texto });
-    saveNotas(colab, notas);
-    renderNotas(colab);
-    document.getElementById('modal-nota-rapida')?.remove();
-  }
-  
-  function deleteNota(colab, idx) {
-    const notas = getNotas(colab);
-    notas.splice(idx, 1);
-    saveNotas(colab, notas);
-    renderNotas(colab);
-  }
-  
-  // Nota rápida via botão flutuante — detecta colaborador logado
-  function openNotaRapidaFlutuante() {
-    const user = localStorage.getItem('gc-session-user') || 'gisella';
-    // Abrir modal sem navegar para outra página
-    openNotaModal(user, null);
-  }
-  
-  /* ── POMODORO ── */
-  const POM_MODES = {
-    foco:  { label: 'Foco',       mins: 25, color: 'var(--gisella)' },
-    curta: { label: 'Pausa curta', mins: 5,  color: 'var(--ok)' },
-    longa: { label: 'Pausa longa', mins: 15, color: 'var(--leia)' }
-  };
-  let pomMode      = 'foco';
-  let pomTotal     = 25 * 60;
-  let pomRemaining = 25 * 60;
-  let pomRunning   = false;
-  let pomInterval  = null;
-  let pomCiclos    = parseInt(localStorage.getItem('pom-ciclos-' + new Date().toDateString()) || '0');
-  
-  function pomFmt(s) {
-    const m = Math.floor(s / 60);
-    const sec = s % 60;
-    return m.toString().padStart(2,'0') + ':' + sec.toString().padStart(2,'0');
-  }
-  
-  function pomDrawRing() {
-    const canvas = document.getElementById('pom-ring-canvas');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const size = 52;
-    const cx = size / 2, cy = size / 2, r = 24;
-    ctx.clearRect(0, 0, size, size);
-    const mode = POM_MODES[pomMode];
-    // Resolve CSS color variable to actual color
-    const colorMap = { 'var(--gisella)': '#c0396b', 'var(--ok)': '#1A6B4A', 'var(--leia)': '#7c3aed' };
-    const color = colorMap[mode.color] || '#c0396b';
-    if (!pomRunning && pomRemaining === pomTotal) {
-      // idle — thin gray ring
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(168,147,127,0.25)';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      return;
-    }
-    // Background track
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(168,147,127,0.15)';
-    ctx.lineWidth = 3;
-    ctx.stroke();
-    // Progress arc — starts full, shrinks clockwise (remaining time, clockwise)
-    const pct = pomRemaining / pomTotal;
-    const startAngle = -Math.PI / 2;
-    const endAngle = startAngle + (Math.PI * 2 * pct);
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, startAngle, endAngle, false);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-  }
-  
-  function pomUpdateUI() {
-    const d = document.getElementById('pom-display');
-    const m = document.getElementById('pom-mini-display');
-    const p = document.getElementById('pom-progress');
-    const c = document.getElementById('pom-ciclos');
-    const btn = document.getElementById('pom-btn-start');
-    const lbl = document.getElementById('pom-mode-label');
-    const mode = POM_MODES[pomMode];
-    if (d) d.textContent = pomFmt(pomRemaining);
-    if (m) m.textContent = !pomRunning && pomRemaining < pomTotal ? '⏸' : pomFmt(pomRemaining);
-    if (p) { p.style.width = (pomRemaining / pomTotal * 100) + '%'; p.style.background = mode.color; }
-    if (c) c.textContent = '🍅 ' + pomCiclos + ' pomodoro' + (pomCiclos !== 1 ? 's' : '') + ' hoje';
-    if (btn) btn.textContent = pomRunning ? '⏸ Pausar' : '▶ ' + (pomRemaining < pomTotal ? 'Continuar' : 'Iniciar');
-    if (lbl) { lbl.textContent = mode.label; lbl.style.color = mode.color; }
-    // Update compact button ring
-    const toggleBtn = document.getElementById('pom-toggle-btn');
-    pomDrawRing();
-  }
-  
-  function pomSetMode(mode) {
-    pomStop();
-    pomMode = mode;
-    pomTotal = POM_MODES[mode].mins * 60;
-    pomRemaining = pomTotal;
-    // Update tab styles
-    ['foco','curta','longa'].forEach(m => {
-      const tab = document.getElementById('pom-tab-' + m);
-      if (!tab) return;
-      if (m === mode) {
-        tab.style.background = POM_MODES[m].color.replace(')', '-bg)').replace('var(--','var(--');
-        // simpler approach:
-        tab.style.background = m === 'foco' ? 'var(--gisella-bg)' : m === 'curta' ? 'var(--ok-bg)' : 'var(--leia-bg)';
-        tab.style.color = POM_MODES[m].color;
-        tab.style.border = 'none';
-        tab.style.fontWeight = '600';
-      } else {
-        tab.style.background = 'none';
-        tab.style.color = 'var(--text-soft)';
-        tab.style.border = '1px solid var(--border)';
-        tab.style.fontWeight = '400';
-      }
-    });
-    pomUpdateUI();
-  }
-  
-  function pomToggle() {
-    if (pomRunning) {
-      pomStop();
-    } else {
-      pomRunning = true;
-      pomInterval = setInterval(() => {
-        pomRemaining--;
-        pomUpdateUI();
-        if (pomRemaining <= 0) {
-          pomStop();
-          pomFinish();
-        }
-      }, 1000);
-      pomUpdateUI();
-    }
-  }
-  
-  function pomStop() {
-    pomRunning = false;
-    clearInterval(pomInterval);
-    pomInterval = null;
-    pomUpdateUI();
-  }
-  
-  function pomReset() {
-    pomStop();
-    pomRemaining = pomTotal;
-    pomUpdateUI();
-  }
-  
-  function pomFinish() {
-    if (pomMode === 'foco') {
-      pomCiclos++;
-      localStorage.setItem('pom-ciclos-' + new Date().toDateString(), pomCiclos);
-    }
-    // Notificação sonora
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      [523, 659, 784].forEach((freq, i) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain); gain.connect(ctx.destination);
-        osc.frequency.value = freq;
-        osc.type = 'sine';
-        gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.2);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.2 + 0.4);
-        osc.start(ctx.currentTime + i * 0.2);
-        osc.stop(ctx.currentTime + i * 0.2 + 0.4);
-      });
-    } catch(e) {}
-    // Push notification
-    const msg = pomMode === 'foco' ? '🍅 Pomodoro concluído! Hora da pausa.' : '⏰ Pausa terminada! Volte ao foco.';
-    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-      new Notification('Central GC · Pomodoro', { body: msg });
-    }
-    addNotif(msg, 'pomodoro');
-    // Auto-switch: foco -> pausa curta, pausas -> foco
-    setTimeout(() => {
-      if (pomMode === 'foco') pomSetMode('curta');
-      else pomSetMode('foco');
-      pomUpdateUI();
-    }, 500);
-  }
-  
-  let _pomClickTimer = null;
-  function pomHandleClick(e) {
-    // Single click: start/pause. Use a short delay to distinguish from dblclick.
-    if (_pomClickTimer) return;
-    _pomClickTimer = setTimeout(() => {
-      _pomClickTimer = null;
-      pomToggle();
-    }, 200);
-  }
-  function pomHandleDouble(e) {
-    // Double click: cancel the pending single-click and open/close widget
-    if (_pomClickTimer) { clearTimeout(_pomClickTimer); _pomClickTimer = null; }
-    pomToggleWidget();
-  }
-  
-  function pomToggleWidget() {
-    const exp = document.getElementById('pomodoro-expanded');
-    if (!exp) return;
-    const open = exp.style.display === 'none';
-    exp.style.display = open ? 'block' : 'none';
-  }
-  
-  // Inicializar
-  document.addEventListener('DOMContentLoaded', () => { pomUpdateUI(); pomDrawRing(); });
-  
-  /* ── BOTTOM NAV ── */
-  function bottomNav(pageId, btn) {
-    // Deactivate all
-    document.querySelectorAll('.bottom-nav-btn').forEach(b => b.classList.remove('active'));
-    if (btn) btn.classList.add('active');
-    if (pageId === 'colab-self') {
-      const user = localStorage.getItem('gc-session-user') || 'gisella';
-      if (user === 'gisella') {
-        const navBtn = Array.from(document.querySelectorAll('.nav-item')).find(b => (b.getAttribute('onclick')||'').includes('colab-gisella'));
-        showPage('colab-gisella', navBtn);
-      } else {
-        // Milena/Luiggi não têm página pessoal: vão para Tarefas já filtradas pelo nome
-        const navBtn = Array.from(document.querySelectorAll('.nav-item')).find(b => (b.getAttribute('onclick')||'').includes("'tarefas'"));
-        showPage('tarefas', navBtn);
-        setTimeout(() => {
-          const nome = user === 'milena' ? 'Milena' : user === 'luiggi' ? 'Luiggi' : null;
-          if (nome) {
-            const colabBtn = Array.from(document.querySelectorAll('#filter-bar-tarefas-colab .filter-btn')).find(b => b.textContent.trim() === nome);
-            if (colabBtn) setFilterColab('tarefas', nome, colabBtn);
-          }
-        }, 50);
-      }
-    } else {
-      const navBtn = Array.from(document.querySelectorAll('.nav-item')).find(b => (b.getAttribute('onclick')||'').includes(pageId));
-      showPage(pageId, navBtn);
-    }
-  }
-  
-  function bottomNavAdd() {
-    // Open modal with default type based on current page
-    openQuickAdd();
-  }
-  
-  /* ── NOTIFICATIONS ── */
-  let _notifs = [];
-  
-  function openNotifPanel() {
-    buildNotifList();
-    document.getElementById('notif-panel').classList.add('open');
-    // Close when clicking outside
-    setTimeout(() => {
-      function outsideClick(e) {
-        const panel = document.getElementById('notif-panel');
-        const btn = document.getElementById('notif-float-btn');
-        const mobileBtn = document.getElementById('bnav-notif');
-        if (panel && !panel.contains(e.target) && e.target !== btn && e.target !== mobileBtn) {
-          closeNotifPanel();
-          document.removeEventListener('click', outsideClick);
-        }
-      }
-      document.addEventListener('click', outsideClick);
-    }, 50);
-  }
-  
-  function closeNotifPanel() {
-    document.getElementById('notif-panel').classList.remove('open');
-    // Mark all read
-    _notifs.forEach(n => n.read = true);
-    updateNotifBadge();
-  }
-  
-  function updateNotifBadge() {
-    const badge = document.getElementById('notif-badge');
-    const floatBadge = document.getElementById('notif-float-badge');
-    const unread = _notifs.filter(n => !n.read).length;
-    if (badge) badge.style.display = unread > 0 ? 'block' : 'none';
-    if (floatBadge) floatBadge.style.display = unread > 0 ? 'block' : 'none';
-  }
-  
-  function addNotif(text, tipo) {
-    const n = { id: Date.now(), text, tipo: tipo||'info', read: false, ts: new Date().toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'}) };
-    _notifs.unshift(n);
-    if (_notifs.length > 50) _notifs = _notifs.slice(0, 50);
-    updateNotifBadge();
-    // Push notification
-    if (Notification && Notification.permission === 'granted') {
-      new Notification('Central GC', { body: text, icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="%23111"/><text x="32" y="44" text-anchor="middle" font-size="36" fill="white" font-family="serif">G</text></svg>' });
-    }
-  }
-  
-  function buildNotifList() {
-    const el = document.getElementById('notif-list');
-    if (!el) return;
-    if (_notifs.length === 0) {
-      el.innerHTML = '<div style="text-align:center;color:var(--text-soft);padding:1.5rem;font-size:13px;">Nenhuma notificação</div>';
-      return;
-    }
-    const todayStr = new Date().toISOString().slice(0,10);
-    const user = (localStorage.getItem('gc-session-user')||'').toLowerCase();
-    const userName = user ? (user[0].toUpperCase() + user.slice(1)) : '';
-  
-    // Collect today's tasks for the first 'info' notif
-    const tarefasHoje = (events||[]).filter(e =>
-      !e.arquivada && e.tipo === 'tarefa' && e.data === todayStr &&
-      (!userName || !e.responsavel || e.responsavel === userName)
-    );
-  
-    el.innerHTML = _notifs.map((n, idx) => {
-      // Show tasks below the daily task notification
-      let tasksHtml = '';
-      if (n.tipo === 'info' && n.text && n.text.includes('tarefa') && idx === 0 && tarefasHoje.length > 0) {
-        tasksHtml = `<div style="margin-top:6px;padding-left:18px;">` +
-          tarefasHoje.slice(0, 5).map(t =>
-            `<div style="font-size:11px;color:var(--text-mid);padding:2px 0;border-bottom:1px solid var(--border);">• ${t.titulo}</div>`
-          ).join('') +
-          (tarefasHoje.length > 5 ? `<div style="font-size:10px;color:var(--text-soft);margin-top:2px;">+${tarefasHoje.length-5} mais</div>` : '') +
-          '</div>';
-      }
-      return `
-      <div class="notif-item" onclick="this.querySelector('.notif-dot').classList.add('read')">
-        <span class="notif-dot ${n.read?'read':''}"></span>
-        <div style="flex:1;">
-          <div class="notif-text">${n.text}</div>
-          ${tasksHtml}
-        </div>
-        <span class="notif-time">${n.ts}</span>
-      </div>`;
-    }).join('');
-  }
-  
-  function checkUrgentTasksNotif() {
-    const today = new Date(); today.setHours(0,0,0,0);
-    const todayStr = today.toISOString().slice(0,10);
-    const user = (localStorage.getItem('gc-session-user')||'').toLowerCase();
-    const userName = user ? (user[0].toUpperCase() + user.slice(1)) : '';
-    // Urgent tasks for today
-    const urgentes = events.filter(e =>
-      !e.arquivada && e.tipo === 'tarefa' && e.urgente && e.data && e.data <= todayStr &&
-      (!userName || !e.responsavel || e.responsavel === userName)
-    );
-    urgentes.forEach(e => addNotif('❗ Urgente: ' + e.titulo, 'urgente'));
-    // Today's tasks count
-    const hoje = events.filter(e => !e.arquivada && e.tipo === 'tarefa' && e.data === todayStr && (!userName || !e.responsavel || e.responsavel === userName));
-    if (hoje.length > 0) {
-      addNotif(`📋 Você tem ${hoje.length} tarefa${hoje.length>1?'s':''} para hoje`, 'info');
-    }
-  }
-  
-  function requestPushPermission() {
-    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
-  }
-  
-  // Schedule daily push at 10h
-  function scheduleDailyNotif() {
-    const now = new Date();
-    const target10 = new Date(now); target10.setHours(10, 0, 0, 0);
-    if (target10 <= now) target10.setDate(target10.getDate() + 1);
-  
-    setTimeout(() => {
-      // Send push with today's task count
-      const todayStr = new Date().toISOString().slice(0,10);
-      const user = (localStorage.getItem('gc-session-user')||'').toLowerCase();
-      const userName = user ? (user[0].toUpperCase() + user.slice(1)) : '';
-      const hoje = (events||[]).filter(e =>
-        !e.arquivada && e.tipo === 'tarefa' && e.data === todayStr &&
-        (!userName || !e.responsavel || e.responsavel === userName)
-      );
-      const count = hoje.length;
-      const msg = count > 0
-        ? `📋 Você tem ${count} tarefa${count>1?'s':''} para hoje`
-        : '✅ Nenhuma tarefa para hoje!';
-      addNotif(msg, 'info');
-      if (Notification && Notification.permission === 'granted') {
-        new Notification('Central GC · Tarefas do dia', { body: msg });
-      }
-      setInterval(() => {
-        checkUrgentTasksNotif();
-      }, 24*60*60*1000);
-    }, target10 - now);
-  }
-  
-  /* ── CHAT ── */
-  let _chatMessages = [];
-  
-  function openChatPanel() {
-    document.getElementById('chat-panel').classList.add('open');
-    // Overlay só no mobile
-    if (window.innerWidth <= 768) {
-      const ov = document.getElementById('chat-overlay');
-      if (ov) ov.style.display = 'block';
-    }
-    renderChatMessages();
-    setTimeout(() => {
-      const msgs = document.getElementById('chat-panel-messages');
-      if (msgs) msgs.scrollTop = msgs.scrollHeight;
-      const inp = document.getElementById('chat-panel-input');
-      if (inp) inp.focus();
-    }, 100);
-    // Zerar badge
-    _notifs.filter(n => n.tipo === 'chat').forEach(n => n.read = true);
-    updateChatBadge(false);
-  }
-  
-  function closeChatPanel() {
-    document.getElementById('chat-panel').classList.remove('open');
-    const ov = document.getElementById('chat-overlay');
-    if (ov) ov.style.display = 'none';
-  }
-  
-  function updateChatBadge(show) {
-    const b1 = document.getElementById('chat-badge');        // barra mobile
-    const b2 = document.getElementById('chat-float-badge');  // botão desktop
-    if (b1) b1.style.display = show ? 'block' : 'none';
-    if (b2) b2.style.display = show ? 'block' : 'none';
-  }
-  
-  function renderChatMessages() {
-    const el = document.getElementById('chat-panel-messages');
-    if (!el) return;
-    const currentUser = window._currentUserName || localStorage.getItem('gc-session-name') || '';
-    if (_chatMessages.length === 0) {
-      el.innerHTML = '<div style="text-align:center;color:var(--text-soft);padding:2rem;font-size:13px;">Nenhuma mensagem ainda. Seja o primeiro a escrever! 👋</div>';
-      return;
-    }
-    el.innerHTML = _chatMessages.map(m => {
-      const isMine = m.autor === currentUser;
-      return `<div style="display:flex;flex-direction:column;align-items:${isMine?'flex-end':'flex-start'};">
-        ${!isMine ? `<div style="font-size:11px;font-weight:600;color:var(--text-soft);margin-bottom:2px;padding-left:4px;">${m.autor}</div>` : ''}
-        <div class="chat-bubble ${isMine?'mine':'theirs'}">${m.texto}
-          <div class="chat-bubble-meta">${m.hora}</div>
-        </div>
-      </div>`;
-    }).join('');
-    el.scrollTop = el.scrollHeight;
-  }
-  
-  async function sendChatMessage() {
-    const inp = document.getElementById('chat-panel-input');
-    const texto = (inp?.value||'').trim();
-    if (!texto) return;
-    const autor = window._currentUserName || localStorage.getItem('gc-session-name') || 'Usuário';
-    const hora = new Date().toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
-    const msg = { id: Date.now(), autor, texto, hora, read: false };
-    _chatMessages.push(msg);
-    inp.value = '';
-    // Save to Firebase
-    if (window.fbSave) {
-      await window.fbSave('gc-chat-messages', _chatMessages.slice(-100));
-    } else {
-      localStorage.setItem('gc-chat-messages', JSON.stringify(_chatMessages));
-    }
-    renderChatMessages();
-    // Notificar outros (badge aparecerá quando o listener receber)
-    addNotif(`💬 ${autor}: ${texto.slice(0,40)}${texto.length>40?'...':''}`, 'chat');
-  }
-  
-  async function loadChatMessages() {
-    try {
-      let msgs = null;
-      if (window.fbGet) msgs = await window.fbGet('gc-chat-messages');
-      if (!msgs) msgs = JSON.parse(localStorage.getItem('gc-chat-messages') || '[]');
-      _chatMessages = msgs || [];
-    } catch(e) { _chatMessages = []; }
-  }
-  
-  // Listen for new chat messages from other users
-  function setupChatListener() {
-    if (!window.fbListen) return;
-    window.fbListen('gc-chat-messages', msgs => {
-      if (!msgs) return;
-      const prevLen = _chatMessages.length;
-      _chatMessages = msgs;
-      if (msgs.length > prevLen) {
-        const latest = msgs[msgs.length - 1];
-        const currentUser = window._currentUserName || localStorage.getItem('gc-session-name') || '';
-        if (latest && latest.autor !== currentUser) {
-          updateChatBadge(true);
-          addNotif(`💬 ${latest.autor}: ${latest.texto.slice(0,50)}`, 'chat');
-        }
-      }
-      // If panel is open, re-render
-      if (document.getElementById('chat-panel').classList.contains('open')) {
-        renderChatMessages();
-      }
-    });
-  }
-  
-  /* ── PUSH NOTIFICATIONS — task assignment & completion ── */
-  function notifyTaskAssigned(tarefa, responsavel) {
-    const currentUser = (localStorage.getItem('gc-session-user') || '').toLowerCase();
-    const currentName = (window._currentUserName || '').toLowerCase();
-    // If the task was assigned to another collaborator, notify
-    if (responsavel && responsavel.toLowerCase() !== currentName && responsavel.toLowerCase() !== currentUser) {
-      const msg = `📋 Nova tarefa atribuída a ${responsavel}: "${tarefa}"`;
-      addNotif(msg, 'tarefa');
-    }
-  }
-  
-  function notifyTaskCompleted(tarefa, completedBy) {
-    // Notify when a collaborator completes a task
-    const currentUser = (window._currentUserName || localStorage.getItem('gc-session-name') || '').toLowerCase();
-    if (completedBy && completedBy.toLowerCase() !== currentUser) {
-      const msg = `✅ ${completedBy} concluiu: "${tarefa}"`;
-      addNotif(msg, 'tarefa');
-    }
-  }
-  
-  /* ── MODAL COMENTÁRIOS RÁPIDO ── */
-  let _comModalEventId = null;
-  
-  function openComentariosModal(eventId) {
-    _comModalEventId = eventId;
-    const ev = events.find(x => x.id === eventId);
-    if (!ev) return;
-    document.getElementById('modal-com-titulo').textContent = ev.titulo;
-    document.getElementById('modal-com-texto').value = '';
-    renderComentariosModal(ev);
-    openModal('modal-comentarios-tarefa');
-    setTimeout(() => document.getElementById('modal-com-texto').focus(), 100);
-  }
-  
-  function renderComentariosModal(ev) {
-    const lista = document.getElementById('modal-com-lista');
-    if (!lista) return;
-    const comentarios = ev.comentarios || [];
-    if (comentarios.length === 0) {
-      lista.innerHTML = '<div style="font-size:12px;color:var(--text-soft);text-align:center;padding:8px 0;">Nenhum comentário ainda.</div>';
-      return;
-    }
-    const cores = { Gisella: 'var(--gisella)', Milena: 'var(--leia)', Luiggi: 'var(--editora)' };
-    lista.innerHTML = comentarios.map((c, i) => `
-      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-          <span style="font-size:11px;font-weight:600;color:${cores[c.autor]||'var(--text-mid)'};">${c.autor}</span>
-          <div style="display:flex;align-items:center;gap:8px;">
-            <span style="font-size:10px;color:var(--text-soft);">${c.data}</span>
-            <button onclick="deleteComModal(${i})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:0;line-height:1;">×</button>
-          </div>
-        </div>
-        <div style="font-size:13px;white-space:pre-wrap;line-height:1.5;">${c.texto}</div>
-      </div>`).join('');
-    lista.scrollTop = lista.scrollHeight;
-  }
-  
-  function submitComentarioModal() {
-    if (!_comModalEventId) return;
-    const ev = events.find(x => x.id === _comModalEventId);
-    if (!ev) return;
-    const texto = (document.getElementById('modal-com-texto').value || '').trim();
-    if (!texto) { document.getElementById('modal-com-texto').focus(); return; }
-    const autor = document.getElementById('modal-com-autor').value || 'Gisella';
-    const agora = new Date();
-    const data = agora.getDate().toString().padStart(2,'0') + '/' + (agora.getMonth()+1).toString().padStart(2,'0') + ' ' + agora.getHours().toString().padStart(2,'0') + ':' + agora.getMinutes().toString().padStart(2,'0');
-    if (!ev.comentarios) ev.comentarios = [];
-    ev.comentarios.push({ autor, texto, data });
-    save('gc-events', events);
-    document.getElementById('modal-com-texto').value = '';
-    renderComentariosModal(ev);
-    // Update bubble icon count on all rows
-    document.querySelectorAll(`[data-com-id="${_comModalEventId}"]`).forEach(el => {
-      const cnt = ev.comentarios.length;
-      el.innerHTML = cnt > 0 ? bubbleIconHtml(cnt, true) : bubbleIconHtml(0, false);
-    });
-  }
-  
-  function deleteComModal(idx) {
-    if (!_comModalEventId) return;
-    const ev = events.find(x => x.id === _comModalEventId);
-    if (!ev || !ev.comentarios) return;
-    ev.comentarios.splice(idx, 1);
-    save('gc-events', events);
-    renderComentariosModal(ev);
-    document.querySelectorAll(`[data-com-id="${_comModalEventId}"]`).forEach(el => {
-      const cnt = ev.comentarios.length;
-      el.innerHTML = cnt > 0 ? bubbleIconHtml(cnt, true) : bubbleIconHtml(0, false);
-    });
-  }
-  
-  function bubbleIconHtml(count, hasComments) {
-    const color = hasComments ? 'var(--gisella)' : 'var(--text-soft)';
-    const bg = hasComments ? 'var(--gisella-bg)' : 'transparent';
-    return `<svg width="14" height="14" viewBox="0 0 24 24" fill="${hasComments?'var(--gisella)':'none'}" stroke="${color}" stroke-width="2" style="display:inline;vertical-align:middle;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>${hasComments?`<span style="font-size:9px;color:${color};font-weight:600;margin-left:1px;">${count}</span>`:''}`;
-  }
-  
-  function comentarioBubble(eventId, comentarios) {
-    const count = (comentarios||[]).length;
-    return `<button data-com-id="${eventId}" onclick="event.stopPropagation();openComentariosModal(${eventId})" style="background:none;border:none;cursor:pointer;padding:1px 3px;opacity:${count>0?1:0.4};display:inline-flex;align-items:center;gap:2px;" title="${count>0?count+' comentário(s)':'Comentar'}">${bubbleIconHtml(count, count>0)}</button>`;
-  }
-  
-  /* ── MODAL DIA CALENDÁRIO ── */
-  function openDayModalFromCache(calId, ds) {
-    const items = (window._calDayCache && window._calDayCache[calId+'_'+ds]) || [];
-    openDayModal(ds, items);
-  }
-  
-  function openDayModal(ds, items) {
-    window._modalDiaDate = ds;
-    const MS2 = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
-    const [y,mo,d] = ds.split('-').map(Number);
-    const dow = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'][new Date(y,mo-1,d).getDay()];
-    document.getElementById('modal-dia-title').textContent = `${dow}, ${d} de ${MS2[mo-1]} de ${y}`;
-  
-    const EMP_COR = {editora:'var(--editora)',leia:'var(--leia)',gisella:'var(--gisella)'};
-    const EMP_LABEL = {editora:'Editora Cassol',leia:'Léia Cassol',gisella:'GC Estratégias'};
-    const contColors = {editora:'#7b1414',leia:'#3c0a50',gisella:'#8c0a3c'};
-  
-    const rows = items.map(item => {
-      if (item.type === 'conteudo') {
-        const c = item.c;
-        const cor = contColors[c.empresa||'editora'];
-        return `<div style="display:flex;align-items:flex-start;gap:10px;padding:8px;background:var(--bg);border-radius:8px;">
-          <span style="font-size:14px;flex-shrink:0;">✍</span>
-          <div style="flex:1;cursor:pointer;" onclick="closeModal('modal-dia-cal');openConteudo(${c.id})">
-            <div style="font-weight:500;">${c.nome}</div>
-            <div style="font-size:11px;color:${cor};margin-top:2px;">${EMP_LABEL[c.empresa]||c.empresa} · conteúdo</div>
-          </div>
-          <button onclick="event.stopPropagation();if(confirm('Excluir conteúdo?')){deleteConteudo(${c.id});closeModal('modal-dia-cal');}" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:14px;padding:0 2px;" title="Excluir">×</button>
-        </div>`;
-      } else {
-        const e = item.e;
-        const cor = EMP_COR[e.empresa||'editora'] || 'var(--text-soft)';
-        const time = e.startTime ? `<span style="font-size:11px;color:var(--text-soft);">${e.startTime}</span> ` : '';
-        const gcalBadge = e.gcal ? '<span style="font-size:9px;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:1px 5px;color:var(--text-soft);margin-left:6px;">Google Cal</span>' : '';
-        const editBtn = !e.gcal ? `<button onclick="event.stopPropagation();closeModal('modal-dia-cal');openEditEvent(${e.id})" style="background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:11px;padding:0;">✎</button>` : '';
-        const linkBtn = e.gcal && e.link ? `<a href="${e.link}" target="_blank" onclick="event.stopPropagation();" style="color:var(--text-soft);font-size:11px;text-decoration:none;">↗</a>` : '';
-        return `<div style="display:flex;align-items:flex-start;gap:10px;padding:8px;background:var(--bg);border-radius:8px;">
-          <div style="width:3px;min-height:32px;background:${cor};border-radius:2px;flex-shrink:0;margin-top:2px;"></div>
-          <div style="flex:1;">
-            <div style="font-weight:500;">${time}${e.titulo}${gcalBadge}</div>
-            <div style="font-size:11px;color:${cor};margin-top:2px;">${EMP_LABEL[e.empresa||'editora']||e.empresa}</div>
-          </div>
-          ${editBtn}${linkBtn}
-        </div>`;
-      }
-    }).join('');
-  
-    document.getElementById('modal-dia-body').innerHTML = rows || '<div style="color:var(--text-soft);">Nenhum evento neste dia.</div>';
-    openModal('modal-dia-cal');
-  }
-  
-  /* ── CONTADOR MENTORIAS ── */
-  function countMentoriasmes() {
-    const el = document.getElementById('mentorias-mes-gc');
-    if (!el) return;
-    // Debug: log first 5 events with their descriptions
-    console.log('gcalEventsCache sample:', (window.gcalEventsCache||[]).slice(0,5).map(ev => ({title: ev.title, description: ev.description, start: ev.start})));
-    const agora = new Date();
-    const mes = agora.getMonth();
-    const ano = agora.getFullYear();
-    const meses = ['janeiro','fevereiro','marco','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
-    const gcal = (window.gcalEventsCache||[]).filter(ev =>
-      (ev.description||'').toLowerCase().includes('mentoria') && ev.start &&
-      new Date(ev.start+'T00:00:00').getMonth()===mes && new Date(ev.start+'T00:00:00').getFullYear()===ano
-    );
-    const locais = (events||[]).filter(e =>
-      (e.observacao||'').toLowerCase().includes('mentoria') && e.data &&
-      new Date(e.data+'T00:00:00').getMonth()===mes && new Date(e.data+'T00:00:00').getFullYear()===ano &&
-      (e.empresa||'').includes('gisella')
-    );
-    const total = gcal.length + locais.length;
-    el.innerHTML = '<span style="font-weight:600;color:var(--gisella);">Mentorias em ' + meses[mes] + ': ' + total + '</span>';
-  }
-  
-  function countMentoriasSemana() {
-    const el = document.getElementById('mentorias-semana-colab');
-    if (!el) return;
-    const hoje = new Date(); hoje.setHours(0,0,0,0);
-    const ini = new Date(hoje); ini.setDate(hoje.getDate() - hoje.getDay());
-    const fim = new Date(ini); fim.setDate(ini.getDate() + 6);
-    const iniStr = ini.toISOString().slice(0,10);
-    const fimStr = fim.toISOString().slice(0,10);
-    const gcal = (window.gcalEventsCache||[]).filter(ev =>
-      (ev.description||'').toLowerCase().includes('mentoria') && ev.start >= iniStr && ev.start <= fimStr
-    );
-    const locais = (events||[]).filter(e =>
-      (e.observacao||'').toLowerCase().includes('mentoria') && e.data >= iniStr && e.data <= fimStr &&
-      (e.empresa||'').includes('gisella')
-    );
-    const total = gcal.length + locais.length;
-    el.innerHTML = '<span style="font-weight:600;color:var(--gisella);">Mentorias desta semana: ' + total + '</span>';
-  }
-  
-  /* ── HOME CARDS ── */
-  function buildHomeCards() {
-    // Data de hoje
-    const hoje = new Date();
-    const fimSemana7 = new Date(hoje.getTime() + 7*24*60*60*1000);
-    const fimSemanaStr = fimSemana7.toISOString().slice(0,10);
-    const diasSemana = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
-    const meses = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
-    const dataEl = document.getElementById('visao-data-hoje');
-    if (dataEl) dataEl.textContent = `${diasSemana[hoje.getDay()]}, ${hoje.getDate()} de ${meses[hoje.getMonth()]} de ${hoje.getFullYear()}`;
-  
-    const empresas = ['editora','leia','gisella'];
-    const hoje_str = hoje.toISOString().slice(0,10);
-    const em7dias = new Date(hoje.getTime() + 7*24*60*60*1000).toISOString().slice(0,10);
-  
-    let alertas = [];
-  
-    empresas.forEach(emp => {
-      // Livros ativos
-      const livrosEmp = (livros||[]).filter(l => (l.empresa||'').split(',').includes(emp) && !((l.etapas||[]).length > 0 && l.etapas.every(e=>e.feito)));
-      // Projetos ativos
-      const projetosEmp = (projetos||[]).filter(p => (p.empresa||'')=== emp && p.status !== 'finalizado');
-      // Conteudos ativos
-      const conteudosEmp = (conteudos||[]).filter(c => (c.empresa||'').split(',').includes(emp) && !c.archived && c.status !== 'postado');
-      // Tarefas desta semana COM data (atrasadas + até 7 dias)
-      const tarefasEmp = (events||[]).filter(e =>
-        (e.empresa||'').split(',').includes(emp) &&
-        !e.arquivada && !e.done && e.tipo === 'tarefa' &&
-        e.data && e.data <= fimSemanaStr
-      );
-      // Mentoradas (só gisella)
-      const menteesCount = (mentees||[]).length;
-  
-      // Preencher métricas
-      if (emp === 'gisella') {
-        const el = document.getElementById('home-gisella-mentees');
-        if (el) el.textContent = menteesCount;
-      } else {
-        const el = document.getElementById(`home-${emp}-livros`);
-        if (el) el.textContent = livrosEmp.length;
-      }
-      const pEl = document.getElementById(`home-${emp}-projetos`);
-      if (pEl) pEl.textContent = projetosEmp.length;
-      const cEl = document.getElementById(`home-${emp}-conteudos`);
-      if (cEl) cEl.textContent = conteudosEmp.length;
-      const tEl = document.getElementById(`home-${emp}-tarefas`);
-      if (tEl) tEl.textContent = tarefasEmp.length;
-  
-      // Urgentes: tarefas vencidas ou vencendo em 2 dias
-      const urgentes = tarefasEmp.filter(e => e.date && e.date <= em7dias);
-      const urgenteEl = document.getElementById(`home-${emp}-urgente`);
-      if (urgenteEl) {
-        if (urgentes.length > 0) {
-          const vencidas = urgentes.filter(e => e.date < hoje_str).length;
-          const proximas = urgentes.filter(e => e.date >= hoje_str).length;
-          let txt = [];
-          if (vencidas > 0) txt.push(`<span style="color:var(--danger);">⚠ ${vencidas} vencida${vencidas>1?'s':''}</span>`);
-          if (proximas > 0) txt.push(`<span style="color:var(--warn);">⏰ ${proximas} nos próximos 7 dias</span>`);
-          urgenteEl.innerHTML = txt.join(' · ');
-        } else {
-          urgenteEl.innerHTML = '<span style="color:var(--ok);">✓ Em dia</span>';
-        }
-      }
-  
-      // Coletar alertas globais
-      tarefasEmp.filter(e => e.date && e.date < hoje_str).forEach(e => {
-        alertas.push({ emp, texto: e.titulo||e.title||'Tarefa', data: e.date });
-      });
-    });
-  
-    // Alertas de prazo
-    const alertasEl = document.getElementById('home-alertas');
-    const alertasLista = document.getElementById('home-alertas-lista');
-    if (alertas.length > 0 && alertasEl && alertasLista) {
-      alertasEl.style.display = 'block';
-      const cores = { editora: 'var(--editora)', leia: 'var(--leia)', gisella: 'var(--gisella)' };
-      const nomes = { editora: 'Editora Cassol', leia: 'Léia Cassol', gisella: 'GC Estratégias' };
-      alertasLista.innerHTML = alertas.slice(0,5).map(a => `
-        <div style="display:flex;align-items:center;gap:10px;background:var(--danger-bg);border:1px solid rgba(240,112,112,0.2);border-radius:8px;padding:8px 12px;font-size:13px;">
-          <span style="width:6px;height:6px;border-radius:50%;background:${cores[a.emp]};flex-shrink:0;"></span>
-          <span style="color:${cores[a.emp]};font-size:11px;font-weight:500;">${nomes[a.emp]}</span>
-          <span style="flex:1;">${a.texto}</span>
-          <span style="color:var(--danger);font-size:11px;">${a.data}</span>
-        </div>`).join('');
-    } else if (alertasEl) {
-      alertasEl.style.display = 'none';
-    }
-  }
-  
-  
-  
-  function initApp(cloudData) {
-    // cloudData is only provided when there's NO local data (first time load)
-    // In all other cases, localStorage is the source of truth
-    if (cloudData) {
-          Object.entries(cloudData).forEach(([key, entry]) => {
-        const cloudTs = Number(entry?.ts || 0);
-        if (cloudTs > 0) {
-          localStorage.setItem('_fbts_' + key, String(cloudTs));
-        }
-      });
-      const apply = (key, setter) => {
-        const entry = cloudData[key];
-        const val = entry?.value ?? entry; // support both {value, ts} and raw formats
-        if (val != null) {
-          setter(val);
-          localStorage.setItem(key, JSON.stringify(val));
-        }
-      };
-      apply('gc-events',      v => { events    = v.map(e => ({...e, tipo: e.tipo||'tarefa'})); });
-      apply('gc-livros',      v => { livros     = v; });
-      apply('gc-conteudos',   v => { conteudos  = v; });
-      apply('gc-projetos',    v => { projetos   = v; });
-      apply('gc-recurring-tasks', v => { recurringTasks = v; });
-      apply('gc-kanban',      v => { kanbanData = v; });
-      apply('gc-steira',      v => { steiraData = v; });
-      apply('gc-colab-ordem', v => { colabOrdem = v; });
-      apply('gc-links',       v => { links      = v; });
-      apply('gc-links-empresa', v => { linksEmpresa = v; });
-      ['gisella','milena','luiggi'].forEach(c => {
-        const key = 'gc-notas-' + c;
-        const entry = cloudData[key];
-        const val = entry?.value ?? entry;
-        if (val?.length > 0) localStorage.setItem(key, JSON.stringify(val));
-        ['gc-fixed-'+c, 'gc-fixed-checks-'+c].forEach(k => {
-          const e2 = cloudData[k]; const v2 = e2?.value ?? e2;
-          if (v2) localStorage.setItem(k, JSON.stringify(v2));
-        });
-      });
-      if (cloudData['gc-mentees']) {
-        const entry = cloudData['gc-mentees'];
-        const val = entry?.value ?? entry;
-        if (val) { mentees = mergeMentees(val); localStorage.setItem('gc-mentees', JSON.stringify(mentees)); }
-      }
-      if (cloudData['gc-mentees-marco0']) {
-        const entry = cloudData['gc-mentees-marco0'];
-        const val = entry?.value ?? entry;
-        if (val) { menteesMarco0 = val; localStorage.setItem('gc-mentees-marco0', JSON.stringify(menteesMarco0)); }
-      }
-    }
-  
-    // (gcalKey tasks are managed by criarTarefasEventos / limparTarefasEventosRemovidos)
-  
-    // Restaurar página salva
-    const savedPage = localStorage.getItem('gc-current-page');
-    if (savedPage) {
-      const _spEl = document.getElementById('page-' + savedPage);
-      if (_spEl) {
-        const _spBtn = Array.from(document.querySelectorAll('.nav-item')).find(b => (b.getAttribute('onclick')||'').includes(savedPage));
-        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-        document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-        _spEl.classList.add('active');
-        if (_spBtn) _spBtn.classList.add('active');
-      } else {
-        localStorage.setItem('gc-current-page', 'visao');
-      }
-    }
-  
-    initCalendars();
-    renderLivros();
-    offerLivrosRecovery();
-    renderMenteeList();
-    renderMarco0List();
-    renderConteudos();
-    applyAutomaticTaskOwners();
-    ensureGisellaRecorrentes();
-    buildTarefas();
-    buildColabTarefas();
-    renderProjetos();
-    buildPrioridades();
-    buildEventosList();
-    loadGcal();
-    loadGcalLeia();
-    buildHomeCards();
-    ['gisella','milena','luiggi'].forEach(renderNotas);
-    renderSteiraList();
-  
-    // Initialize chat + notifications
-    loadChatMessages().then(() => {});
-    setupChatListener();
-    requestPushPermission();
-    scheduleDailyNotif();
-    // Check notifications after data loads
-    setTimeout(checkUrgentTasksNotif, 1500);
-  
-    // Indicador de sync
-    const ind = document.getElementById('sync-indicator');
-    if (ind) ind.style.display = cloudData ? 'flex' : 'none';
-  
-    // Escutar mudanças em tempo real de outros dispositivos
-    if (window.fbListen) {
-      [
-        // fbListen já ignora o eco de uma gravação confirmada por este aparelho.
-        // Não descartamos mudanças recentes: esse bloqueio de 15 s deixava uma aba
-        // com a cópia antiga em memória e ela podia reverter checks de outra origem.
-        ['gc-events',    v => {
-          events = v.map(e => {
-            const normalized = {...e, tipo:e.tipo||'tarefa'};
-            if (normalized.tipo === 'tarefa') normalized.responsavel = automaticTaskOwner(normalized.titulo, normalized.responsavel || '');
-            return normalized;
-          });
-          buildTarefas(); buildColabTarefas(); buildPrioridades(); buildEventosList(); refreshCalendars();
-        }],
-        ['gc-livros',    v => { livros = v; renderLivros(); buildTarefas(); buildColabTarefas(); }],
-        ['gc-projetos',  v => { projetos = v; renderProjetos(); buildTarefas(); buildColabTarefas(); }],
-        ['gc-conteudos', v => { conteudos = v; renderConteudos(); buildPrioridades(); }],
-        ['gc-recurring-tasks', v => { recurringTasks = v || []; ensureCustomRecurringTasks(window.gcalEventsCache || []); }],
-        ['gc-mentees',       v => { mentees       = v; renderMenteeList();  }],
-        ['gc-mentees-marco0', v => { menteesMarco0 = v; renderMarco0List();  }],
-        ['gc-notas-gisella', v => { localStorage.setItem('gc-notas-gisella', JSON.stringify(v)); renderNotas('gisella'); }],
-        ['gc-notas-milena',  v => { localStorage.setItem('gc-notas-milena',  JSON.stringify(v)); renderNotas('milena');  }],
-        ['gc-notas-luiggi',  v => { localStorage.setItem('gc-notas-luiggi',  JSON.stringify(v)); renderNotas('luiggi');  }],
-        ['gc-fixed-gisella', v => { localStorage.setItem('gc-fixed-gisella', JSON.stringify(v)); renderFixedTasks('gisella'); }],
-        ['gc-fixed-milena',  v => { localStorage.setItem('gc-fixed-milena',  JSON.stringify(v)); renderFixedTasks('milena');  }],
-        ['gc-fixed-luiggi',  v => { localStorage.setItem('gc-fixed-luiggi',  JSON.stringify(v)); renderFixedTasks('luiggi');  }],
-        // Fixed-check keys: sync check states across devices
-        ['gc-fixed-checks-gisella', v => { localStorage.setItem('gc-fixed-checks-gisella', JSON.stringify(v)); renderFixedTasks('gisella'); }],
-        ['gc-fixed-checks-milena',  v => { localStorage.setItem('gc-fixed-checks-milena',  JSON.stringify(v)); renderFixedTasks('milena');  }],
-        ['gc-fixed-checks-luiggi',  v => { localStorage.setItem('gc-fixed-checks-luiggi',  JSON.stringify(v)); renderFixedTasks('luiggi');  }],
-        ['gc-links',         v => { links        = v; localStorage.setItem('gc-links',         JSON.stringify(v)); renderLinks(); }],
-        ['gc-links-empresa', v => { linksEmpresa = v; localStorage.setItem('gc-links-empresa', JSON.stringify(v)); }],
-      ].forEach(([key, handler]) => {
-        window.fbListen(key, val => { localStorage.setItem(key, JSON.stringify(val)); handler(val); });
-      });
-    }
-  }
-  
-  // Loading overlay
-  document.body.insertAdjacentHTML('beforeend',
-    '<div id="loading-overlay" style="position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;">' +
-    '<div style="font-size:32px;">🔥</div>' +
-    '<div style="font-size:14px;font-weight:500;color:var(--text);">Carregando dados...</div>' +
-    '<div style="font-size:12px;color:var(--text-soft);">Conectando ao Firebase</div></div>'
-  );
-  
-  function startWithFirebase() {
-    const ov = document.getElementById('loading-overlay');
-  
-    // Check if we have local data
-    const hasLocal = !!localStorage.getItem('gc-events');
-  
-    if (hasLocal) {
-      // Start immediately with local data — no waiting for Firebase
-      if (ov) ov.remove();
-      initApp(null); // null = use localStorage only
-  
-      // Then sync from Firebase in background — only to fill missing keys on other devices
-      // Sync from Firebase using timestamps — take Firebase data if it is newer
-      // (e.g. another collaborator checked a task on their device)
-      if (window.fbLoadAll) {
-        window.fbLoadAll().then(cloudData => {
-          if (!cloudData) return;
-          let changed = false;
-  
-          // Task-critical keys: use Firebase only if BOTH conditions are true:
-          // 1. Firebase has a newer timestamp than this device's last upload (_fbts_)
-          // 2. This device has previously synced (localTs > 0)
-          // If localTs === 0 (never synced via new system) AND local data exists,
-          // the local data is the source of truth — upload it to Firebase instead.
-          const TASK_KEYS = {
-            'gc-events':   v => { events   = v.map(e => ({...e, tipo: e.tipo||'tarefa'})); },
-            'gc-livros':   v => { livros   = v; },
-            'gc-projetos': v => { projetos = v; },
-            'gc-recurring-tasks': v => { recurringTasks = v || []; },
-          };
-          const keysToUpload = []; // local data that needs to be pushed to Firebase
-          Object.entries(TASK_KEYS).forEach(([key, setter]) => {
-            const entry = cloudData[key];
-            const cloudTs = (entry && entry.ts) || 0;
-            const localTs = parseInt(localStorage.getItem('_fbts_' + key) || '0');
-            const hasLocal = !!localStorage.getItem(key);
-  
-        if (localTs === 0 && hasLocal) {
-    // Dados locais sem histórico de sincronização podem estar desatualizados.
-    // Se já há dados na nuvem, ela é a fonte segura.
-    if (entry && entry.value) {
-      setter(entry.value);
-      localStorage.setItem(key, JSON.stringify(entry.value));
-      localStorage.setItem('_fbts_' + key, cloudTs.toString());
-      changed = true;
-    } else {
-      // Só envia o local quando ainda não existir nada na nuvem.
-      keysToUpload.push(key);
-    }
-    return;
-  }
-            if (!entry || !entry.value) return;
-            if (cloudTs > localTs) {
-              setter(entry.value);
-              localStorage.setItem(key, JSON.stringify(entry.value));
-              localStorage.setItem('_fbts_' + key, cloudTs.toString());
-              changed = true;
-            } else if (!hasLocal) {
-              setter(entry.value);
-              localStorage.setItem(key, JSON.stringify(entry.value));
-              changed = true;
-            }
-          });
-          // Upload local-only data to Firebase to establish the correct state
-          if (keysToUpload.length > 0 && window.fbSave) {
-            keysToUpload.forEach(key => {
-              try {
-                const localVal = JSON.parse(localStorage.getItem(key));
-                if (localVal) window.fbSave(key, localVal);
-              } catch(e) {}
-            });
-          }
-  
-          // Fixed-check keys: sync if Firebase is newer
-          ['gisella','milena','luiggi'].forEach(c => {
-            const key = 'gc-fixed-checks-' + c;
-            const entry = cloudData[key];
-            if (!entry || !entry.value) return;
-            const cloudTs = entry.ts || 0;
-            const localTs = parseInt(localStorage.getItem('_fbts_' + key) || '0');
-            if (cloudTs > localTs || !localStorage.getItem(key)) {
-              localStorage.setItem(key, JSON.stringify(entry.value));
-              if (cloudTs) localStorage.setItem('_fbts_' + key, cloudTs.toString());
-              changed = true;
-            }
-          });
-  
-          // Other keys: fill in only if missing locally
-          ['gc-conteudos','gc-mentees','gc-mentees-marco0','gc-kanban','gc-steira',
-           'gc-colab-ordem','gc-links','gc-links-empresa','gc-recurring-tasks'].forEach(key => {
-            if (!localStorage.getItem(key) && cloudData[key]?.value) {
-              localStorage.setItem(key, JSON.stringify(cloudData[key].value));
-              changed = true;
-            }
-          });
-  
-          if (changed) {
-            conteudos     = load('gc-conteudos', []);
-            recurringTasks = load('gc-recurring-tasks', []);
-            mentees       = load('gc-mentees', MENTEES_DEFAULT);
-            menteesMarco0 = load('gc-mentees-marco0', []);
-            renderLivros(); renderMenteeList(); renderConteudos();
-            buildTarefas(); buildColabTarefas(); renderProjetos(); buildPrioridades();
-            ['gisella','milena','luiggi'].forEach(c => renderFixedTasks(c));
-          }
-        }).catch(() => {}); // silent fail — we already have local data
-      }
-    } else {
-      // No local data: must load from Firebase (first time or cleared storage)
-      if (window.fbLoadAll) {
-        window.fbLoadAll()
-          .then(cloudData => {
-            if (ov) ov.remove();
-            initApp(cloudData);
-          })
-          .catch(err => {
-            console.warn('Firebase falhou, usando localStorage:', err);
-            if (ov) ov.remove();
-            initApp(null);
-          });
-      } else {
-        setTimeout(startWithFirebase, 100);
-      }
-    }
-  }
-  
-  // Timeout de segurança: 4s — se Firebase não responder, usa local
-  setTimeout(() => {
-    const ov = document.getElementById('loading-overlay');
-    if (ov) { ov.remove(); initApp(null); }
-  }, 4000);
-  
-  
-  /* ── LOGIN ── */
-  const LOGIN_USERS = {
-    gisella: { name: 'Gisella', color: 'var(--gisella)', bg: 'var(--gisella-bg)', initial: 'G' },
-    milena:  { name: 'Milena',  color: 'var(--leia)',    bg: 'var(--leia-bg)',    initial: 'M' },
-    luiggi:  { name: 'Luiggi',  color: 'var(--editora)', bg: 'var(--editora-bg)', initial: 'L' },
-  };
-  // Permissões por usuário — 'all' = acesso total
-  // No futuro, substituir por array de pageIds permitidos
-  const LOGIN_PERMS = {
-    gisella: 'all',
-    milena:  'all',
-    luiggi:  'all',
-  };
-  async function doLogin() {
-    const name = (document.getElementById('login-name').value || '').trim();
-    const pass = document.getElementById('login-pass').value;
-    const errEl = document.getElementById('login-error');
-    if (!name) { errEl.textContent = 'Digite seu nome.'; document.getElementById('login-name').focus(); return; }
-    if (!pass) { errEl.textContent = 'Digite sua senha.'; document.getElementById('login-pass').focus(); return; }
-    // Mapear nome para usuário conhecido (case insensitive)
-    const nameLower = name.toLowerCase();
-    const matchedUser = Object.keys(LOGIN_USERS).find(u => u === nameLower || LOGIN_USERS[u].name.toLowerCase() === nameLower) || nameLower;
-    try {
-      errEl.textContent = 'Entrando…';
-      const response = await fetch(CHECKLIST_SYNC_URL, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({operation:'dashboard_login',username:matchedUser,password:pass}),
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok || !result.token) throw new Error(result.error || 'Não foi possível validar o acesso.');
-      sessionStorage.setItem('gc-dashboard-session-token', result.token);
     } catch (error) {
-      errEl.textContent = error.message || 'Não foi possível entrar agora.';
-      return;
+        console.warn("Cache local de participantes inválido:", error);
     }
-    const today = new Date().toDateString();
-    localStorage.setItem('gc-session-user', matchedUser);
-    localStorage.setItem('gc-session-name', name);
-    localStorage.setItem('gc-session-date', today);
-    errEl.textContent = '';
-    showApp(matchedUser, name);
-  }
-  
-  function checkSession() {
-    const savedUser = localStorage.getItem('gc-session-user');
-    const savedDate = localStorage.getItem('gc-session-date');
-    const today = new Date().toDateString();
-    if (savedUser && savedDate === today && LOGIN_USERS[savedUser] && sessionStorage.getItem('gc-dashboard-session-token')) {
-      showApp(savedUser, localStorage.getItem('gc-session-name') || savedUser);
+}
+
+function saveCollaborationIdentityCache() {
+    const key = getCollaborationIdentityCacheKey();
+    if (!key) return;
+    const emailKeys = new Set([...collaborationIdentityByEmail.keys(), ...collaborationAvatarByEmail.keys()]);
+    const userIdKeys = new Set([...collaborationIdentityByUserId.keys(), ...collaborationAvatarByUserId.keys()]);
+    const byEmail = {};
+    const byUserId = {};
+    emailKeys.forEach(email => {
+        byEmail[email] = {
+            username: collaborationIdentityByEmail.get(email) || "",
+            avatar: collaborationAvatarByEmail.get(email) || ""
+        };
+    });
+    userIdKeys.forEach(userId => {
+        byUserId[userId] = {
+            username: collaborationIdentityByUserId.get(userId) || "",
+            avatar: collaborationAvatarByUserId.get(userId) || ""
+        };
+    });
+    localPrefs.setItem(key, JSON.stringify({ byEmail, byUserId, updatedAt: Date.now() }));
+}
+function getCurrentReminderTime() {
+    const now = new Date();
+    return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+}
+
+function normalizeTaskReminders(value) {
+    const context = value && !Array.isArray(value) ? parseTaskContextValue(value.context || value) : {};
+    const source = Array.isArray(value) ? value : (Array.isArray(context.reminders) ? context.reminders : []);
+    const reminders = source.map(item => ({
+        time: String(item?.time || item?.reminder_time || "").slice(0, 5),
+        offset_days: [0, 1, 7].includes(Number(item?.offset_days ?? item?.offsetDays)) ? Number(item.offset_days ?? item.offsetDays) : 0,
+    })).filter(item => /^([01]\d|2[0-3]):[0-5]\d$/.test(item.time));
+    if (!reminders.length && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(context.reminder_time || "").slice(0, 5))) {
+        reminders.push({ time: String(context.reminder_time).slice(0, 5), offset_days: [1, 7].includes(Number(context.reminder_offset_days)) ? Number(context.reminder_offset_days) : 0 });
+    }
+    return [...new Map(reminders.map(item => [`${item.offset_days}:${item.time}`, item])).values()]
+        .sort((a, b) => b.offset_days - a.offset_days || a.time.localeCompare(b.time));
+}
+
+function reminderOffsetLabel(offsetDays) {
+    return Number(offsetDays) === 7 ? "7 dias antes" : Number(offsetDays) === 1 ? "1 dia antes" : "No mesmo dia";
+}
+
+function updateTaskReminderSummary(mode, enabled, reminders) {
+    const element = document.getElementById(mode === "edit" ? "edit-task-reminder-summary" : "task-reminder-summary");
+    if (!element) return;
+    const list = normalizeTaskReminders(reminders);
+    element.textContent = enabled && list.length
+        ? (list.length === 1 ? `${reminderOffsetLabel(list[0].offset_days)} às ${list[0].time}` : `${list.length} lembretes configurados`)
+        : "Lembrar sobre esta tarefa";
+    element.classList.toggle("configured", enabled);
+}
+
+let addTaskReminders = [];
+let editTaskReminders = [];
+
+function chooseTaskReminders(currentReminders = []) {
+    return new Promise(resolve => {
+        const layer = document.createElement("div");
+        layer.className = "reminder-picker-layer";
+        const presets = [{ time: "08:00", label: "Início da manhã", icon: "sunrise" }, { time: "12:00", label: "Hora do almoço", icon: "sun" }, { time: "18:00", label: "Fim da tarde", icon: "sunset" }, { time: "21:00", label: "À noite", icon: "moon" }];
+        layer.innerHTML = `<div class="reminder-picker-backdrop"></div><div class="reminder-picker-card" role="dialog" aria-modal="true"><div class="reminder-picker-icon"><i data-lucide="alarm-clock"></i></div><h3>Quando deseja ser lembrado?</h3><p>Adicione uma ou mais notificações para esta tarefa.</p><div class="reminder-configured-list"></div><div class="reminder-day-choice"><button type="button" data-offset="0" class="selected">No mesmo dia</button><button type="button" data-offset="1">1 dia antes</button><button type="button" data-offset="7">7 dias antes</button></div><div class="reminder-preset-grid">${presets.map(item => `<button type="button" data-time="${item.time}" class="${item.time === "08:00" ? "selected" : ""}"><i data-lucide="${item.icon}"></i><strong>${item.time}</strong><span>${item.label}</span></button>`).join("")}</div><label class="reminder-custom-label">Outro horário<input class="reminder-custom-time" type="time" value="08:00"></label><button type="button" class="btn reminder-add"><i data-lucide="plus"></i>Adicionar notificação</button><div class="reminder-picker-actions"><button type="button" class="btn reminder-cancel">Cancelar</button><button type="button" class="btn btn-primary reminder-confirm">Concluir</button></div></div>`;
+        document.body.appendChild(layer);
+        if (window.lucide) window.lucide.createIcons();
+        let reminders = normalizeTaskReminders(currentReminders);
+        let selectedTime = "08:00";
+        let selectedOffsetDays = 0;
+        const customInput = layer.querySelector(".reminder-custom-time");
+        const list = layer.querySelector(".reminder-configured-list");
+        const renderList = () => {
+            list.innerHTML = reminders.length ? reminders.map((item, index) => `<div><span><strong>${reminderOffsetLabel(item.offset_days)}</strong><small>às ${item.time}</small></span><button type="button" data-remove-reminder="${index}" aria-label="Remover lembrete"><i data-lucide="x"></i></button></div>`).join("") : `<small class="reminder-list-empty">Nenhuma notificação adicionada</small>`;
+            list.querySelectorAll("[data-remove-reminder]").forEach(button => button.addEventListener("click", () => { reminders.splice(Number(button.dataset.removeReminder), 1); renderList(); }));
+            if (window.lucide) window.lucide.createIcons();
+        };
+        renderList();
+        layer.querySelectorAll("[data-time]").forEach(button => button.addEventListener("click", () => {
+            selectedTime = button.dataset.time;
+            customInput.value = selectedTime;
+            layer.querySelectorAll("[data-time]").forEach(item => item.classList.toggle("selected", item === button));
+        }));
+        customInput.addEventListener("input", () => { selectedTime = customInput.value; layer.querySelectorAll("[data-time]").forEach(item => item.classList.toggle("selected", item.dataset.time === selectedTime)); });
+        layer.querySelectorAll("[data-offset]").forEach(button => button.addEventListener("click", () => {
+            selectedOffsetDays = Number(button.dataset.offset);
+            layer.querySelectorAll("[data-offset]").forEach(item => item.classList.toggle("selected", item === button));
+        }));
+        const finish = value => { layer.classList.remove("visible"); setTimeout(() => layer.remove(), 240); resolve(value); };
+        layer.querySelector(".reminder-cancel").addEventListener("click", () => finish(null));
+        layer.querySelector(".reminder-picker-backdrop").addEventListener("click", () => finish(null));
+        layer.querySelector(".reminder-add").addEventListener("click", () => {
+            const reminder = { time: selectedTime || "08:00", offset_days: selectedOffsetDays };
+            reminders = normalizeTaskReminders([...reminders, reminder]);
+            renderList();
+        });
+        layer.querySelector(".reminder-confirm").addEventListener("click", () => finish(reminders));
+        requestAnimationFrame(() => layer.classList.add("visible"));
+    });
+}
+let isAuthModeLogin = true;
+let localDataVersion = 0; // Previne race conditions de sync
+let dataLoadRequestVersion = 0; // Impede respostas antigas de outra data de sobrescreverem a tela
+let pendingCompletionAnimationTaskId = null;
+let renderCompletionAnimationTaskId = null;
+
+function beginOptimisticMutation() {
+    localDataVersion += 1;
+    // Invalida imediatamente qualquer leitura iniciada antes da ação do usuário.
+    // Assim uma resposta antiga nunca repinta a tarefa que acabou de mudar.
+    dataLoadRequestVersion += 1;
+}
+
+function requireOnlineTaskMutation(actionLabel = "alterar tarefas") {
+    if (navigator.onLine && supabaseClient && currentUser) return true;
+    showAppNotice(`Conecte-se à internet para ${actionLabel}. As tarefas continuam disponíveis apenas para consulta offline.`, "warning");
+    return false;
+}
+
+function canQueueCompletionOnThisDevice() {
+    return Boolean(supabaseClient && (currentUser?.id || localPrefs.getItem("checklist_last_user_id")));
+}
+
+async function recoverSessionForPendingCompletion() {
+    if (currentUser) return true;
+    if (!supabaseClient || !navigator.onLine) return false;
+    if (pendingCompletionSessionRecovery) return pendingCompletionSessionRecovery;
+    pendingCompletionSessionRecovery = (async () => {
+        try {
+            let { data, error } = await supabaseClient.auth.getSession();
+            if (error) throw error;
+            if (!data?.session) {
+                const refreshed = await supabaseClient.auth.refreshSession();
+                if (refreshed.error) throw refreshed.error;
+                data = refreshed.data;
+            }
+            if (!data?.session?.user) return false;
+            currentUser = data.session.user;
+            localPrefs.setItem("checklist_last_user_id", currentUser.id);
+            localPrefs.setItem("checklist_last_user_email", currentUser.email || "");
+            cloudSyncRetryCount = 0;
+            scheduleCloudSync("sessão-retomada-após-check", 0);
+            return true;
+        } catch (error) {
+            console.warn("A sessão ainda não voltou; o check continuará pendente:", error?.message || error);
+            return false;
+        } finally {
+            pendingCompletionSessionRecovery = null;
+        }
+    })();
+    return pendingCompletionSessionRecovery;
+}
+
+async function runConfirmedTaskMutation(operation, actionLabel, timeoutMs = 15000) {
+    setSyncStatus("syncing", "Salvando…", `${actionLabel}; aguardando confirmação do servidor`);
+    let timeoutId;
+    try {
+        const { data: sessionData, error: sessionError } = await supabaseClient.auth.getSession();
+        if (sessionError) throw sessionError;
+        let activeSession = sessionData?.session || null;
+        if (!sessionData?.session) {
+            const { data: refreshed, error: refreshError } = await supabaseClient.auth.refreshSession();
+            if (refreshError || !refreshed?.session) throw refreshError || new Error("Sua sessão expirou. Entre novamente no Checklist.");
+            currentUser = refreshed.session.user;
+            activeSession = refreshed.session;
+        }
+        const pendingOperation = typeof operation === "function" ? operation(activeSession) : operation;
+        const result = await Promise.race([
+            Promise.resolve(pendingOperation),
+            new Promise((_, reject) => {
+                timeoutId = setTimeout(() => reject(new Error("O servidor demorou para responder. Tente novamente.")), timeoutMs);
+            }),
+        ]);
+        if (result?.error) throw result.error;
+        cloudSyncLastSuccessAt = Date.now();
+        cloudSyncLastError = "";
+        setSyncStatus("synced", "Sincronizado", `${actionLabel} confirmada pelo servidor`);
+        return result;
+    } catch (error) {
+        const message = error?.message || "Não foi possível confirmar a alteração.";
+        cloudSyncLastError = message;
+        setSyncStatus("error", "Não foi salvo", message);
+        showAppNotice(`${actionLabel} não foi salva: ${message}`, "error");
+        throw error;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+async function writeCompletionDirectly(session, taskId, date, completed) {
+    if (!session?.access_token) return { error: new Error("Sessão do Checklist indisponível.") };
+    const filter = `task_id=eq.${encodeURIComponent(taskId)}&date=eq.${encodeURIComponent(date)}`;
+    const url = completed
+        ? `${SUPABASE_URL}/rest/v1/completions?on_conflict=task_id,date`
+        : `${SUPABASE_URL}/rest/v1/completions?${filter}`;
+    const response = await fetch(url, {
+        method: completed ? "POST" : "DELETE",
+        headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${session.access_token}`,
+            "Content-Type": "application/json",
+            Prefer: completed ? "resolution=merge-duplicates,return=minimal" : "return=minimal",
+        },
+        body: completed ? JSON.stringify({ task_id: taskId, date, completed: true }) : undefined,
+        cache: "no-store",
+    });
+    if (response.ok) return { error: null };
+    let detail = "";
+    try {
+        const payload = await response.json();
+        detail = payload?.message || payload?.hint || payload?.details || "";
+    } catch (_) {}
+    return { error: new Error(detail || `Supabase respondeu HTTP ${response.status}.`) };
+}
+
+async function writeDashboardCompletionDirectly(session, taskId, date, completed) {
+    if (!session?.access_token) return { error: new Error("Sessão do Checklist indisponível.") };
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 22000);
+    try {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/sync-cassol-dashboard`, {
+            method: "POST",
+            headers: {
+                apikey: SUPABASE_KEY,
+                Authorization: `Bearer ${session.access_token}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ task_id: String(taskId), operation: "completion", date, completed }),
+            cache: "no-store",
+            signal: controller.signal,
+        });
+        let payload = {};
+        try { payload = await response.json(); } catch (_) {}
+        if (response.ok && !payload?.error) return { error: null, data: payload };
+        return { error: new Error(payload?.error || `Integração respondeu HTTP ${response.status}.`) };
+    } catch (error) {
+        if (error?.name === "AbortError") return { error: new Error("A integração com o Dashboard demorou para responder.") };
+        return { error };
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+async function deleteDashboardTaskDirectly(session, taskId) {
+    if (!session?.access_token) return { error: new Error("Sessão do Checklist indisponível.") };
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 22000);
+    try {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/sync-cassol-dashboard`, {
+            method: "POST",
+            headers: {
+                apikey: SUPABASE_KEY,
+                Authorization: `Bearer ${session.access_token}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ task_id: String(taskId), operation: "delete" }),
+            cache: "no-store",
+            signal: controller.signal,
+        });
+        let payload = {};
+        try { payload = await response.json(); } catch (_) {}
+        if (response.ok && !payload?.error) return { error: null, data: payload };
+        return { error: new Error(payload?.error || `Integração respondeu HTTP ${response.status}.`) };
+    } catch (error) {
+        if (error?.name === "AbortError") return { error: new Error("A exclusão no Dashboard demorou para responder.") };
+        return { error };
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+async function deleteChecklistTaskDirectly(session, taskId) {
+    if (!session?.access_token) return { error: new Error("Sessão do Checklist indisponível.") };
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/tasks?id=eq.${encodeURIComponent(taskId)}`, {
+        method: "PATCH",
+        headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${session.access_token}`,
+            "Content-Type": "application/json",
+            Prefer: "return=representation",
+        },
+        body: JSON.stringify({ is_active: false }),
+        cache: "no-store",
+    });
+    if (response.ok) {
+        const updatedRows = await response.json().catch(() => []);
+        if (Array.isArray(updatedRows) && updatedRows.length > 0) return { error: null };
+        return { error: new Error("O Supabase não autorizou a exclusão desta tarefa.") };
+    }
+    let detail = "";
+    try {
+        const payload = await response.json();
+        detail = payload?.message || payload?.hint || payload?.details || "";
+    } catch (_) {}
+    return { error: new Error(detail || `Supabase respondeu HTTP ${response.status}.`) };
+}
+
+function migrateToOnlineOnlyTaskMutations() {
+    const dashboardCompletionMigrationKey = "dashboard_completion_direct_v10_84";
+    if (localStorage.getItem(dashboardCompletionMigrationKey) !== "done") {
+        const dashboardQueue = JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {};
+        Object.keys(dashboardQueue).forEach(taskId => {
+            if (dashboardQueue[taskId]?.operation === "completion") delete dashboardQueue[taskId];
+        });
+        localStorage.setItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY, JSON.stringify(dashboardQueue));
+        localStorage.setItem(dashboardCompletionMigrationKey, "done");
+    }
+    const migrationKey = "online_only_task_mutations_v10_80";
+    if (localStorage.getItem(migrationKey) === "done") return;
+
+    // A partir desta versão, alterações de tarefa nunca são recuperadas dessas
+    // filas. Removê-las evita que uma tentativa antiga concorra com a gravação
+    // online atual e mantenha o indicador preso em erro/salvamento.
+    localStorage.setItem("offline_completions_queue", "{}");
+    localStorage.setItem("offline_task_updates_queue", "{}");
+    const cachedTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    localStorage.setItem("offline_tasks", JSON.stringify(
+        cachedTasks.filter(task => !isTemporaryId(task?.id))
+    ));
+    localStorage.setItem(migrationKey, "done");
+    if (typeof dbCache === "object" && dbCache) {
+        dbCache.offline_completions_queue = {};
+        dbCache.offline_task_updates_queue = {};
+        dbCache.offline_tasks = (dbCache.offline_tasks || []).filter(task => !isTemporaryId(task?.id));
+    }
+}
+let scrollPosition = 0;
+let learningCloudState = "idle";
+let reportsCloudState = "idle";
+let currentReportCorrectionTasks = {};
+let pendingAutocompleteDetailsTask = null;
+let collaborationRealtimeChannel = null;
+let pendingInitialSessionTimer = null;
+let categoryOnboardingTimer = null;
+let categoryOnboardingSlide = 0;
+let lastStartupInteractionAt = 0;
+let isSwipeRevealInteracting = false;
+let pendingSwipeSafeRender = null;
+let activePushFocusTaskId = null;
+let activePushFocusUntil = 0;
+let pendingPushFocusRender = null;
+
+function registerStartupInteraction() {
+    lastStartupInteractionAt = Date.now();
+}
+
+async function waitForStartupInteractionToSettle() {
+    if (document.body.dataset.hasChecklistCache !== "true") return;
+    const observationEndsAt = Date.now() + 850;
+    while (Date.now() < observationEndsAt || Date.now() - lastStartupInteractionAt < 450) {
+        await new Promise(resolve => setTimeout(resolve, 90));
+    }
+}
+
+function getNoticeKind(message) {
+    const text = String(message || "").toLowerCase();
+    if (/erro|não foi possível|indisponível|bloquead|inválid/.test(text)) return "error";
+    if (/sucesso|concluíd|copiado|aceito|enviado|saiu|removido|criada/.test(text)) return "success";
+    if (/atenção|selecione|cadastre|adicione|aguarde/.test(text)) return "warning";
+    return "info";
+}
+
+function showAppNotice(message, kind = getNoticeKind(message)) {
+    let stack = document.getElementById("app-notice-stack");
+    if (!stack) {
+        stack = document.createElement("div");
+        stack.id = "app-notice-stack";
+        stack.className = "app-notice-stack";
+        document.body.appendChild(stack);
+    }
+    const icons = { success: "circle-check", error: "circle-x", warning: "triangle-alert", info: "info" };
+    const notice = document.createElement("div");
+    notice.className = `app-notice ${kind}`;
+    notice.setAttribute("role", kind === "error" ? "alert" : "status");
+    notice.innerHTML = `<span class="app-notice-icon"><i data-lucide="${icons[kind] || icons.info}"></i></span><div><strong>${kind === "success" ? "Tudo certo" : kind === "error" ? "Algo deu errado" : kind === "warning" ? "Atenção" : "Checklist"}</strong><p>${escapeHTML(String(message))}</p></div><button type="button" aria-label="Fechar"><i data-lucide="x"></i></button>`;
+    stack.appendChild(notice);
+    if (window.lucide) window.lucide.createIcons();
+    const close = () => { notice.classList.remove("visible"); setTimeout(() => notice.remove(), 260); };
+    notice.querySelector("button").addEventListener("click", close);
+    requestAnimationFrame(() => notice.classList.add("visible"));
+    setTimeout(close, kind === "error" ? 6000 : 4200);
+}
+
+function showCacheDiagnostic(message) {
+    document.getElementById("cache-diagnostic-notice")?.remove();
+    let stack = document.getElementById("app-notice-stack");
+    if (!stack) {
+        stack = document.createElement("div");
+        stack.id = "app-notice-stack";
+        stack.className = "app-notice-stack";
+        document.body.appendChild(stack);
+    }
+    const notice = document.createElement("div");
+    notice.id = "cache-diagnostic-notice";
+    notice.className = "app-notice error cache-diagnostic-notice visible";
+    notice.setAttribute("role", "alert");
+    notice.innerHTML = `<span class="app-notice-icon"><i data-lucide="database-zap"></i></span><div><strong>Diagnóstico do cache</strong><p>${escapeHTML(message)}</p><small>Faça uma captura deste aviso e envie para análise.</small></div><button type="button" aria-label="Fechar"><i data-lucide="x"></i></button>`;
+    stack.appendChild(notice);
+    notice.querySelector("button").addEventListener("click", () => notice.remove());
+    if (window.lucide) window.lucide.createIcons();
+}
+
+async function showAppConfirm(message, options = {}) {
+    return new Promise(resolve => {
+        const layer = document.createElement("div");
+        layer.className = "app-confirm-layer";
+        layer.innerHTML = `<div class="app-confirm-backdrop"></div><div class="app-confirm-card" role="alertdialog" aria-modal="true"><span class="app-confirm-icon"><i data-lucide="${options.danger ? "trash-2" : "circle-help"}"></i></span><h3>${escapeHTML(options.title || "Confirmar ação")}</h3><p>${escapeHTML(String(message))}</p><div class="app-confirm-actions"><button class="btn app-confirm-cancel">${escapeHTML(options.cancelText || "Cancelar")}</button><button class="btn ${options.danger ? "app-confirm-danger" : "btn-primary"} app-confirm-ok">${escapeHTML(options.confirmText || "Confirmar")}</button></div></div>`;
+        document.body.appendChild(layer);
+        if (window.lucide) window.lucide.createIcons();
+        const finish = value => { layer.classList.remove("visible"); setTimeout(() => layer.remove(), 260); resolve(value); };
+        layer.querySelector(".app-confirm-cancel").addEventListener("click", () => finish(false));
+        layer.querySelector(".app-confirm-backdrop").addEventListener("click", () => finish(false));
+        layer.querySelector(".app-confirm-ok").addEventListener("click", () => finish(true));
+        requestAnimationFrame(() => layer.classList.add("visible"));
+    });
+}
+
+// Mantém chamadas informativas antigas dentro da identidade visual do app.
+window.alert = message => showAppNotice(message);
+
+// Supabase Client instance
+let supabaseClient = null;
+
+// DOM Elements
+const tasksListEl = document.getElementById("tasks-list");
+const emptyStateEl = document.getElementById("empty-state");
+const btnOnboardingCreateCategory = document.getElementById("btn-onboarding-create-category");
+const taskCreationOnboarding = document.getElementById("task-creation-onboarding");
+const progressPercentageEl = document.getElementById("progress-percentage");
+const progressTasksCountEl = document.getElementById("progress-tasks-count");
+const progressCircle = document.getElementById("progress-circle");
+const progressRingWrapper = document.querySelector(".progress-ring-wrapper");
+const progressBarFill = document.getElementById("progress-bar-fill");
+const currentDateEl = document.getElementById("current-date");
+const btnOpenCalendar = document.getElementById("btn-open-calendar");
+const btnPrevDay = document.getElementById("btn-prev-day");
+const btnNextDay = document.getElementById("btn-next-day");
+const orgTagEl = document.getElementById("org-tag");
+const appContainer = document.querySelector(".app-container");
+const appSessionLoader = document.getElementById("app-session-loader");
+const syncStatusEl = document.getElementById("sync-status");
+const syncStatusLabelEl = document.getElementById("sync-status-label");
+
+let syncStatusRefreshTimer = null;
+
+function setSyncStatus(state, label, title = label) {
+    if (!syncStatusEl || !syncStatusLabelEl) return;
+    syncStatusEl.dataset.state = state;
+    syncStatusLabelEl.textContent = label;
+    syncStatusEl.title = title;
+}
+
+function hasPendingSyncData() {
+    const pendingCategories = (dbCache.offline_categories || []).some(c => isTemporaryId(c.id) && c.is_active !== false);
+    const pendingTasks = (dbCache.offline_tasks || []).some(t => isTemporaryId(t.id) && t.is_active !== false);
+    const pendingCompletions = Object.keys(dbCache.offline_completions_queue || {}).length > 0;
+    const pendingUpdates = Object.keys(dbCache.offline_task_updates_queue || {}).length > 0;
+    const pendingCategoryUpdates = Object.keys(dbCache.offline_category_updates_queue || {}).length > 0;
+    const pendingInvites = (JSON.parse(localStorage.getItem("offline_collaboration_invites_queue")) || []).length > 0;
+    // A integração com o Dashboard é secundária e possui repetição própria.
+    // Ela não deve manter o salvamento principal preso na interface.
+    // A foto de treino é enviada em segundo plano. Ela não deve manter o
+    // Checklist inteiro como “pendente” depois que o check já foi confirmado.
+    return pendingCategories || pendingTasks || pendingCompletions || pendingUpdates || pendingCategoryUpdates || pendingInvites;
+}
+
+function refreshSyncStatusFromQueues() {
+    if (!syncStatusEl) return;
+    const hasPending = hasPendingSyncData();
+    const pendingCount = getPendingSyncCount();
+
+    if (!navigator.onLine) {
+        setSyncStatus("offline", hasPending ? `Offline — ${pendingCount} pendente${pendingCount === 1 ? "" : "s"}` : "Offline", hasPending ? "Sem internet; toque para tentar quando a conexão voltar" : "Sem conexão com a internet");
+    } else if (isSyncing) {
+        setSyncStatus("pending", "Salvo · sincronizando", pendingCount ? `${pendingCount} alteração(ões) sendo confirmada(s) na nuvem` : "Finalizando a confirmação na nuvem");
+    } else if (hasPending) {
+        setSyncStatus("pending", `${pendingCount} pendente${pendingCount === 1 ? "" : "s"}`, cloudSyncLastError ? `Última tentativa: ${cloudSyncLastError}. Toque para tentar novamente.` : "Toque para sincronizar agora");
     } else {
-      document.getElementById('login-screen').style.display = 'flex';
+        const lastSuccess = cloudSyncLastSuccessAt ? new Date(cloudSyncLastSuccessAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
+        setSyncStatus("synced", "Sincronizado", lastSuccess ? `Última confirmação às ${lastSuccess}` : "Todos os dados estão sincronizados");
     }
-  }
-  
-  function showApp(user, displayName) {
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app-shell').style.display = 'flex';
-    // Show bottom nav on mobile
-    const bn = document.getElementById('bottom-nav');
-    if (bn) bn.style.display = window.innerWidth <= 768 ? 'flex' : 'none';
-    window.addEventListener('resize', () => {
-      if (bn) bn.style.display = window.innerWidth <= 768 ? 'flex' : 'none';
-    });
-    // Show hamburger on mobile
-    if (window.innerWidth <= 768) {
-      const hb = document.getElementById('mobile-hamburger');
-      if (hb) hb.style.display = 'flex';
+}
+
+function scheduleSyncStatusRefresh(delay = 0) {
+    clearTimeout(syncStatusRefreshTimer);
+    syncStatusRefreshTimer = setTimeout(refreshSyncStatusFromQueues, delay);
+}
+
+let cloudSyncTimer = null;
+let cloudSyncRerunRequested = false;
+let cloudSyncRetryCount = 0;
+let cloudSyncLastError = "";
+let cloudSyncLastSuccessAt = 0;
+
+function getPendingSyncCount() {
+    const pendingCategories = (dbCache.offline_categories || []).filter(item => isTemporaryId(item.id) && item.is_active !== false).length;
+    const pendingTasks = (dbCache.offline_tasks || []).filter(item => isTemporaryId(item.id) && item.is_active !== false).length;
+    const pendingCompletions = Object.keys(dbCache.offline_completions_queue || {}).length;
+    const pendingUpdates = Object.keys(dbCache.offline_task_updates_queue || {}).length;
+    const pendingCategoryUpdates = Object.keys(dbCache.offline_category_updates_queue || {}).length;
+    const pendingInvites = (JSON.parse(localPrefs.getItem("offline_collaboration_invites_queue") || "[]") || []).length;
+    return pendingCategories + pendingTasks + pendingCompletions + pendingUpdates + pendingCategoryUpdates + pendingInvites;
+}
+
+let trainingPhotoUploadTimer = null;
+let trainingPhotoUploadInProgress = false;
+let trainingPhotoUploadRerunRequested = false;
+let trainingPhotoUploadRetryCount = 0;
+
+function hasPendingTrainingPhotoUploads() {
+    return Number(localPrefs.getItem("pending_training_photo_uploads") || 0) > 0;
+}
+
+function scheduleTrainingPhotoUpload(reason = "foto-de-treino", delay = 0) {
+    if (!supabaseClient || !currentUser || !navigator.onLine || !hasPendingTrainingPhotoUploads()) return;
+    if (trainingPhotoUploadInProgress) {
+        trainingPhotoUploadRerunRequested = true;
+        return;
     }
-    window.addEventListener('resize', () => {
-      const hb = document.getElementById('mobile-hamburger');
-      if (!hb) return;
-      hb.style.display = window.innerWidth <= 768 ? 'flex' : 'none';
-      if (window.innerWidth > 768) closeMobileNav();
+    clearTimeout(trainingPhotoUploadTimer);
+    trainingPhotoUploadTimer = setTimeout(async () => {
+        trainingPhotoUploadTimer = null;
+        if (!supabaseClient || !currentUser || !navigator.onLine || !hasPendingTrainingPhotoUploads()) return;
+        trainingPhotoUploadInProgress = true;
+        let retryDelay = 0;
+        try {
+            await syncPendingTrainingPhotoUploads();
+            trainingPhotoUploadRetryCount = 0;
+        } catch (error) {
+            trainingPhotoUploadRetryCount = Math.min(trainingPhotoUploadRetryCount + 1, 6);
+            retryDelay = Math.min(30_000, 1_200 * (2 ** (trainingPhotoUploadRetryCount - 1)));
+            console.warn(`[Treino] Foto ainda pendente (${reason}); nova tentativa em ${Math.round(retryDelay / 1000)}s.`, error?.message || error);
+        } finally {
+            trainingPhotoUploadInProgress = false;
+            if (trainingPhotoUploadRerunRequested) {
+                trainingPhotoUploadRerunRequested = false;
+                scheduleTrainingPhotoUpload("nova-foto-durante-envio", 80);
+            } else if (retryDelay && hasPendingTrainingPhotoUploads()) {
+                scheduleTrainingPhotoUpload("nova-tentativa", retryDelay);
+            }
+        }
+    }, Math.max(0, delay));
+}
+
+function scheduleCloudSync(reason = "alteração-local", delay = 350) {
+    if (!supabaseClient || !currentUser || !navigator.onLine) return;
+    if (isSyncing) {
+        cloudSyncRerunRequested = true;
+        return;
+    }
+    clearTimeout(cloudSyncTimer);
+    cloudSyncTimer = setTimeout(() => {
+        cloudSyncTimer = null;
+        if (!hasPendingSyncData()) {
+            refreshSyncStatusFromQueues();
+            return;
+        }
+        syncOfflineDataToCloud(reason);
+    }, Math.max(0, delay));
+}
+
+function scheduleCloudSyncRetry() {
+    if (!navigator.onLine || !hasPendingSyncData()) return;
+    cloudSyncRetryCount = Math.min(cloudSyncRetryCount + 1, 6);
+    const delay = Math.min(30000, 1200 * (2 ** (cloudSyncRetryCount - 1)));
+    scheduleCloudSync("tentativa-automática", delay);
+}
+
+function clearQueuedEntryIfCurrent(queueName, entryKey, expectedValue) {
+    const queue = JSON.parse(localStorage.getItem(queueName)) || {};
+    if (!Object.prototype.hasOwnProperty.call(queue, entryKey)) return true;
+    if (JSON.stringify(queue[entryKey]) !== JSON.stringify(expectedValue)) return false;
+    delete queue[entryKey];
+    localStorage.setItem(queueName, JSON.stringify(queue));
+    return true;
+}
+
+function enqueueTaskCloudUpdate(taskId, updates, reason = "atualização-de-tarefa") {
+    if (!taskId || isTemporaryId(taskId) || !updates || !Object.keys(updates).length) return;
+    const id = String(taskId);
+    const queue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+    queue[id] = { ...(queue[id] || {}), ...updates };
+    localStorage.setItem("offline_task_updates_queue", JSON.stringify(queue));
+    scheduleCloudSync(reason, 0);
+}
+
+function enqueueCategoryCloudUpdate(categoryId, updates, reason = "atualização-de-categoria") {
+    if (!categoryId || isTemporaryId(categoryId) || !updates || !Object.keys(updates).length) return;
+    const id = String(categoryId);
+    const queue = JSON.parse(localStorage.getItem("offline_category_updates_queue")) || {};
+    const previous = queue[id] || {};
+    queue[id] = { ...previous, ...updates };
+    // Em várias renomeações offline, a nuvem ainda conhece o primeiro nome.
+    if (previous.previous_name) queue[id].previous_name = previous.previous_name;
+    localStorage.setItem("offline_category_updates_queue", JSON.stringify(queue));
+    scheduleCloudSync(reason, 80);
+}
+
+// Modals
+const modalAddTask = document.getElementById("modal-add-task");
+const modalManageTasks = document.getElementById("modal-manage-tasks");
+const modalCalendar = document.getElementById("modal-calendar");
+const modalSmartReport = document.getElementById("modal-smart-report");
+const modalConfirmDelete = document.getElementById("modal-confirm-delete");
+const modalGesturesTutorial = document.getElementById("modal-gestures-tutorial");
+const btnSmartReport = document.getElementById("btn-smart-report");
+const btnCloseSmartReportModal = document.getElementById("btn-close-smart-report-modal");
+const btnSaveSmartReport = document.getElementById("btn-save-smart-report");
+let activeSmartReportDays = 7;
+
+// Custom Delete Confirmation Elements
+const confirmDeleteTitle = document.getElementById("confirm-delete-title");
+const confirmDeleteBody = document.getElementById("confirm-delete-body");
+const confirmDeleteStandardActions = document.getElementById("confirm-delete-standard-actions");
+const confirmDeleteRecurringActions = document.getElementById("confirm-delete-recurring-actions");
+const btnConfirmDeleteCancel = document.getElementById("btn-confirm-delete-cancel");
+const btnConfirmDeleteOk = document.getElementById("btn-confirm-delete-ok");
+const btnConfirmDeleteRecurringToday = document.getElementById("btn-confirm-delete-recurring-today");
+const btnConfirmDeleteRecurringAll = document.getElementById("btn-confirm-delete-recurring-all");
+const btnConfirmDeleteRecurringCancel = document.getElementById("btn-confirm-delete-recurring-cancel");
+// Collaborators Modal Elements
+const modalCollaborators = document.getElementById("modal-collaborators");
+const btnCloseCollaboratorsModal = document.getElementById("btn-close-collaborators-modal");
+const btnAddCollab = document.getElementById("btn-add-collab");
+const inputCollabEmail = document.getElementById("input-collab-email");
+const collabCategoryId = document.getElementById("collab-category-id");
+const collaboratorsList = document.getElementById("collaborators-list");
+const collabModalSubtitle = document.getElementById("collab-modal-subtitle");
+let confirmDeleteCallback = null;
+let switchReportTab = null;
+let categoryShares = [];
+let pendingInvites = [];
+let sharedTaskNotifications = [];
+let notificationPreviewTimer = null;
+let lastNotificationPreviewKey = "";
+
+// Forms & Inputs
+const formAddTask = document.getElementById("form-add-task");
+const inputTaskTitle = document.getElementById("task-title");
+let suppressTaskAutocompleteSubmit = false;
+const selectTaskCategory = document.getElementById("task-category");
+const selectEditTaskCategory = document.getElementById("edit-task-category");
+const selectTaskRecurring = document.getElementById("task-recurring");
+const selectTaskAssignedTo = document.getElementById("task-assigned-to");
+const taskAssigneeGroup = document.getElementById("task-assignee-group");
+
+const modalEditTask = document.getElementById("modal-edit-task");
+const selectEditTaskAssignedTo = document.getElementById("edit-task-assigned-to");
+const editTaskAssigneeGroup = document.getElementById("edit-task-assignee-group");
+let deferredTaskEditorBackgroundRender = false;
+
+const inputOrgName = document.getElementById("input-org-name");
+const inputProfileAvatar = document.getElementById("input-profile-avatar");
+const settingsProfileAvatar = document.getElementById("settings-profile-avatar");
+const inputNewCategory = document.getElementById("input-new-category");
+
+// Action Buttons
+const btnNotifications = document.getElementById("btn-notifications");
+const modalNotifications = document.getElementById("modal-notifications");
+const btnCloseNotificationsModal = document.getElementById("btn-close-notifications-modal");
+const notificationsListContainer = document.getElementById("notifications-list-container");
+const btnClearNotifications = document.getElementById("btn-clear-notifications");
+const notificationsBadge = document.getElementById("notifications-badge");
+const collabInviteReadyLabel = document.getElementById("collab-invite-ready-label");
+const notificationsEnabledToggle = document.getElementById("notifications-enabled-toggle");
+const notificationsPermissionStatus = document.getElementById("notifications-permission-status");
+const btnRepairTestPush = document.getElementById("btn-repair-test-push");
+const siriShortcutStatus = document.getElementById("siri-shortcut-status");
+const siriShortcutCredentials = document.getElementById("siri-shortcut-credentials");
+const siriShortcutUrl = document.getElementById("siri-shortcut-url");
+const siriShortcutToken = document.getElementById("siri-shortcut-token");
+const btnGenerateSiriToken = document.getElementById("btn-generate-siri-token");
+const btnRevokeSiriToken = document.getElementById("btn-revoke-siri-token");
+const btnCopySiriUrl = document.getElementById("btn-copy-siri-url");
+const btnCopySiriToken = document.getElementById("btn-copy-siri-token");
+const modalCreateIdentifier = document.getElementById("modal-create-identifier");
+const formCreateIdentifier = document.getElementById("form-create-identifier");
+const inputUserIdentifier = document.getElementById("input-user-identifier");
+const identifierError = document.getElementById("identifier-error");
+const btnOpenManualChecklist = document.getElementById("btn-open-manual-checklist");
+const modalManualChecklist = document.getElementById("modal-manual-checklist");
+const btnCloseManualChecklistModal = document.getElementById("btn-close-manual-checklist-modal");
+const tabManualChecklist = document.getElementById("tab-manual-checklist");
+const tabManualNotepad = document.getElementById("tab-manual-notepad");
+const contentManualChecklist = document.getElementById("content-manual-checklist");
+const contentManualNotepad = document.getElementById("content-manual-notepad");
+const inputManualItem = document.getElementById("input-manual-item");
+const btnAddManualItem = document.getElementById("btn-add-manual-item");
+const manualItemsList = document.getElementById("manual-items-list");
+const btnClearCompletedManual = document.getElementById("btn-clear-completed-manual");
+const textareaManualNotes = document.getElementById("textarea-manual-notes");
+const btnToggleEdit = document.getElementById("btn-toggle-edit");
+const btnManageTasks = document.getElementById("btn-manage-tasks");
+const btnAddTaskModal = document.getElementById("btn-add-task-modal");
+const btnToggleSummary = document.getElementById("btn-toggle-summary");
+const btnShareReport = document.getElementById("btn-share-report");
+const btnCloseAddModal = document.getElementById("btn-close-add-modal");
+const btnCloseManageModal = document.getElementById("btn-close-manage-modal");
+const modalManageCategories = document.getElementById("modal-manage-categories");
+const btnOpenManageCategories = document.getElementById("btn-open-manage-categories");
+const btnCloseManageCategoriesModal = document.getElementById("btn-close-manage-categories-modal");
+const btnOpenGesturesTutorial = document.getElementById("btn-open-gestures-tutorial");
+const btnCloseGesturesTutorial = document.getElementById("btn-close-gestures-tutorial");
+
+const btnAddCategory = document.getElementById("btn-add-category");
+
+const btnCloseCalendar = document.getElementById("btn-close-calendar");
+const btnPrevMonth = document.getElementById("btn-prev-month");
+const btnNextMonth = document.getElementById("btn-next-month");
+const calendarMonthYear = document.getElementById("calendar-month-year");
+const calendarDaysGrid = document.getElementById("calendar-days-grid");
+const modalTrainingPhoto = document.getElementById("modal-training-photo");
+const inputTrainingPhoto = document.getElementById("input-training-photo");
+const modalTrainingReport = document.getElementById("modal-training-report");
+let pendingTrainingCompletionId = null;
+let pendingTrainingPastNightException = false;
+
+// ----------------------------------------------------
+// Initialization
+// ----------------------------------------------------
+document.addEventListener("DOMContentLoaded", () => {
+    document.addEventListener("pointerdown", registerStartupInteraction, { passive: true, capture: true });
+    document.addEventListener("touchstart", registerStartupInteraction, { passive: true, capture: true });
+    initApp();
+    setupEventListeners();
+    
+    // Register Service Worker for PWA compatibility on Android
+    if ('serviceWorker' in navigator) {
+        let reloadingForServiceWorkerUpdate = false;
+
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (reloadingForServiceWorkerUpdate) return;
+            // Não interrompe um destino aberto por push. A nova versão do
+            // worker já está ativa e pode ser usada sem recarregar esta tela.
+            if (modalTrainingReport?.classList.contains("active")) return;
+            // No Android, uma retomada do PWA pode coincidir com a troca do
+            // worker. Nunca recarrega enquanto um check ainda aguarda envio.
+            if (hasPendingSyncData() || pendingToggles.size > 0) return;
+            reloadingForServiceWorkerUpdate = true;
+            window.location.reload();
+        });
+
+        navigator.serviceWorker.addEventListener('message', event => {
+            if (event.data && event.data.type === 'OPEN_TRAINING_REPORT') {
+                openTrainingCalendarFromPush(event.data.taskId, event.data.trainingDate);
+            } else if (event.data && event.data.type === 'OPEN_DASHBOARD_TASK' && event.data.taskId) {
+                focusSharedTaskFromNotification({ task_id: event.data.taskId, dashboard_task: true });
+            } else if (event.data && event.data.type === 'OPEN_SHARED_TASK' && event.data.taskId) {
+                focusSharedTaskFromNotification({ task_id: event.data.taskId });
+            } else if (event.data && event.data.type === 'OPEN_TASK_REMINDER' && event.data.taskId) {
+                openTaskReminderAction(event.data.taskId);
+            } else if (event.data && event.data.type === 'OPEN_COLLABORATION_INVITE' && event.data.inviteId) {
+                promptCollaborationInviteNavigation(event.data.inviteId);
+            } else if (event.data && event.data.type === 'OPEN_NOTIFICATIONS') {
+                renderNotifications();
+                openModal(modalNotifications);
+                markCurrentInvitesAsSeen();
+            }
+        });
+
+        let serviceWorkerRegistration = null;
+        const activateWaitingWorker = registration => {
+            if (registration && registration.waiting) registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+        };
+        const checkPwaUpdate = () => {
+            if (!serviceWorkerRegistration || !navigator.onLine) return;
+            serviceWorkerRegistration.update()
+                .then(() => activateWaitingWorker(serviceWorkerRegistration))
+                .catch(error => console.warn('Verificação de atualização do PWA indisponível:', error.message));
+        };
+
+        // A versão na própria URL evita que Chrome/WebAPK reutilize uma
+        // validação antiga do sw.js ao retomar o PWA no Android.
+        navigator.serviceWorker.register(SERVICE_WORKER_URL, { scope: './', updateViaCache: 'none' })
+            .then(reg => {
+                serviceWorkerRegistration = reg;
+                console.log('Service Worker registrado com sucesso:', reg);
+                activateWaitingWorker(reg);
+                reg.addEventListener('updatefound', () => {
+                    const installing = reg.installing;
+                    if (!installing) return;
+                    installing.addEventListener('statechange', () => {
+                        if (installing.state === 'installed') activateWaitingWorker(reg);
+                    });
+                });
+                return reg.update();
+            })
+            .catch(err => console.error('Erro ao registrar Service Worker:', err));
+
+        window.addEventListener('pageshow', checkPwaUpdate);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') checkPwaUpdate();
+        });
+        window.addEventListener('online', checkPwaUpdate);
+    }
+});
+
+async function initApp() {
+    // Identidades precisam estar disponíveis antes da primeira pintura das
+    // tarefas para que avatares colaborativos não dependam de trocar de aba.
+    loadCollaborationIdentityCache();
+    const isKnownDevice = localPrefs.getItem("checklist_device_cache_ready") === "true";
+    const countStoredArray = key => {
+        try {
+            const value = JSON.parse(localPrefs.getItem(key) || "[]");
+            return Array.isArray(value) ? value.length : -1;
+        } catch (_) { return -2; }
+    };
+    const startupCacheState = {
+        primaryCategories: countStoredArray("offline_categories"),
+        primaryTasks: countStoredArray("offline_tasks"),
+        snapshotCategories: countStoredArray("checklist_snapshot_categories"),
+        snapshotTasks: countStoredArray("checklist_snapshot_tasks")
+    };
+    const initializePersistentStorage = async () => {
+        try {
+            await idb.init();
+            await idb.loadAllToCache();
+            const savedAvatars = await idb.get("priority_profile_avatars") || {};
+            Object.entries(savedAvatars).forEach(([url, dataUrl]) => {
+                if (url && dataUrl) persistentAvatarByUrl.set(url, dataUrl);
+            });
+            return { ok: true };
+        } catch (e) {
+            console.error("Falha ao inicializar IndexedDB:", e);
+            return { ok: false, error: e?.message || "erro desconhecido" };
+        }
+    };
+    const persistentStorageReady = initializePersistentStorage();
+    // Na primeira abertura ainda não há cópia síncrona; aguarda o banco local.
+    // Em aparelhos conhecidos, a interface usa o shadow cache imediatamente.
+    if (!isKnownDevice) await persistentStorageReady;
+
+    // Load theme
+    const storedTheme = localStorage.getItem("checklist_theme") || "default";
+    applyTheme(storedTheme);
+
+    // Set initial date to today
+    selectedDate = getLocalDateString(new Date());
+    updateDateDisplay();
+
+    // Load organization name
+    const storedOrgName = localStorage.getItem("checklist_org_name");
+    if (storedOrgName) {
+        orgTagEl.textContent = storedOrgName;
+        inputOrgName.value = storedOrgName;
+    } else {
+        inputOrgName.value = "Checklist Organizacional";
+        orgTagEl.textContent = "Checklist Organizacional";
+    }
+
+    // Com cache útil, abre o checklist imediatamente e revalida silenciosamente.
+    // Sem cache, mantém a tela curta até a primeira carga da conta terminar.
+    const cachedCategories = JSON.parse(localStorage.getItem("offline_categories")) || [];
+    const cachedTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    const hasUsefulCache = cachedCategories.some(category => category.is_active !== false)
+        || cachedTasks.some(task => task.is_active !== false);
+    const isWarmDevice = isKnownDevice;
+    document.body.dataset.hasChecklistCache = hasUsefulCache ? "true" : "false";
+    document.body.dataset.awaitingCloud = hasUsefulCache ? "false" : "true";
+    refreshSyncStatusFromQueues();
+    if (hasUsefulCache || isWarmDevice) {
+        loadDataOffline();
+        renderCategories();
+        renderChecklist();
+        updateProgress();
+        updateSmartReportButtonVisibility();
+        appContainer.style.display = "flex";
+        requestAnimationFrame(() => {
+            document.documentElement.classList.add("checklist-ui-ready");
+            if (appSessionLoader) appSessionLoader.classList.add("hidden");
+        });
+    } else {
+        // Sem cache, abre imediatamente a estrutura do aplicativo. As tarefas
+        // entram uma única vez quando a nuvem responder, sem tela intermediária.
+        appContainer.style.display = "flex";
+        document.documentElement.classList.add("checklist-ui-ready");
+    }
+
+    if (isKnownDevice && !hasUsefulCache) {
+        persistentStorageReady.then(async storageResult => {
+            const idbCategories = await idb.get("offline_categories").catch(() => null);
+            const idbTasks = await idb.get("offline_tasks").catch(() => null);
+            const memoryCategories = Array.isArray(dbCache.offline_categories) ? dbCache.offline_categories.length : -1;
+            const memoryTasks = Array.isArray(dbCache.offline_tasks) ? dbCache.offline_tasks.length : -1;
+            const idbCategoryCount = Array.isArray(idbCategories) ? idbCategories.length : -1;
+            const idbTaskCount = Array.isArray(idbTasks) ? idbTasks.length : -1;
+            const recoveredFromIdb = memoryCategories > 0 || memoryTasks > 0;
+            if (recoveredFromIdb) {
+                loadDataOffline();
+                renderCategories();
+                renderChecklist();
+                updateProgress();
+                document.body.dataset.hasChecklistCache = "true";
+                document.body.dataset.awaitingCloud = "false";
+            }
+            const persisted = navigator.storage?.persisted ? await navigator.storage.persisted().catch(() => false) : false;
+            const code = storageResult?.ok ? "CACHE-EMPTY-01" : "CACHE-IDB-02";
+            showCacheDiagnostic(`${code} | principal C:${startupCacheState.primaryCategories} T:${startupCacheState.primaryTasks} | emergência C:${startupCacheState.snapshotCategories} T:${startupCacheState.snapshotTasks} | memória C:${memoryCategories} T:${memoryTasks} | IndexedDB C:${idbCategoryCount} T:${idbTaskCount} | persistente:${persisted ? "sim" : "não"}${storageResult?.error ? ` | ${storageResult.error}` : ""}`);
+        });
+    }
+
+    // Connect to Supabase
+    connectSupabase();
+
+    // Solicita armazenamento persistente para impedir que o Android/Chrome
+    // descarte os tokens de sessão do Supabase por pressão de memória.
+    if (navigator.storage?.persist) {
+        navigator.storage.persist().then(granted => {
+            console.log(granted ? "Armazenamento persistente concedido." : "Armazenamento persistente negado.");
+        }).catch(() => {});
+    }
+
+    // Setup Auth and listen to session changes
+    setupSupabaseAuth();
+
+    // Initialize Lucide Icons
+    lucide.createIcons();
+
+    // ONE-TIME CLEANUP: Remove duplicates of "teste"
+    if (!localStorage.getItem("cleanup_done_v1")) {
+        setTimeout(async () => {
+            if (!supabaseClient) return;
+            try {
+                const { data, error } = await supabaseClient
+                    .from('tasks')
+                    .select('id')
+                    .ilike('title', 'teste')
+                    .order('created_at', { ascending: true });
+
+                if (error || !data || data.length <= 1) {
+                    localStorage.setItem("cleanup_done_v1", "true");
+                    return;
+                }
+
+                // Keep first, delete the rest
+                const toDelete = data.slice(1).map(t => t.id);
+                await supabaseClient.from('tasks').delete().in('id', toDelete);
+                localStorage.setItem("cleanup_done_v1", "true");
+                alert(`Limpeza concluída! Mantive 1 "teste" e removi ${toDelete.length} cópias extras.`);
+                loadChecklistAndProgress();
+            } catch(e) {
+                console.error("Cleanup error:", e);
+            }
+        }, 3000);
+    }
+
+    // Check notifications badge read status
+    if (localStorage.getItem("notifications_badge_read") === "true") {
+        if (notificationsBadge) notificationsBadge.style.display = "none";
+    }
+    
+    // O destaque do relatório é controlado junto da disponibilidade do botão.
+}
+
+// ----------------------------------------------------
+
+function isTemporaryId(id) {
+    const str = String(id);
+    return str.startsWith("temp-") || (/^\d{13,}$/.test(str));
+}
+// Event Listeners Setup
+// ----------------------------------------------------
+function setupEventListeners() {
+    let initialScrollY = 0;
+    let initialTasksScrollTop = 0;
+    let lastAddTaskInteractionTime = 0;
+    let lastShareInteractionTime = 0;
+
+    setupTaskTitleAutocomplete();
+    setupAiTaskCreator();
+
+    const showTrainingReportLoading = () => {
+        const grid = document.getElementById("training-calendar-grid");
+        const summary = document.getElementById("training-report-summary");
+        if (grid) grid.innerHTML = '<div class="training-calendar-loading"><span class="loading-spinner"></span><strong>Carregando treinos…</strong></div>';
+        if (summary) summary.innerHTML = '<small>Buscando fotos e dias treinados</small>';
+    };
+    const openContextualTrainingReport = async () => {
+        if (currentFilter === "all" || !isTrainingCategory(currentFilter)) return;
+        currentTrainingCalendarMonth = new Date(selectedDate + "T12:00:00");
+        currentTrainingCalendarSelectedDate = selectedDate;
+        openModal(modalTrainingReport);
+        renderTrainingReport();
+    };
+    document.getElementById("btn-open-training-calendar")?.addEventListener("click", openContextualTrainingReport);
+    document.getElementById("btn-training-calendar-prev")?.addEventListener("click", async () => {
+        currentTrainingCalendarMonth.setMonth(currentTrainingCalendarMonth.getMonth() - 1);
+        renderTrainingReport();
     });
-    // Se for colaborador e ainda não tiver página salva, leva direto ao que é relevante para ele
-    if (['gisella','milena','luiggi'].includes(user)) {
-      const savedPg = localStorage.getItem('gc-current-page');
-      if (!savedPg) {
+    document.getElementById("btn-training-calendar-next")?.addEventListener("click", async () => {
+        currentTrainingCalendarMonth.setMonth(currentTrainingCalendarMonth.getMonth() + 1);
+        renderTrainingReport();
+    });
+    document.getElementById("btn-close-training-report")?.addEventListener("click", () => closeModal(modalTrainingReport));
+    modalTrainingReport?.querySelector(".modal-overlay")?.addEventListener("click", () => closeModal(modalTrainingReport));
+    const finishTrainingWithoutPhoto = () => finishPendingTrainingCompletion(null);
+    const cancelPendingTrainingCompletion = () => {
+        if (pendingTrainingCompletionId === null) return;
+        closeModal(modalTrainingPhoto);
+    };
+    document.getElementById("btn-skip-training-photo")?.addEventListener("click", cancelPendingTrainingCompletion);
+    document.getElementById("btn-complete-without-photo")?.addEventListener("click", finishTrainingWithoutPhoto);
+    document.getElementById("btn-cancel-training-completion")?.addEventListener("click", cancelPendingTrainingCompletion);
+    modalTrainingPhoto?.querySelector(".modal-overlay")?.addEventListener("click", cancelPendingTrainingCompletion);
+    inputTrainingPhoto?.addEventListener("change", async () => {
+        const file = inputTrainingPhoto.files?.[0];
+        if (!file) return;
+        try {
+            const photo = await compressTrainingPhoto(file);
+            await finishPendingTrainingCompletion(photo);
+        } catch (error) {
+            console.error("Erro ao preparar foto do treino:", error);
+            showAppNotice("Não foi possível salvar essa foto. Tente novamente.", "error");
+        } finally {
+            inputTrainingPhoto.value = "";
+        }
+    });
+
+    // Smart Report Modal Events
+    // Smart Report Tab Switcher and Listeners
+    const tabWeekly = document.getElementById("tab-report-weekly");
+    const tabMonthly = document.getElementById("tab-report-monthly");
+    const tabYearly = document.getElementById("tab-report-yearly");
+    const tabHistory = document.getElementById("tab-report-history");
+    const reportSummaryTitle = document.getElementById("report-summary-title");
+    const reportSummaryContent = document.getElementById("report-summary-content");
+
+    switchReportTab = (days) => {
+        activeSmartReportDays = days;
+        [tabWeekly, tabMonthly, tabYearly, tabHistory].forEach(tab => {
+            if (tab) tab.classList.remove("active");
+        });
+        
+        if (days === 7) {
+            if (btnSaveSmartReport) btnSaveSmartReport.style.display = "inline-flex";
+            if (tabWeekly) tabWeekly.classList.add("active");
+            if (reportSummaryTitle) reportSummaryTitle.innerHTML = `<i data-lucide="sparkles" style="width: 16px; height: 16px;"></i> Resumo Semanal`;
+            loadAndRenderReport(7, reportSummaryContent);
+        } else if (days === 30) {
+            if (btnSaveSmartReport) btnSaveSmartReport.style.display = "inline-flex";
+            if (tabMonthly) tabMonthly.classList.add("active");
+            if (reportSummaryTitle) reportSummaryTitle.innerHTML = `<i data-lucide="sparkles" style="width: 16px; height: 16px;"></i> Resumo Mensal`;
+            loadAndRenderReport(30, reportSummaryContent);
+        } else if (days === 365) {
+            if (btnSaveSmartReport) btnSaveSmartReport.style.display = "inline-flex";
+            if (tabYearly) tabYearly.classList.add("active");
+            if (reportSummaryTitle) reportSummaryTitle.innerHTML = `<i data-lucide="sparkles" style="width: 16px; height: 16px;"></i> Resumo Anual`;
+            loadAndRenderReport(365, reportSummaryContent);
+        } else if (days === "history") {
+            if (btnSaveSmartReport) btnSaveSmartReport.style.display = "none";
+            if (tabHistory) tabHistory.classList.add("active");
+            if (reportSummaryTitle) reportSummaryTitle.innerHTML = `<i data-lucide="archive" style="width: 16px; height: 16px;"></i> Histórico de Relatórios`;
+            loadAndRenderReportHistory(reportSummaryContent, reportSummaryTitle);
+        }
+    };
+
+    if (tabWeekly) tabWeekly.addEventListener("click", () => switchReportTab(7));
+    if (tabMonthly) tabMonthly.addEventListener("click", () => switchReportTab(30));
+    if (tabYearly) tabYearly.addEventListener("click", () => switchReportTab(365));
+    if (tabHistory) tabHistory.addEventListener("click", () => switchReportTab("history"));
+
+    const modalReportCorrection = document.getElementById("modal-report-correction");
+    const selectCorrectionTask = document.getElementById("select-report-correction-task");
+    const selectCorrectionFunction = document.getElementById("select-report-correction-function");
+    const btnSaveCorrection = document.getElementById("btn-save-report-correction");
+    const closeCorrection = () => closeModal(modalReportCorrection);
+    document.getElementById("btn-close-report-correction")?.addEventListener("click", closeCorrection);
+    modalReportCorrection?.querySelector(".modal-overlay")?.addEventListener("click", closeCorrection);
+    document.addEventListener("click", event => {
+        const correctionButton = event.target.closest(".btn-correct-report-function");
+        if (!correctionButton || !selectCorrectionTask) return;
+        const categoryName = decodeURIComponent(correctionButton.dataset.category || "");
+        const correctionTasks = currentReportCorrectionTasks[categoryName] || [];
+        selectCorrectionTask.innerHTML = correctionTasks.map(task => `<option value="${encodeURIComponent(String(task.id))}">${escapeHTML(task.title)}</option>`).join("");
+        selectCorrectionFunction.value = "";
+        openModal(modalReportCorrection);
+    });
+    btnSaveCorrection?.addEventListener("click", async () => {
+        if (!selectCorrectionTask?.value || !selectCorrectionFunction?.value) return;
+        const taskId = decodeURIComponent(selectCorrectionTask.value);
+        const task = Object.values(currentReportCorrectionTasks).flat().find(item => String(item.id) === taskId);
+        if (!task) return;
+        saveLearnedFunctionAssociation(task.title, selectCorrectionFunction.value);
+        btnSaveCorrection.textContent = "Correção aprendida ✓";
+        btnSaveCorrection.disabled = true;
         setTimeout(() => {
-          if (user === 'gisella') {
-            const el = document.getElementById('page-colab-gisella');
-            const btn = Array.from(document.querySelectorAll('.nav-item')).find(b => (b.getAttribute('onclick')||'').includes('colab-gisella'));
-            if (el) {
-              document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-              document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-              el.classList.add('active');
-              if (btn) btn.classList.add('active');
-              localStorage.setItem('gc-current-page', 'colab-gisella');
-            }
-          } else {
-            // Milena/Luiggi: leva para a aba Tarefas já filtrada pelo próprio nome
-            const el = document.getElementById('page-tarefas');
-            const btn = Array.from(document.querySelectorAll('.nav-item')).find(b => (b.getAttribute('onclick')||'').includes("'tarefas'"));
-            if (el) {
-              document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-              document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-              el.classList.add('active');
-              if (btn) btn.classList.add('active');
-              localStorage.setItem('gc-current-page', 'tarefas');
-              buildTarefas();
-              const nome = user === 'milena' ? 'Milena' : 'Luiggi';
-              const colabBtn = Array.from(document.querySelectorAll('#filter-bar-tarefas-colab .filter-btn')).find(b => b.textContent.trim() === nome);
-              if (colabBtn) setFilterColab('tarefas', nome, colabBtn);
-            }
-          }
-        }, 50);
-      }
+            btnSaveCorrection.textContent = "Salvar correção";
+            btnSaveCorrection.disabled = false;
+            closeCorrection();
+            if (typeof activeSmartReportDays === "number") switchReportTab(activeSmartReportDays);
+        }, 700);
+    });
+
+    if (btnSmartReport) {
+        btnSmartReport.addEventListener("click", () => {
+            const attentionKey = getSmartReportAttentionKey();
+            if (attentionKey) localStorage.setItem(attentionKey, "true");
+            btnSmartReport.classList.remove("report-attention");
+            const now = new Date();
+            const defaultPeriod = (now.getMonth() === 0 && now.getDate() <= 3)
+                ? 365
+                : (now.getDate() <= 3 ? 30 : 7);
+            switchReportTab(defaultPeriod);
+            openModal(modalSmartReport);
+        });
     }
-    // Set chat author selector
-    window._currentUser = user;
-    window._currentUserName = displayName || user;
-    // Mostrar nome do usuário logado no footer
-    const footer = document.querySelector('.sidebar-footer');
-    if (footer) {
-      const u = LOGIN_USERS[user] || { name: displayName || user, color: 'var(--gisella)', bg: 'var(--gisella-bg)', initial: (displayName||user)[0].toUpperCase() };
-      footer.insertAdjacentHTML('afterbegin',
-        `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border);">
-          <div style="width:26px;height:26px;border-radius:50%;background:${u.bg};color:${u.color};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;">${u.initial}</div>
-          <span style="font-size:13px;font-weight:500;color:var(--text);">${u.name}</span>
-          <button onclick="doLogout()" style="margin-left:auto;background:none;border:none;font-size:11px;color:var(--text-soft);cursor:pointer;padding:0;" title="Sair">↩ sair</button>
-        </div>`
-      );
+    if (btnSaveSmartReport) {
+        btnSaveSmartReport.addEventListener("click", saveCurrentSmartReport);
     }
-  }
-  
-  function doLogout() {
-    sessionStorage.removeItem('gc-dashboard-session-token');
-    localStorage.removeItem('gc-session-user');
-    localStorage.removeItem('gc-session-date');
-    location.reload();
-  }
-  
-  // Verificar sessão ao carregar
-  checkSession();
-  
-  if (window._fbReady) {
-    startWithFirebase();
-  } else {
-    window.addEventListener('firebase-ready', startWithFirebase, { once: true });
-  }
+    if (btnCloseSmartReportModal) {
+        btnCloseSmartReportModal.addEventListener("click", () => {
+            closeModal(modalSmartReport);
+        });
+    }
+
+    // Toggle Summary blocks
+    const summaryBlockContainer = document.querySelector(".progress-card-container.compact-header-section");
+    const miniDateContainer = document.getElementById("header-mini-date-container");
+
+    const updateSummaryVisibility = (isCollapsed) => {
+        if (isCollapsed) {
+            if (summaryBlockContainer) summaryBlockContainer.classList.add("hidden");
+            if (miniDateContainer) miniDateContainer.style.display = "flex";
+            if (btnToggleSummary) {
+                btnToggleSummary.innerHTML = `<i data-lucide="eye-off"></i>`;
+                btnToggleSummary.title = "Mostrar Resumo";
+            }
+        } else {
+            if (summaryBlockContainer) summaryBlockContainer.classList.remove("hidden");
+            if (miniDateContainer) miniDateContainer.style.display = "none";
+            if (btnToggleSummary) {
+                btnToggleSummary.innerHTML = `<i data-lucide="eye"></i>`;
+                btnToggleSummary.title = "Ocultar Resumo";
+            }
+        }
+        if (window.lucide) window.lucide.createIcons();
+    };
+
+    // Load initial preference
+    const summaryCollapsed = localStorage.getItem("summary_collapsed") === "true";
+    updateSummaryVisibility(summaryCollapsed);
+
+    if (btnToggleSummary) {
+        btnToggleSummary.addEventListener("click", () => {
+            const currentlyCollapsed = summaryBlockContainer && summaryBlockContainer.classList.contains("hidden");
+            const newCollapsed = !currentlyCollapsed;
+            localStorage.setItem("summary_collapsed", newCollapsed);
+            updateSummaryVisibility(newCollapsed);
+        });
+    }
+
+    // Custom Calendar Modal Events
+    btnOpenCalendar.addEventListener("click", () => {
+        // Initialize calendar view to the currently selected date
+        currentCalendarMonth = new Date(selectedDate + "T12:00:00");
+        renderCalendarGrid();
+        openModal(modalCalendar);
+    });
+
+
+
+    btnCloseCalendar.addEventListener("click", () => {
+        closeModal(modalCalendar);
+    });
+
+    btnPrevMonth.addEventListener("click", () => {
+        currentCalendarMonth.setMonth(currentCalendarMonth.getMonth() - 1);
+        renderCalendarGrid();
+    });
+
+    btnNextMonth.addEventListener("click", () => {
+        currentCalendarMonth.setMonth(currentCalendarMonth.getMonth() + 1);
+        renderCalendarGrid();
+    });
+
+    // Lógica pura de dados — sem animação. Compartilhada entre setas e swipe.
+    async function changeDayData(offset) {
+        const dateObj = new Date(selectedDate + "T12:00:00");
+        dateObj.setDate(dateObj.getDate() + offset);
+        selectedDate = getLocalDateString(dateObj);
+
+        updateDateDisplay();
+        await loadChecklistAndProgress();
+        lucide.createIcons();
+    }
+
+    // Para os botões de seta — crossfade + leve escala (sem slide horizontal)
+    async function changeDay(offset) {
+        const categoriesBar = document.getElementById("categories-bar");
+
+        // Fade out
+        const fadeOut = "opacity 0.12s ease-out, transform 0.12s ease-out";
+        tasksListEl.style.transition    = fadeOut;
+        if (categoriesBar) categoriesBar.style.transition = fadeOut;
+
+        tasksListEl.style.opacity    = "0";
+        tasksListEl.style.transform  = `scale(0.97) translateX(${offset > 0 ? "-12px" : "12px"})`;
+        if (categoriesBar) {
+            categoriesBar.style.opacity   = "0";
+            categoriesBar.style.transform = `translateX(${offset > 0 ? "-8px" : "8px"})`;
+        }
+
+        await Promise.all([
+            new Promise(resolve => setTimeout(resolve, 120)),
+            changeDayData(offset)
+        ]);
+
+        // Reposiciona do lado oposto (sem transição)
+        const inX = offset > 0 ? "12px" : "-12px";
+        tasksListEl.style.transition    = "none";
+        if (categoriesBar) categoriesBar.style.transition = "none";
+        tasksListEl.style.transform     = `scale(0.97) translateX(${inX})`;
+        tasksListEl.style.opacity       = "0";
+        if (categoriesBar) {
+            categoriesBar.style.opacity   = "0";
+            categoriesBar.style.transform = `translateX(${offset > 0 ? "8px" : "-8px"})`;
+        }
+        tasksListEl.offsetHeight; // reflow
+
+        // Fade in
+        const fadeIn = "opacity 0.2s ease-out, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)";
+        tasksListEl.style.transition    = fadeIn;
+        if (categoriesBar) categoriesBar.style.transition = fadeIn;
+        tasksListEl.style.opacity       = "1";
+        tasksListEl.style.transform     = "scale(1) translateX(0)";
+        if (categoriesBar) {
+            categoriesBar.style.opacity   = "1";
+            categoriesBar.style.transform = "translateX(0)";
+        }
+
+        setTimeout(() => {
+            tasksListEl.style.transition   = "";
+            tasksListEl.style.transform    = "";
+            if (categoriesBar) {
+                categoriesBar.style.transition = "";
+                categoriesBar.style.transform  = "";
+            }
+        }, 200);
+    }
+
+    if (btnPrevDay) {
+        btnPrevDay.addEventListener("click", (e) => {
+            e.stopPropagation();
+            changeDay(-1);
+        });
+    }
+    if (btnNextDay) {
+        btnNextDay.addEventListener("click", (e) => {
+            e.stopPropagation();
+            changeDay(1);
+        });
+    }
+
+    // Atalho no centro do bloco de data: dois toques/cliques voltam direto
+    // para hoje. O contador manual também funciona no iPhone, onde o dblclick
+    // nativo pode não ser disparado de forma consistente após dois toques.
+    const squareDateDisplay = document.querySelector(".square-date-display");
+    if (squareDateDisplay) {
+        let lastDateDisplayClickAt = 0;
+        squareDateDisplay.title = "Dois toques para voltar a hoje";
+        squareDateDisplay.addEventListener("click", async event => {
+            const now = Date.now();
+            const isDoubleClick = event.detail >= 2 || (lastDateDisplayClickAt > 0 && now - lastDateDisplayClickAt <= 350);
+            lastDateDisplayClickAt = isDoubleClick ? 0 : now;
+            if (!isDoubleClick) return;
+
+            const today = getLocalDateString(new Date());
+            if (selectedDate === today) return;
+            selectedDate = today;
+            updateDateDisplay();
+            await loadChecklistAndProgress();
+            if (window.lucide) lucide.createIcons();
+        });
+    }
+
+    // Navegação por deslize em qualquer parte da barra de progresso
+    const progressCard = document.querySelector(".progress-card-container");
+    if (progressCard) {
+        let pcTouchStartX = 0;
+        let pcTouchCurrX  = 0;
+        let pcActive      = false;
+        let pcStartY      = 0;
+        let pcLocked      = false;
+
+        const SWIPE_THRESHOLD = 50;
+        const DRAG_RESIST     = 0.45;
+        const categoriesBar = document.getElementById("categories-bar");
+
+        function applyDrag(dx) {
+            // Só o card de progresso se move fisicamente
+            const resist = dx * DRAG_RESIST;
+            progressCard.style.transform = `translateX(${resist}px)`;
+
+            // Lista e guias apenas fazem fade proporcional ao arraste
+            const progress = Math.min(Math.abs(dx) / 120, 1);
+            const fadeVal  = 1 - progress * 0.6;
+            tasksListEl.style.opacity   = fadeVal;
+            if (categoriesBar) categoriesBar.style.opacity = fadeVal + 0.2 > 1 ? 1 : fadeVal + 0.2;
+        }
+
+        function resetDrag(animate = true) {
+            const t = animate ? "transform 0.3s cubic-bezier(0.16, 1, 0.3, 1)" : "none";
+            progressCard.style.transition = t;
+            progressCard.style.transform  = "translateX(0)";
+            progressCard.style.opacity    = "1";
+
+            const tFade = animate ? "opacity 0.25s ease-out" : "none";
+            tasksListEl.style.transition  = tFade;
+            tasksListEl.style.opacity     = "1";
+            tasksListEl.style.transform   = "";
+            if (categoriesBar) {
+                categoriesBar.style.transition = tFade;
+                categoriesBar.style.opacity    = "1";
+                categoriesBar.style.transform  = "";
+            }
+        }
+
+        function throwOut(direction) {
+            const offset = direction === "left" ? 1 : -1;
+            const outX   = direction === "left" ? "-100vw" : "100vw";
+            const inXpx  = offset > 0 ? "12px" : "-12px";
+
+            // Card de progresso sai deslizando
+            progressCard.style.transition = "transform 0.15s ease-in, opacity 0.15s ease-in";
+            progressCard.style.transform  = `translateX(${outX})`;
+            progressCard.style.opacity    = "0";
+
+            // Conteúdo (guias + lista) faz fade out suave
+            const contentFade = "opacity 0.12s ease-out, transform 0.12s ease-out";
+            tasksListEl.style.transition    = contentFade;
+            tasksListEl.style.opacity       = "0";
+            tasksListEl.style.transform     = `scale(0.97) translateX(${offset > 0 ? "-8px" : "8px"})`;
+            if (categoriesBar) {
+                categoriesBar.style.transition = contentFade;
+                categoriesBar.style.opacity    = "0";
+                categoriesBar.style.transform  = `translateX(${offset > 0 ? "-6px" : "6px"})`;
+            }
+
+            // Saída + dados em paralelo
+            Promise.all([
+                new Promise(resolve => setTimeout(resolve, 150)),
+                changeDayData(offset)
+            ]).then(() => {
+                // Posiciona tudo sem transição
+                progressCard.style.transition = "none";
+                tasksListEl.style.transition  = "none";
+                if (categoriesBar) categoriesBar.style.transition = "none";
+
+                progressCard.style.transform  = `translateX(${direction === "left" ? "100vw" : "-100vw"})`;
+                progressCard.style.opacity    = "0";
+                tasksListEl.style.opacity     = "0";
+                tasksListEl.style.transform   = `scale(0.97) translateX(${inXpx})`;
+                if (categoriesBar) {
+                    categoriesBar.style.opacity   = "0";
+                    categoriesBar.style.transform = `translateX(${offset > 0 ? "6px" : "-6px"})`;
+                }
+
+                progressCard.offsetHeight; // reflow
+
+                // Tudo entra junto com spring
+                const enterT = "transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease-out";
+                progressCard.style.transition = enterT;
+                tasksListEl.style.transition  = enterT;
+                if (categoriesBar) categoriesBar.style.transition = enterT;
+
+                progressCard.style.transform  = "translateX(0)";
+                progressCard.style.opacity    = "1";
+                tasksListEl.style.opacity     = "1";
+                tasksListEl.style.transform   = "scale(1) translateX(0)";
+                if (categoriesBar) {
+                    categoriesBar.style.opacity   = "1";
+                    categoriesBar.style.transform = "translateX(0)";
+                }
+
+                setTimeout(() => {
+                    tasksListEl.style.transition   = "";
+                    tasksListEl.style.transform    = "";
+                    if (categoriesBar) {
+                        categoriesBar.style.transition = "";
+                        categoriesBar.style.transform  = "";
+                    }
+                }, 280);
+            });
+        }
+
+        progressCard.addEventListener("touchstart", (e) => {
+            pcTouchStartX = e.touches[0].clientX;
+            pcTouchCurrX  = pcTouchStartX;
+            pcStartY      = e.touches[0].clientY;
+            pcActive      = true;
+            pcLocked      = false;
+
+            progressCard.style.transition = "none";
+            tasksListEl.style.transition  = "none";
+            if (categoriesBar) categoriesBar.style.transition = "none";
+        }, { passive: true });
+
+        progressCard.addEventListener("touchmove", (e) => {
+            if (!pcActive) return;
+
+            const dx = e.touches[0].clientX - pcTouchStartX;
+            const dy = e.touches[0].clientY - pcStartY;
+
+            if (!pcLocked && Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+
+            if (!pcLocked) {
+                if (Math.abs(dy) > Math.abs(dx)) {
+                    pcActive = false;
+                    resetDrag(true);
+                    return;
+                }
+                pcLocked = true;
+            }
+
+            pcTouchCurrX = e.touches[0].clientX;
+            applyDrag(dx);
+
+            if (e.cancelable) e.preventDefault();
+        }, { passive: false });
+
+        progressCard.addEventListener("touchend", () => {
+            if (!pcActive) return;
+            pcActive = false;
+
+            const dx = pcTouchCurrX - pcTouchStartX;
+
+            if (dx < -SWIPE_THRESHOLD) {
+                throwOut("left");
+            } else if (dx > SWIPE_THRESHOLD) {
+                throwOut("right");
+            } else {
+                resetDrag(true);
+            }
+        });
+
+        progressCard.addEventListener("touchcancel", () => {
+            pcActive = false;
+            resetDrag(true);
+        });
+    }
+
+    // Permite trocar o dia deslizando apenas nas faixas vazias junto às
+    // bordas, com o resumo aberto ou recolhido. Assim o gesto não disputa
+    // com os swipes dos blocos nem das tarefas (editar/excluir).
+    if (appContainer) {
+        const EDGE_SWIPE_ZONE = 28;
+        const EDGE_SWIPE_THRESHOLD = 70;
+        const EDGE_DIRECTION_RATIO = 1.5;
+        let edgeSwipeActive = false;
+        let edgeSwipeLocked = false;
+        let edgeSwipeStartX = 0;
+        let edgeSwipeStartY = 0;
+        let edgeSwipeCurrentX = 0;
+        let edgeSwipeCurrentY = 0;
+        let edgeSwipeChangingDay = false;
+
+        const isInteractiveSwipeTarget = (target) =>
+            target.closest(".progress-card-container, .task-item, .categories-bar, .app-header, .fab-menu-container, button, input, select, textarea, a, .modal");
+
+        appContainer.addEventListener("touchstart", (e) => {
+            edgeSwipeActive = false;
+            edgeSwipeLocked = false;
+
+            if (edgeSwipeChangingDay || e.touches.length !== 1) return;
+            if (isInteractiveSwipeTarget(e.target)) return;
+
+            const touch = e.touches[0];
+            const appRect = appContainer.getBoundingClientRect();
+            const distanceFromLeft = touch.clientX - appRect.left;
+            const distanceFromRight = appRect.right - touch.clientX;
+            const startedAtEdge = distanceFromLeft <= EDGE_SWIPE_ZONE || distanceFromRight <= EDGE_SWIPE_ZONE;
+
+            if (!startedAtEdge) return;
+
+            edgeSwipeStartX = edgeSwipeCurrentX = touch.clientX;
+            edgeSwipeStartY = edgeSwipeCurrentY = touch.clientY;
+            edgeSwipeActive = true;
+        }, { passive: true });
+
+        appContainer.addEventListener("touchmove", (e) => {
+            if (!edgeSwipeActive || e.touches.length !== 1) return;
+
+            edgeSwipeCurrentX = e.touches[0].clientX;
+            edgeSwipeCurrentY = e.touches[0].clientY;
+            const dx = edgeSwipeCurrentX - edgeSwipeStartX;
+            const dy = edgeSwipeCurrentY - edgeSwipeStartY;
+
+            if (!edgeSwipeLocked && Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+
+            if (!edgeSwipeLocked) {
+                if (Math.abs(dx) < Math.abs(dy) * EDGE_DIRECTION_RATIO) {
+                    edgeSwipeActive = false;
+                    return;
+                }
+                edgeSwipeLocked = true;
+            }
+
+            if (e.cancelable) e.preventDefault();
+        }, { passive: false });
+
+        appContainer.addEventListener("touchend", async () => {
+            if (!edgeSwipeActive) return;
+            edgeSwipeActive = false;
+
+            const dx = edgeSwipeCurrentX - edgeSwipeStartX;
+            const dy = edgeSwipeCurrentY - edgeSwipeStartY;
+            const isDeliberateHorizontalSwipe =
+                edgeSwipeLocked &&
+                Math.abs(dx) >= EDGE_SWIPE_THRESHOLD &&
+                Math.abs(dx) >= Math.abs(dy) * EDGE_DIRECTION_RATIO;
+
+            if (!isDeliberateHorizontalSwipe) return;
+
+            edgeSwipeChangingDay = true;
+            try {
+                await changeDay(dx < 0 ? 1 : -1);
+            } finally {
+                edgeSwipeChangingDay = false;
+            }
+        }, { passive: true });
+
+        appContainer.addEventListener("touchcancel", () => {
+            edgeSwipeActive = false;
+            edgeSwipeLocked = false;
+        }, { passive: true });
+    }
+
+
+    // Toggle Task Complete (using event delegation)
+    tasksListEl.addEventListener("click", async (e) => {
+        if (e.target.closest(".btn-task-action") || e.target.closest(".swipe-action-btn") || e.target.closest(".task-description-toggle") || e.target.closest(".task-description-panel")) return;
+
+        const item = e.target.closest(".task-item");
+        if (!item) return;
+
+        // Se o card de tarefa estiver deslizado/aberto (swiped), fecha o swipe em vez de marcar concluída
+        if (item.classList.contains("swiped")) {
+            e.preventDefault();
+            e.stopPropagation();
+            const fg = item.querySelector(".task-item-foreground");
+            if (fg) {
+                fg.style.transition = "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)";
+                fg.style.transform = "translateX(0px)";
+            }
+            item.classList.remove("swiped");
+            return;
+        }
+
+        const now = new Date();
+        const todayStr = getLocalDateString(now);
+        const isFutureDate = selectedDate > todayStr;
+        
+        let isPastNightShiftException = false;
+        const yesterdayDate = new Date(now);
+        yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+        const yesterdayStr = getLocalDateString(yesterdayDate);
+        
+        if (selectedDate === yesterdayStr && now.getHours() < 12) {
+            const taskId = String(item.dataset.id).match(/^\d+$/) ? parseInt(item.dataset.id, 10) : item.dataset.id;
+            const task = tasks.find(t => String(t.id) === String(taskId));
+            const turnos = (task && task.context && task.context.turnos) ? task.context.turnos : [];
+            if (turnos.includes("Noite")) {
+                isPastNightShiftException = true;
+            }
+        }
+
+        if (isEditMode || (isHistoryMode && !isPastNightShiftException)) return;
+
+        const taskId = String(item.dataset.id).match(/^\d+$/) ? parseInt(item.dataset.id, 10) : item.dataset.id;
+        const selectedTask = tasks.find(task => String(task.id) === String(taskId));
+        if (!canCurrentUserCheckTask(selectedTask, true)) {
+            if (navigator.vibrate) navigator.vibrate([18, 35, 18]);
+            showTaskCheckPermissionNotice(selectedTask);
+            return;
+        }
+
+        const isCompleting = !item.classList.contains("completed");
+        let futureMoveConfirmed = false;
+        if (isCompleting && isFutureDate && !isTrainingCategory(selectedTask?.category)) {
+            const scheduledLabel = new Date(`${selectedDate}T12:00:00`).toLocaleDateString("pt-BR", { day: "2-digit", month: "long" });
+            futureMoveConfirmed = await showAppConfirm(
+                `Esta tarefa está programada para ${scheduledLabel}. Ao marcar como feita, ela será movida para hoje, no turno da ${getCurrentShiftName(now)}.`,
+                { title: "Concluir tarefa futura?", confirmText: "Mover e concluir" }
+            );
+            if (!futureMoveConfirmed) return;
+        }
+        if (isCompleting) {
+            const checkbox = item.querySelector(".task-checkbox");
+            if (checkbox) {
+                const rect = checkbox.getBoundingClientRect();
+                const x = rect.left + rect.width / 2 + window.scrollX;
+                const y = rect.top + rect.height / 2 + window.scrollY;
+                createConfettiBurst(x, y);
+            }
+        }
+        
+        await toggleTask(taskId, { completeAtCurrentMoment: isFutureDate, futureMoveConfirmed });
+    });
+
+    // Exit edit mode on click outside categories bar
+    document.addEventListener("click", (e) => {
+        if (!isEditMode) return;
+        
+        // Se o clique for fora da barra de categorias e fora de qualquer modal/diálogo
+        const clickedInsideBar = e.target.closest(".categories-bar");
+        const clickedInsideModal = e.target.closest(".modal");
+        
+        if (!clickedInsideBar && !clickedInsideModal) {
+            toggleEditMode(false);
+        }
+    });
+
+    // Edit Organization Name Inline
+    orgTagEl.addEventListener("click", () => {
+        const currentName = orgTagEl.textContent;
+        const newName = prompt("Editar nome da organização:", currentName);
+        if (newName && newName.trim()) {
+            const trimmed = newName.trim();
+            orgTagEl.textContent = trimmed;
+            inputOrgName.value = trimmed;
+            localStorage.setItem("checklist_org_name", trimmed);
+        }
+    });
+
+    // Settings Modal
+    btnManageTasks.addEventListener("click", () => {
+        updateNotificationsSettingUI();
+        refreshSiriShortcutStatus();
+        openModal(modalManageTasks);
+    });
+    btnCloseManageModal.addEventListener("click", () => closeModal(modalManageTasks));
+
+    // Gestures tutorial carousel
+    if (modalGesturesTutorial && btnOpenGesturesTutorial) {
+        const carousel = document.getElementById("gestures-carousel");
+        const carouselTrack = document.getElementById("gestures-carousel-track");
+        const carouselDots = document.getElementById("gestures-carousel-dots");
+        const carouselCounter = document.getElementById("gesture-slide-counter");
+        const btnGesturePrev = document.getElementById("btn-gesture-prev");
+        const btnGestureNext = document.getElementById("btn-gesture-next");
+        const slides = Array.from(carouselTrack.querySelectorAll(".gesture-slide"));
+        let currentGestureSlide = 0;
+        let carouselTouchStartX = 0;
+        let carouselTouchStartY = 0;
+
+        const dots = slides.map((_, index) => {
+            const dot = document.createElement("button");
+            dot.type = "button";
+            dot.className = "gesture-dot";
+            dot.setAttribute("aria-label", `Ir para o gesto ${index + 1}`);
+            dot.addEventListener("click", () => updateGestureSlide(index));
+            carouselDots.appendChild(dot);
+            return dot;
+        });
+
+        function updateGestureSlide(index) {
+            currentGestureSlide = Math.max(0, Math.min(index, slides.length - 1));
+            carouselTrack.style.transform = `translateX(-${currentGestureSlide * 100}%)`;
+            carouselCounter.textContent = `${currentGestureSlide + 1} de ${slides.length}`;
+            btnGesturePrev.disabled = currentGestureSlide === 0;
+            btnGestureNext.disabled = currentGestureSlide === slides.length - 1;
+            dots.forEach((dot, dotIndex) => {
+                dot.classList.toggle("active", dotIndex === currentGestureSlide);
+                dot.setAttribute("aria-current", dotIndex === currentGestureSlide ? "step" : "false");
+            });
+        }
+
+        const closeGesturesTutorial = () => {
+            closeModal(modalGesturesTutorial);
+            openModal(modalManageTasks);
+        };
+
+        btnOpenGesturesTutorial.addEventListener("click", () => {
+            closeModal(modalManageTasks);
+            updateGestureSlide(0);
+            openModal(modalGesturesTutorial);
+        });
+        btnCloseGesturesTutorial.addEventListener("click", closeGesturesTutorial);
+        document.getElementById("overlay-gestures-tutorial").addEventListener("click", closeGesturesTutorial);
+        btnGesturePrev.addEventListener("click", () => updateGestureSlide(currentGestureSlide - 1));
+        btnGestureNext.addEventListener("click", () => updateGestureSlide(currentGestureSlide + 1));
+
+        carousel.addEventListener("touchstart", (e) => {
+            if (e.touches.length !== 1) return;
+            carouselTouchStartX = e.touches[0].clientX;
+            carouselTouchStartY = e.touches[0].clientY;
+        }, { passive: true });
+
+        carousel.addEventListener("touchend", (e) => {
+            if (e.changedTouches.length !== 1) return;
+            const dx = e.changedTouches[0].clientX - carouselTouchStartX;
+            const dy = e.changedTouches[0].clientY - carouselTouchStartY;
+            if (Math.abs(dx) < 50 || Math.abs(dx) <= Math.abs(dy)) return;
+            updateGestureSlide(currentGestureSlide + (dx < 0 ? 1 : -1));
+        }, { passive: true });
+
+        updateGestureSlide(0);
+    }
+
+    // Categories Management Modal
+    if (btnOnboardingCreateCategory) {
+        btnOnboardingCreateCategory.addEventListener("click", () => {
+            openModal(modalManageCategories);
+            renderCategories();
+            setTimeout(() => document.getElementById("input-new-category")?.focus(), 380);
+        });
+    }
+
+    if (btnOpenManageCategories) {
+        btnOpenManageCategories.addEventListener("click", () => {
+            closeModal(modalManageTasks);
+            openModal(modalManageCategories);
+            renderCategories();
+        });
+    }
+    if (btnCloseManageCategoriesModal) {
+        btnCloseManageCategoriesModal.addEventListener("click", () => {
+            closeModal(modalManageCategories);
+            openModal(modalManageTasks);
+        });
+    }
+    const overlayManageCategories = document.getElementById("overlay-manage-categories");
+    if (overlayManageCategories) {
+        overlayManageCategories.addEventListener("click", () => {
+            closeModal(modalManageCategories);
+        });
+    }
+
+    // Save Settings Inputs
+    inputOrgName.addEventListener("input", (e) => {
+        const val = e.target.value.trim() || "Checklist Organizacional";
+        orgTagEl.textContent = val;
+        localStorage.setItem("checklist_org_name", val);
+    });
+
+    // Toggle custom type input wrapper on select change
+    const selectNewCategoryType = document.getElementById("select-new-category-type");
+    const wrapperCustomType = document.getElementById("wrapper-custom-type");
+    const inputNewCategoryCustomType = document.getElementById("input-new-category-custom-type");
+    const categoryTypeRow = document.getElementById("category-type-row");
+
+    if (selectNewCategoryType && wrapperCustomType) {
+        selectNewCategoryType.addEventListener("change", () => {
+            if (selectNewCategoryType.value === "Outro") {
+                wrapperCustomType.style.display = "flex";
+                if (categoryTypeRow) categoryTypeRow.classList.add("has-custom-type");
+            } else {
+                wrapperCustomType.style.display = "none";
+                if (categoryTypeRow) categoryTypeRow.classList.remove("has-custom-type");
+                if (inputNewCategoryCustomType) inputNewCategoryCustomType.value = "";
+            }
+        });
+    }
+
+    const inputManualLearning = document.getElementById("input-manual-learning-term");
+    const selectManualLearning = document.getElementById("select-manual-learning-function");
+    const btnSaveManualLearning = document.getElementById("btn-save-manual-learning");
+    if (inputManualLearning && selectManualLearning && btnSaveManualLearning) {
+        btnSaveManualLearning.addEventListener("click", () => {
+            const term = inputManualLearning.value.trim();
+            if (!term) {
+                inputManualLearning.focus();
+                return;
+            }
+            if (!selectManualLearning.value) {
+                selectManualLearning.focus();
+                return;
+            }
+            saveLearnedFunctionAssociation(term, selectManualLearning.value);
+            inputManualLearning.value = "";
+            const originalText = btnSaveManualLearning.textContent;
+            btnSaveManualLearning.textContent = "Aprendido ✓";
+            btnSaveManualLearning.disabled = true;
+            setTimeout(() => {
+                btnSaveManualLearning.textContent = originalText;
+                btnSaveManualLearning.disabled = false;
+                renderCategories();
+            }, 800);
+        });
+    }
+
+    // Add New Category (Settings Modal)
+    btnAddCategory.addEventListener("click", async () => {
+        const val = inputNewCategory.value.trim();
+        let typeVal = selectNewCategoryType ? selectNewCategoryType.value : "";
+        if (typeVal === "Outro" && inputNewCategoryCustomType) {
+            typeVal = inputNewCategoryCustomType.value.trim();
+        }
+
+        if (!val) {
+            alert("Por favor, insira o nome da categoria.");
+            return;
+        }
+        if (!typeVal) {
+            alert("Por favor, selecione ou digite o tipo da categoria.");
+            return;
+        }
+
+        if (btnAddCategory.disabled) return;
+        btnAddCategory.disabled = true;
+        const originalText = btnAddCategory.innerHTML;
+        btnAddCategory.innerHTML = "Salvando...";
+
+        try {
+            const categoryCreated = await addCategory(val, typeVal);
+            if (!categoryCreated) return;
+            inputNewCategory.value = "";
+            if (inputNewCategoryCustomType) inputNewCategoryCustomType.value = "";
+            if (selectNewCategoryType) {
+                selectNewCategoryType.value = "Trabalho"; // reset
+                wrapperCustomType.style.display = "none";
+                document.getElementById("category-type-row")?.classList.remove("has-custom-type");
+            }
+        } finally {
+            btnAddCategory.disabled = false;
+            btnAddCategory.innerHTML = originalText;
+        }
+    });
+
+    // Add Task Modal (FAB menu trigger)
+    const handleAddTaskTrigger = (e) => {
+        const now = Date.now();
+        // Cooldown de 300ms para evitar duplo acionamento (pointerdown + click)
+        if (now - lastAddTaskInteractionTime < 300) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
+        lastAddTaskInteractionTime = now;
+
+        e.preventDefault();
+        e.stopPropagation();
+        const fabMenu = document.getElementById("fab-menu");
+        if (fabMenu && !fabMenu.classList.contains("open")) {
+            fabMenu.classList.add("open");
+            initialScrollY = window.scrollY;
+            if (tasksListEl) initialTasksScrollTop = tasksListEl.scrollTop;
+            return;
+        }
+
+        if (fabMenu) fabMenu.classList.remove("open");
+
+        if (isHistoryMode) {
+            alert("Não é possível adicionar tarefas no histórico.");
+            return;
+        }
+        if (categories.length === 0) {
+            alert("Cadastre pelo menos uma categoria/local nas configurações antes de adicionar tarefas.");
+            return;
+        }
+
+        // Na aba Todos, recupera a última categoria usada. Se ainda não houver
+        // preferência, evita escolher Treino apenas por ela estar no topo.
+        const addCategoryPreferenceKey = `checklist_last_add_category_${currentUser?.id || "local"}`;
+        const lastAddCategory = localStorage.getItem(addCategoryPreferenceKey) || "";
+        const availableCategoryNames = new Set(categories.map(category => category.name));
+        const currentSelectCategory = selectTaskCategory.value;
+        const preferredCategory = currentFilter !== "all" && availableCategoryNames.has(currentFilter)
+            ? currentFilter
+            : (availableCategoryNames.has(lastAddCategory)
+                ? lastAddCategory
+                : (availableCategoryNames.has(currentSelectCategory) && !isTrainingCategory(currentSelectCategory)
+                    ? currentSelectCategory
+                    : (categories.find(category => !isTrainingCategory(category.name))?.name || categories[0].name)));
+        selectTaskCategory.value = preferredCategory;
+
+        selectTaskRecurring.value = "once";
+
+        // Atualiza as opções de atribuição com base no local selecionado
+        updateTaskAssigneeDropdown(selectTaskCategory.value, selectTaskAssignedTo, taskAssigneeGroup);
+
+        // Pré-definir a data da tarefa com a data atualmente selecionada no calendário
+        const taskDateInput = document.getElementById("task-date");
+        if (taskDateInput) {
+            taskDateInput.value = selectedDate;
+        }
+
+        // Limpar seleção de turnos
+        const shiftButtons = document.querySelectorAll("#add-shift-selector .shift-toggle-btn");
+        shiftButtons.forEach(btn => btn.classList.remove("active"));
+
+        openModal(modalAddTask);
+    };
+
+    btnAddTaskModal.addEventListener("click", handleAddTaskTrigger);
+    btnCloseAddModal.addEventListener("click", () => closeModal(modalAddTask));
+
+    if (selectTaskCategory) {
+        selectTaskCategory.addEventListener("change", () => {
+            const preferenceKey = `checklist_last_add_category_${currentUser?.id || "local"}`;
+            localStorage.setItem(preferenceKey, selectTaskCategory.value);
+            updateTaskAssigneeDropdown(selectTaskCategory.value, selectTaskAssignedTo, taskAssigneeGroup);
+        });
+    }
+
+    if (selectEditTaskCategory) {
+        selectEditTaskCategory.addEventListener("change", () => {
+            updateTaskAssigneeDropdown(selectEditTaskCategory.value, selectEditTaskAssignedTo, editTaskAssigneeGroup);
+        });
+    }
+
+    // Form Add Task Submit
+    // Toggle repeat days visibility
+    selectTaskRecurring.addEventListener("change", () => {
+        const repeatGroup = document.getElementById("repeat-days-group");
+        if (selectTaskRecurring.value === "repeat") {
+            repeatGroup.style.display = "block";
+        } else {
+            repeatGroup.style.display = "none";
+        }
+    });
+
+    // Day toggle buttons (only for the Add Task modal)
+    document.querySelectorAll("#repeat-days-group .day-toggle").forEach(btn => {
+        btn.addEventListener("click", () => {
+            btn.classList.toggle("active");
+        });
+    });
+
+    // Turno toggle buttons (for Add and Edit modals)
+    document.querySelectorAll(".shift-toggle-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+            btn.classList.toggle("active");
+        });
+    });
+
+    const requestNotificationPermission = async () => {
+        if ("Notification" in window) {
+            if (Notification.permission === "default") {
+                const permission = await Notification.requestPermission();
+                if (permission === "granted") {
+                    console.log("Permissão de notificação concedida.");
+                    localStorage.setItem(getNotificationsPreferenceKey(), "true");
+                    ensurePushSubscription().catch(error => console.warn("Não foi possível registrar o push do lembrete:", error.message));
+                }
+            } else if (Notification.permission === "granted") {
+                localStorage.setItem(getNotificationsPreferenceKey(), "true");
+                ensurePushSubscription().catch(error => console.warn("Não foi possível registrar o push do lembrete:", error.message));
+            }
+        }
+    };
+
+    const chkImportant = document.getElementById("task-important");
+    if (chkImportant) {
+        chkImportant.addEventListener("change", async () => {
+            if (chkImportant.checked) {
+                requestNotificationPermission();
+                const reminders = await chooseTaskReminders(addTaskReminders.length ? addTaskReminders : [{ time: getCurrentReminderTime(), offset_days: 0 }]);
+                if (!reminders || !reminders.length) chkImportant.checked = false;
+                else addTaskReminders = reminders;
+            } else {
+                addTaskReminders = [];
+            }
+            updateTaskReminderSummary("add", chkImportant.checked, addTaskReminders);
+        });
+    }
+
+    const chkEditImportant = document.getElementById("edit-task-important");
+    if (chkEditImportant) {
+        chkEditImportant.addEventListener("change", async () => {
+            if (chkEditImportant.checked) {
+                requestNotificationPermission();
+                const reminders = await chooseTaskReminders(editTaskReminders.length ? editTaskReminders : [{ time: getCurrentReminderTime(), offset_days: 0 }]);
+                if (!reminders || !reminders.length) chkEditImportant.checked = false;
+                else editTaskReminders = reminders;
+            } else {
+                editTaskReminders = [];
+            }
+            updateTaskReminderSummary("edit", chkEditImportant.checked, editTaskReminders);
+        });
+    }
+
+    const setupReminderSummaryEditor = (summaryId, checkbox, getReminders, setReminders, mode) => {
+        const summary = document.getElementById(summaryId);
+        if (!summary || !checkbox) return;
+        summary.title = "Editar notificações";
+        summary.addEventListener("click", async () => {
+            const reminders = await chooseTaskReminders(getReminders().length ? getReminders() : [{ time: getCurrentReminderTime(), offset_days: 0 }]);
+            if (reminders === null) return;
+            setReminders(reminders);
+            checkbox.checked = reminders.length > 0;
+            if (checkbox.checked) requestNotificationPermission();
+            updateTaskReminderSummary(mode, checkbox.checked, reminders);
+        });
+    };
+    setupReminderSummaryEditor("task-reminder-summary", chkImportant, () => addTaskReminders, value => { addTaskReminders = value; }, "add");
+    setupReminderSummaryEditor("edit-task-reminder-summary", chkEditImportant, () => editTaskReminders, value => { editTaskReminders = value; }, "edit");
+
+    const autoResizeTextarea = (input) => {
+        if (!input) return;
+        input.style.height = "auto";
+        input.style.height = Math.max(100, input.scrollHeight + 4) + "px";
+    };
+
+    const setupDescriptionField = (buttonId, groupId, inputId) => {
+        const button = document.getElementById(buttonId);
+        const group = document.getElementById(groupId);
+        const input = document.getElementById(inputId);
+        if (!button || !group || !input) return;
+        input.addEventListener("input", () => autoResizeTextarea(input));
+        button.addEventListener("click", () => {
+            group.hidden = false;
+            button.hidden = true;
+            autoResizeTextarea(input);
+            input.focus();
+        });
+    };
+    setupDescriptionField("btn-add-task-description", "task-description-group", "task-description");
+    setupDescriptionField("btn-edit-task-description", "edit-task-description-group", "edit-task-description");
+
+    formAddTask.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (suppressTaskAutocompleteSubmit) {
+            suppressTaskAutocompleteSubmit = false;
+            return;
+        }
+        const btnSubmit = formAddTask.querySelector("button[type='submit']");
+        if (!btnSubmit || btnSubmit.disabled) return;
+        btnSubmit.disabled = true;
+        const originalText = btnSubmit.innerHTML;
+        btnSubmit.innerHTML = `<span class="loading-spinner"></span> Salvando...`;
+
+        const taskDateInput = document.getElementById("task-date");
+        const taskDate = taskDateInput ? taskDateInput.value : null;
+
+        // Collect repeat days
+        let repeatDays = null;
+        if (selectTaskRecurring.value === "repeat") {
+            const selectedDays = Array.from(document.querySelectorAll("#repeat-days-group .day-toggle.active")).map(b => parseInt(b.dataset.day));
+            if (selectedDays.length === 0) {
+                alert("Selecione pelo menos um dia da semana para repetir.");
+                btnSubmit.disabled = false;
+                btnSubmit.innerHTML = originalText;
+                return;
+            }
+            repeatDays = selectedDays;
+        }
+
+        // Collect selected shifts (turnos)
+        const shifts = Array.from(document.querySelectorAll("#add-shift-selector .shift-toggle-btn.active")).map(b => b.dataset.shift);
+
+        try {
+            const assignedTo = isTrainingCollaborativeCategory(selectTaskCategory.value) ? null : (selectTaskAssignedTo ? selectTaskAssignedTo.value : null);
+            const chkImp = document.getElementById("task-important");
+            const important = chkImp ? chkImp.checked : false;
+            
+            const queuedSharedTask = Boolean(assignedTo) && !navigator.onLine;
+            const description = document.getElementById("task-description")?.value.trim() || "";
+            localStorage.setItem(`checklist_last_add_category_${currentUser?.id || "local"}`, selectTaskCategory.value);
+            await addTask(inputTaskTitle.value.trim(), selectTaskCategory.value, selectTaskRecurring.value, taskDate, repeatDays, assignedTo, shifts, important, null, 0, description);
+            if (queuedSharedTask) {
+                showAppNotice("Tarefa salva neste celular, mas ainda não enviada ao responsável. Para a outra pessoa receber, este celular precisa recuperar a internet e sincronizar o app.", "warning");
+            }
+            inputTaskTitle.value = "";
+            const descriptionInput = document.getElementById("task-description");
+            const descriptionGroup = document.getElementById("task-description-group");
+            const descriptionButton = document.getElementById("btn-add-task-description");
+            if (descriptionInput) descriptionInput.value = "";
+            if (descriptionGroup) descriptionGroup.hidden = true;
+            if (descriptionButton) descriptionButton.hidden = false;
+            // Reset day toggles
+            document.querySelectorAll("#repeat-days-group .day-toggle").forEach(b => b.classList.remove("active"));
+            document.getElementById("repeat-days-group").style.display = "none";
+            // Limpa seleção de turnos
+            document.querySelectorAll("#add-shift-selector .shift-toggle-btn").forEach(b => b.classList.remove("active"));
+            if (chkImp) chkImp.checked = false;
+            addTaskReminders = [];
+            updateTaskReminderSummary("add", false, addTaskReminders);
+            selectTaskRecurring.value = "once";
+            closeModal(modalAddTask);
+        } catch (error) {
+            console.error("Erro ao adicionar tarefa: ", error);
+        } finally {
+            btnSubmit.disabled = false;
+            btnSubmit.innerHTML = originalText;
+        }
+    });
+
+    // Edit Task Modal listeners
+    const modalEditTask = document.getElementById("modal-edit-task");
+    const btnCloseEditModal = document.getElementById("btn-close-edit-modal");
+    const formEditTask = document.getElementById("form-edit-task");
+    const editRecurringSelect = document.getElementById("edit-task-recurring");
+
+    btnCloseEditModal.addEventListener("click", () => closeModal(modalEditTask));
+
+    editRecurringSelect.addEventListener("change", () => {
+        const group = document.getElementById("edit-repeat-days-group");
+        group.style.display = editRecurringSelect.value === "repeat" ? "block" : "none";
+    });
+
+    document.querySelectorAll(".edit-day-toggle").forEach(btn => {
+        btn.addEventListener("click", () => {
+            btn.classList.toggle("active");
+        });
+    });
+
+    formEditTask.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const taskId = document.getElementById("edit-task-id").value;
+        const newTitle = document.getElementById("edit-task-title").value.trim();
+        const recMode = editRecurringSelect.value;
+        const newDate = document.getElementById("edit-task-date").value;
+
+        if (!newTitle) return;
+
+        const isRecurring = recMode !== "once";
+        let repeatDays = null;
+
+        if (recMode === "repeat") {
+            const selectedDays = Array.from(document.querySelectorAll(".edit-day-toggle.active")).map(b => parseInt(b.dataset.day));
+            if (selectedDays.length === 0) {
+                alert("Selecione pelo menos um dia da semana.");
+                return;
+            }
+            repeatDays = selectedDays;
+        }
+
+        const createdAt = newDate ? new Date(newDate + "T12:00:00").toISOString() : undefined;
+
+        const newCategory = selectEditTaskCategory ? selectEditTaskCategory.value : null;
+        const editShifts = Array.from(document.querySelectorAll("#edit-shift-selector .shift-toggle-btn.active")).map(b => b.dataset.shift);
+
+        // Mescla turnos no context existente (evita bugs caso seja string stringificada)
+        const existingTask = tasks.find(t => String(t.id) === String(taskId));
+        if (existingTask && isTrainingCategory(existingTask.category) && !isTrainingTaskOwnedByCurrentUser(existingTask)) {
+            showAppNotice("Somente o dono pode editar esta tarefa de treino.", "warning");
+            closeModal(modalEditTask);
+            return;
+        }
+        const assignedTo = newCategory && isTrainingCollaborativeCategory(newCategory) ? null : (selectEditTaskAssignedTo ? selectEditTaskAssignedTo.value : null);
+        let context = {};
+        if (existingTask && existingTask.context) {
+            if (typeof existingTask.context === 'string') {
+                try {
+                    context = JSON.parse(existingTask.context);
+                } catch (e) {
+                    context = {};
+                }
+            } else {
+                context = { ...existingTask.context };
+            }
+        }
+        context.turnos = editShifts;
+        if (recMode === "interval14") {
+            context.recurrence_type = "interval";
+            context.recurrence_interval_days = 14;
+        } else {
+            delete context.recurrence_type;
+            delete context.recurrence_interval_days;
+        }
+        const editedDescription = document.getElementById("edit-task-description")?.value.trim() || "";
+        // O valor vazio precisa ser explícito: updateTask mescla o contexto
+        // anterior para preservar lembretes e turnos, portanto apenas apagar a
+        // propriedade faria a descrição antiga reaparecer nessa mesclagem.
+        context.description = editedDescription;
+        const chkEditImp = document.getElementById("edit-task-important");
+        if (chkEditImp) {
+            context.important = chkEditImp.checked;
+            if (chkEditImp.checked) {
+                context.reminders = normalizeTaskReminders(editTaskReminders);
+                const firstReminder = context.reminders[0];
+                context.reminder_time = firstReminder.time;
+                context.reminder_offset_days = firstReminder.offset_days;
+                context.reminder_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
+            } else {
+                delete context.reminders;
+                delete context.reminder_time;
+                delete context.reminder_offset_days;
+                delete context.reminder_timezone;
+            }
+        }
+
+        const updates = {
+            title: newTitle,
+            is_recurring: isRecurring,
+            repeat_days: repeatDays,
+            assigned_to: assignedTo || null,
+            context: context
+        };
+        if (newCategory) updates.category = newCategory;
+        if (createdAt) updates.created_at = createdAt;
+
+        // Parse ID (handle uuid string or int)
+        const parsedId = String(taskId).match(/^\d+$/) ? parseInt(taskId, 10) : taskId;
+        const updated = await updateTask(parsedId, updates);
+        if (updated) closeModal(modalEditTask);
+    });
+
+    // Notifications Modal Events
+    if (btnNotifications) {
+        btnNotifications.addEventListener("click", () => {
+            markCurrentInvitesAsSeen();
+            renderNotifications();
+            openModal(modalNotifications);
+            markSharedTaskNotificationsAsRead();
+        });
+    }
+
+    if (notificationsEnabledToggle) {
+        notificationsEnabledToggle.addEventListener("click", toggleNotificationsPreference);
+        updateNotificationsSettingUI();
+    }
+    btnRepairTestPush?.addEventListener("click", repairAndTestPushNotifications);
+    if (inputProfileAvatar) {
+        inputProfileAvatar.addEventListener("change", async () => {
+            const file = inputProfileAvatar.files && inputProfileAvatar.files[0];
+            if (!file) return;
+            inputProfileAvatar.disabled = true;
+            try {
+                await uploadProfileAvatar(file);
+                showAppNotice("Foto do perfil atualizada.", "success");
+            } catch (error) {
+                showAppNotice(`Não foi possível salvar a foto: ${error.message}`, "warning");
+            } finally {
+                inputProfileAvatar.value = "";
+                inputProfileAvatar.disabled = false;
+            }
+        });
+    }
+
+    if (btnCloseNotificationsModal) {
+        btnCloseNotificationsModal.addEventListener("click", () => {
+            closeModal(modalNotifications);
+        });
+    }
+
+    // Manual Checklist / Notepad Events
+    if (btnOpenManualChecklist) {
+        btnOpenManualChecklist.addEventListener("click", () => {
+            closeModal(modalManageTasks);
+            openModal(modalManualChecklist);
+            loadManualChecklist();
+            loadManualNotes();
+        });
+    }
+
+    btnClearNotifications?.addEventListener("click", clearNotificationHistory);
+
+    if (btnCloseManualChecklistModal) {
+        btnCloseManualChecklistModal.addEventListener("click", () => {
+            closeModal(modalManualChecklist);
+        });
+    }
+
+    // Tabs switcher for manual checklist
+    if (tabManualChecklist && tabManualNotepad) {
+        tabManualChecklist.addEventListener("click", () => {
+            tabManualChecklist.style.background = "var(--bg-surface-solid)";
+            tabManualChecklist.style.color = "var(--text-primary)";
+            tabManualNotepad.style.background = "transparent";
+            tabManualNotepad.style.color = "var(--text-secondary)";
+            contentManualChecklist.style.display = "flex";
+            contentManualNotepad.style.display = "none";
+        });
+        
+        tabManualNotepad.addEventListener("click", () => {
+            tabManualNotepad.style.background = "var(--bg-surface-solid)";
+            tabManualNotepad.style.color = "var(--text-primary)";
+            tabManualChecklist.style.background = "transparent";
+            tabManualChecklist.style.color = "var(--text-secondary)";
+            contentManualChecklist.style.display = "none";
+            contentManualNotepad.style.display = "flex";
+        });
+    }
+
+    // Add manual item
+    if (btnAddManualItem) {
+        btnAddManualItem.addEventListener("click", () => {
+            const text = inputManualItem.value.trim();
+            if (text) {
+                addManualItem(text);
+                inputManualItem.value = "";
+            }
+        });
+    }
+
+    if (inputManualItem) {
+        inputManualItem.addEventListener("keypress", (e) => {
+            if (e.key === "Enter") {
+                const text = inputManualItem.value.trim();
+                if (text) {
+                    addManualItem(text);
+                    inputManualItem.value = "";
+                }
+            }
+        });
+    }
+
+    // Clear completed manual items
+    if (btnClearCompletedManual) {
+        btnClearCompletedManual.addEventListener("click", () => {
+            clearCompletedManualItems();
+        });
+    }
+
+    // Notepad auto save
+    if (textareaManualNotes) {
+        textareaManualNotes.addEventListener("input", (e) => {
+            localStorage.setItem("checklist_manual_notes", e.target.value);
+        });
+    }
+
+    // Compartilhar checklist pelo menu nativo do aparelho
+    const handleShareReport = (e) => {
+        const now = Date.now();
+        // Cooldown de 300ms para evitar duplo acionamento (pointerdown + click)
+        if (now - lastShareInteractionTime < 300) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
+        lastShareInteractionTime = now;
+
+        e.preventDefault();
+        e.stopPropagation();
+        const fabMenu = document.getElementById("fab-menu");
+        if (fabMenu) fabMenu.classList.remove("open");
+        shareReport();
+    };
+
+    btnShareReport.addEventListener("click", handleShareReport);
+
+    // Close FAB menu when clicking outside, scrolling, or swiping past a threshold
+    const closeFabMenu = () => {
+        const fabMenu = document.getElementById("fab-menu");
+        if (fabMenu && fabMenu.classList.contains("open")) {
+            fabMenu.classList.remove("open");
+        }
+    };
+
+    document.addEventListener("click", (e) => {
+        const fabMenu = document.getElementById("fab-menu");
+        if (fabMenu && fabMenu.classList.contains("open")) {
+            if (!fabMenu.contains(e.target)) {
+                closeFabMenu();
+            }
+        }
+    });
+
+
+
+    // Fecha se arrastar o dedo na tela principal (fora do menu)
+    document.addEventListener("touchmove", (e) => {
+        const fabMenu = document.getElementById("fab-menu");
+        if (fabMenu && fabMenu.classList.contains("open")) {
+            if (!fabMenu.contains(e.target)) {
+                // Apenas se arrastar mais de 15px
+                const currentScrollY = window.scrollY;
+                const currentTasksScroll = tasksListEl ? tasksListEl.scrollTop : 0;
+                if (Math.abs(currentScrollY - initialScrollY) > 15 || Math.abs(currentTasksScroll - initialTasksScrollTop) > 15) {
+                    closeFabMenu();
+                }
+            }
+        }
+    }, { passive: true });
+
+    // Theme Selection Event Listeners
+    const themeBtns = document.querySelectorAll(".theme-selector-btn");
+    themeBtns.forEach(btn => {
+        btn.addEventListener("click", () => {
+            applyTheme(btn.dataset.theme);
+            renderChecklist();
+        });
+    });
+
+    // Sincroniza dados locais com a nuvem quando a conexão com a internet é restaurada
+    window.addEventListener("online", () => {
+        console.log("Internet restaurada! Sincronizando dados offline...");
+        setSyncStatus("syncing", "Salvando…", "Conexão restaurada; sincronizando alterações");
+        cloudSyncRetryCount = 0;
+        scheduleCloudSync("conexão-restaurada", 50);
+        scheduleTrainingPhotoUpload("conexão-restaurada", 50);
+    });
+
+    window.addEventListener("offline", () => {
+        refreshSyncStatusFromQueues();
+    });
+
+    syncStatusEl?.addEventListener("click", () => {
+        if (!navigator.onLine) {
+            showAppNotice("Sem conexão. Suas alterações permanecem guardadas neste aparelho.", "warning");
+            return;
+        }
+        if (hasPendingTrainingPhotoUploads()) {
+            scheduleTrainingPhotoUpload("toque-do-usuário", 0);
+            if (!hasPendingSyncData() && !cloudSyncLastError) {
+                showAppNotice("A foto do treino está sendo enviada em segundo plano.", "success");
+                return;
+            }
+        }
+        if (!hasPendingSyncData() && !cloudSyncLastError) {
+            loadChecklistAndProgress().then(() => refreshSyncStatusFromQueues());
+            return;
+        }
+        cloudSyncRetryCount = 0;
+        scheduleCloudSync("toque-do-usuário", 0);
+    });
+    syncStatusEl?.addEventListener("keydown", event => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        syncStatusEl.click();
+    });
+
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+            if (hasPendingSyncData()) scheduleCloudSync("app-retomado", 120);
+            scheduleTrainingPhotoUpload("app-retomado", 120);
+            pullCassolDashboardTasks();
+        }
+    });
+    window.addEventListener("focus", () => {
+        if (hasPendingSyncData()) scheduleCloudSync("janela-em-foco", 180);
+        scheduleTrainingPhotoUpload("janela-em-foco", 180);
+        pullCassolDashboardTasks();
+    });
+    setInterval(() => {
+        if (document.visibilityState === "visible" && navigator.onLine && hasPendingSyncData()) scheduleCloudSync("verificação-periódica", 0);
+        if (document.visibilityState === "visible" && navigator.onLine) scheduleTrainingPhotoUpload("verificação-de-foto", 0);
+    }, 30000);
+
+    // Auth Listeners & Forms
+    const formAuth = document.getElementById("form-auth");
+    const inputAuthEmail = document.getElementById("auth-email");
+    const inputAuthPassword = document.getElementById("auth-password");
+    const btnAuthSubmit = document.getElementById("btn-auth-submit");
+    const btnAuthToggle = document.getElementById("btn-auth-toggle");
+    const authTitle = document.getElementById("auth-title");
+    const authSubtitle = document.getElementById("auth-subtitle");
+    const authErrorMsg = document.getElementById("auth-error-msg");
+    const authIdentityLabel = document.getElementById("auth-identity-label");
+    const btnLogout = document.getElementById("btn-logout");
+
+    if (inputUserIdentifier) {
+        inputUserIdentifier.addEventListener("input", () => {
+            const normalized = normalizeUserIdentifier(inputUserIdentifier.value);
+            if (inputUserIdentifier.value !== normalized) inputUserIdentifier.value = normalized;
+            if (identifierError) identifierError.textContent = "";
+        });
+    }
+
+    if (formCreateIdentifier) {
+        formCreateIdentifier.addEventListener("submit", async event => {
+            event.preventDefault();
+            const desiredUsername = normalizeUserIdentifier(inputUserIdentifier.value);
+            if (!/^[a-z0-9._-]{3,24}$/.test(desiredUsername)) {
+                identifierError.textContent = "Use 3 a 24 caracteres válidos e não coloque espaços.";
+                return;
+            }
+            const button = document.getElementById("btn-confirm-identifier");
+            button.disabled = true;
+            button.textContent = "Confirmando…";
+            const { data, error } = await supabaseClient.rpc("claim_user_identifier", { desired_username: desiredUsername });
+            if (error) {
+                identifierError.textContent = error.message.includes("já está") ? "Este ID já está em uso. Escolha outro." : error.message;
+                button.disabled = false;
+                button.textContent = "Confirmar meu ID";
+                return;
+            }
+            currentUsername = data || desiredUsername;
+            collaborationIdentityByEmail.set(normalizeAccountEmail(currentUser.email), currentUsername);
+            modalCreateIdentifier.classList.remove("active");
+            modalCreateIdentifier.setAttribute("aria-hidden", "true");
+            button.disabled = false;
+            button.textContent = "Confirmar meu ID";
+            if (identifierSetupResolver) identifierSetupResolver();
+            identifierSetupResolver = null;
+        });
+    }
+
+    if (btnAuthToggle) {
+        btnAuthToggle.addEventListener("click", () => {
+            isAuthModeLogin = !isAuthModeLogin;
+            authErrorMsg.style.display = "none";
+            
+            if (isAuthModeLogin) {
+                authTitle.textContent = "Checklist Nuvem";
+                authSubtitle.textContent = "Entre com seus dados para sincronizar suas tarefas e locais com segurança.";
+                btnAuthSubmit.textContent = "Entrar";
+                document.getElementById("auth-toggle-text").textContent = "Não tem uma conta?";
+                btnAuthToggle.textContent = "Cadastre-se";
+                authIdentityLabel.textContent = "E-mail ou ID";
+                inputAuthEmail.type = "text";
+                inputAuthEmail.placeholder = "seu_id ou nome@exemplo.com";
+            } else {
+                authTitle.textContent = "Criar Conta";
+                authSubtitle.textContent = "Cadastre-se gratuitamente para manter seu checklist salvo na nuvem.";
+                btnAuthSubmit.textContent = "Cadastrar Conta";
+                document.getElementById("auth-toggle-text").textContent = "Já tem uma conta?";
+                btnAuthToggle.textContent = "Fazer Login";
+                authIdentityLabel.textContent = "E-mail";
+                inputAuthEmail.type = "email";
+                inputAuthEmail.placeholder = "nome@exemplo.com";
+            }
+        });
+    }
+
+    if (formAuth) {
+        formAuth.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            if (!supabaseClient) {
+                alert("Erro: Conexão com Supabase não disponível.");
+                return;
+            }
+
+            authErrorMsg.style.display = "none";
+            btnAuthSubmit.disabled = true;
+            const originalText = btnAuthSubmit.innerHTML;
+            btnAuthSubmit.innerHTML = `<span class="loading-spinner"></span> Carregando...`;
+
+            let email = inputAuthEmail.value.trim();
+            const password = inputAuthPassword.value;
+
+            try {
+                if (isAuthModeLogin) {
+                    if (!email.includes("@")) {
+                        const { data: resolvedEmail, error: resolveError } = await supabaseClient.rpc("resolve_login_email", { login_identifier: normalizeUserIdentifier(email) });
+                        if (resolveError || !resolvedEmail) throw new Error("ID ou senha incorretos.");
+                        email = resolvedEmail;
+                    }
+                    const { error } = await supabaseClient.auth.signInWithPassword({
+                        email,
+                        password
+                    });
+                    if (error) throw error;
+                } else {
+                    const { data, error } = await supabaseClient.auth.signUp({
+                        email,
+                        password
+                    });
+                    if (error) throw error;
+                    
+                    // Se o Supabase retornar uma sessão imediatamente (confirmação desativada), loga automático!
+                    if (data && data.session) {
+                        // O onAuthStateChange cuidará do resto
+                    } else {
+                        alert("Conta criada com sucesso! Faça login para começar.");
+                        isAuthModeLogin = true;
+                        btnAuthToggle.click();
+                    }
+                }
+            } catch (error) {
+                console.error("Erro na autenticação:", error);
+                authErrorMsg.textContent = error.message || "Erro desconhecido. Verifique suas credenciais.";
+                authErrorMsg.style.display = "block";
+            } finally {
+                btnAuthSubmit.disabled = false;
+                btnAuthSubmit.innerHTML = originalText;
+            }
+        });
+    }
+
+    if (btnLogout) {
+        btnLogout.addEventListener("click", async () => {
+            if (await showAppConfirm("Deseja sair da sua conta?", { title: "Encerrar sessão", confirmText: "Sair" })) {
+                if (supabaseClient) {
+                    clearLocalUserCache();
+                    await supabaseClient.auth.signOut();
+                    closeModal(modalManageTasks);
+                }
+            }
+        });
+    }
+
+    // Custom Delete Confirmation Modal Actions
+    const handleConfirmDeleteChoice = (choice) => {
+        closeModal(modalConfirmDelete);
+        if (confirmDeleteCallback) {
+            confirmDeleteCallback(choice);
+            confirmDeleteCallback = null;
+        }
+    };
+
+    if (btnConfirmDeleteCancel) btnConfirmDeleteCancel.addEventListener("click", () => handleConfirmDeleteChoice("cancel"));
+    if (btnConfirmDeleteOk) btnConfirmDeleteOk.addEventListener("click", () => handleConfirmDeleteChoice("all"));
+    if (btnConfirmDeleteRecurringToday) btnConfirmDeleteRecurringToday.addEventListener("click", () => handleConfirmDeleteChoice("today"));
+    if (btnConfirmDeleteRecurringAll) btnConfirmDeleteRecurringAll.addEventListener("click", () => handleConfirmDeleteChoice("all"));
+    if (btnConfirmDeleteRecurringCancel) btnConfirmDeleteRecurringCancel.addEventListener("click", () => handleConfirmDeleteChoice("cancel"));
+
+    // Collaborators Modal Events
+    if (btnCloseCollaboratorsModal) {
+        btnCloseCollaboratorsModal.addEventListener("click", () => {
+            closeModal(modalCollaborators);
+        });
+    }
+
+    if (btnAddCollab) {
+        btnAddCollab.addEventListener("click", () => {
+            const catId = String(collabCategoryId.value).match(/^\d+$/) ? parseInt(collabCategoryId.value, 10) : collabCategoryId.value;
+            const email = inputCollabEmail.value;
+            inviteCollaborator(catId, email);
+        });
+    }
+
+    if (inputCollabEmail) {
+        inputCollabEmail.addEventListener("keypress", (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                const catId = String(collabCategoryId.value).match(/^\d+$/) ? parseInt(collabCategoryId.value, 10) : collabCategoryId.value;
+                const email = inputCollabEmail.value;
+                inviteCollaborator(catId, email);
+            }
+        });
+    }
+
+    // Info Notificar Modal Events
+    const modalNotificationInfo = document.getElementById("modal-notification-info");
+    const btnCloseNotificationInfo = document.getElementById("btn-close-notification-info");
+    if (btnCloseNotificationInfo) {
+        btnCloseNotificationInfo.addEventListener("click", () => {
+            closeModal(modalNotificationInfo);
+        });
+    }
+
+    document.querySelectorAll(".btn-notification-info").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openModal(modalNotificationInfo);
+        });
+    });
+
+    const modalPastNightInfo = document.getElementById("modal-past-night-info");
+    const btnClosePastNightInfo = document.getElementById("btn-close-past-night-info");
+    if (btnClosePastNightInfo) {
+        btnClosePastNightInfo.addEventListener("click", () => closeModal(modalPastNightInfo));
+    }
+    const overlayPastNightInfo = modalPastNightInfo?.querySelector(".modal-overlay");
+    if (overlayPastNightInfo) {
+        overlayPastNightInfo.addEventListener("click", () => closeModal(modalPastNightInfo));
+    }
+    document.addEventListener("click", event => {
+        const infoButton = event.target.closest(".btn-past-night-info");
+        if (!infoButton) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openModal(modalPastNightInfo);
+    });
+
+    // Habilita deslize para baixo (swipe-down-to-close) em todos os modais
+    document.querySelectorAll(".modal:not(.identifier-modal)").forEach(setupModalSwipeToClose);
+}
+
+function clearLocalUserCache() {
+    const identityCacheKey = getCollaborationIdentityCacheKey();
+    [
+        "offline_categories", "offline_tasks", "offline_completions",
+        "offline_category_shares", "offline_completions_queue",
+        "offline_task_updates_queue", "offline_category_updates_queue",
+        "offline_collaboration_invites_queue", CASSOL_DASHBOARD_SYNC_QUEUE_KEY
+    ].forEach(key => localStorage.removeItem(key));
+    [
+        "checklist_device_cache_ready", "checklist_last_user_id",
+        "checklist_last_user_email", "pending_training_photo_uploads",
+        "checklist_snapshot_categories", "checklist_snapshot_tasks",
+        "checklist_snapshot_completions"
+    ].forEach(key => localPrefs.removeItem(key));
+    if (identityCacheKey) localPrefs.removeItem(identityCacheKey);
+}
+
+// ----------------------------------------------------
+// Connection setup
+// ----------------------------------------------------
+function connectSupabase() {
+    if (SUPABASE_URL && SUPABASE_KEY) {
+        try {
+            if (typeof supabase !== 'undefined') {
+                supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+                console.log("Supabase conectado com chaves fixas.");
+            } else {
+                console.warn("Script SDK Supabase não carregado.");
+                supabaseClient = null;
+            }
+        } catch (e) {
+            console.error("Falha ao criar cliente Supabase: ", e);
+            supabaseClient = null;
+        }
+    } else {
+        supabaseClient = null;
+    }
+    // Identidade isolada para testes locais de interface. Não cria sessão nem
+    // concede acesso à nuvem e é ignorada fora de localhost.
+    if (!supabaseClient && /^(localhost|127\.0\.0\.1)$/.test(location.hostname) && window.__CHECKLIST_E2E_USER__) {
+        currentUser = { ...window.__CHECKLIST_E2E_USER__ };
+        currentUsername = String(currentUser.email || "teste").split("@")[0];
+    }
+}
+
+// ----------------------------------------------------
+// UI Logic & Rendering
+// ----------------------------------------------------
+function updateDateDisplay() {
+    const dateObj = new Date(selectedDate + "T12:00:00"); // Evita problemas de fuso horário
+    const day = dateObj.getDate();
+    
+    // Nomes abreviados em português
+    const dayNames = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+    const abbreviatedDay = dayNames[dateObj.getDay()];
+    
+    const monthNames = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+    const abbreviatedMonth = monthNames[dateObj.getMonth()];
+    
+    const year = dateObj.getFullYear();
+    
+    // Formato: "Ter, 14 Jul 2026"
+    const dateString = `${abbreviatedDay}, ${day} ${abbreviatedMonth} ${year}`;
+    currentDateEl.textContent = dateString;
+    
+    // Novos elementos compactos quadrados
+    const dayNumEl = document.getElementById("current-date-day-num");
+    const dayMonthEl = document.getElementById("current-date-day-month");
+    const dayWeekdayEl = document.getElementById("current-date-day-weekday");
+    
+    if (dayNumEl) dayNumEl.textContent = day;
+    if (dayMonthEl) dayMonthEl.textContent = `${abbreviatedMonth} ${year}`;
+    if (dayWeekdayEl) dayWeekdayEl.textContent = abbreviatedDay;
+    
+    const miniDateTextEl = document.getElementById("header-mini-date-text");
+    if (miniDateTextEl) {
+        const options = { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' };
+        const fullDateString = dateObj.toLocaleDateString('pt-BR', options);
+        miniDateTextEl.textContent = fullDateString.charAt(0).toUpperCase() + fullDateString.slice(1);
+    }
+    
+    updateDateState();
+}
+
+function updateDateState() {
+    const now = new Date();
+    const todayStr = getLocalDateString(now);
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = getLocalDateString(yesterday);
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = getLocalDateString(tomorrow);
+    const historyBadge = document.getElementById("history-badge");
+    const miniDateBadge = document.getElementById("header-mini-date-badge");
+
+    if (selectedDate < todayStr) {
+        isHistoryMode = true;
+        appContainer.classList.add("history-mode");
+        appContainer.classList.remove("planning-mode", "today-mode", "tomorrow-mode");
+        appContainer.classList.toggle("yesterday-mode", selectedDate === yesterdayStr);
+        toggleEditMode(false);
+        const pastLabel = selectedDate === yesterdayStr ? "Ontem" : "Histórico";
+        if (historyBadge) historyBadge.innerHTML = pastLabel;
+        if (miniDateBadge) miniDateBadge.innerHTML = pastLabel;
+    } else if (selectedDate > todayStr) {
+        isHistoryMode = false;
+        appContainer.classList.add("planning-mode");
+        appContainer.classList.remove("history-mode", "today-mode", "yesterday-mode");
+        appContainer.classList.toggle("tomorrow-mode", selectedDate === tomorrowStr);
+        const futureLabel = selectedDate === tomorrowStr ? "Amanhã" : "Planejamento";
+        if (historyBadge) historyBadge.innerHTML = futureLabel;
+        if (miniDateBadge) miniDateBadge.innerHTML = futureLabel;
+    } else {
+        isHistoryMode = false;
+        appContainer.classList.add("today-mode");
+        appContainer.classList.remove("history-mode", "planning-mode", "yesterday-mode", "tomorrow-mode");
+        if (historyBadge) historyBadge.innerHTML = '<span class="pulse-dot"></span>Hoje';
+        if (miniDateBadge) miniDateBadge.innerHTML = '<span class="pulse-dot"></span>Hoje';
+    }
+}
+
+function getTaskRenderFingerprint(taskList = tasks) {
+    return JSON.stringify(taskList.map(task => [
+        String(task.id), task.title, task.category, String(task.category_id || ""),
+        Boolean(task.completed), Boolean(task.is_recurring), JSON.stringify(task.repeat_days || []),
+        String(task.assigned_to || ""), task.created_at, JSON.stringify(task.context || {})
+    ].join("|")).sort());
+}
+
+function getCategoryRenderFingerprint(categoryList = categories) {
+    return JSON.stringify(categoryList.map(category => [
+        String(category.id), category.name, category.type || "", category.color || "", category.is_active !== false,
+        JSON.stringify(category.merged_category_ids || [])
+    ].join("|")));
+}
+
+async function loadChecklistAndProgress(skipOfflineReload = false, skipInitialRender = false) {
+    // 1. Recarrega dados do localStorage, exceto quando chamado após uma mutação otimista local
+    // (toggle, drag, delete) — nesses casos, tasks já está correto e recarregar causaria flash de 0%
+    if (!skipOfflineReload) {
+        loadDataOffline();
+    }
+
+    const taskEditorOpen = Boolean(modalAddTask?.classList.contains("active") || modalEditTask?.classList.contains("active"));
+    if (!skipInitialRender && !taskEditorOpen) {
+        renderCategories();
+        renderChecklist();
+        updateProgress();
+    } else if (!skipInitialRender && taskEditorOpen) {
+        // Realtime e sincronização podem chegar enquanto a pessoa digita.
+        // Mantemos os dados em memória, mas adiamos a reconstrução visual para
+        // não recriar selects nem repintar o fundo sob o modal.
+        deferredTaskEditorBackgroundRender = true;
+    }
+    checkAutomaticReports();
+    if (typeof checkImportantTaskNotifications === "function") {
+        checkImportantTaskNotifications();
+    }
+
+    updateCollaborationInviteAttention();
+
+    // 2. Revalida com o Supabase em segundo plano sem travar a interface do usuário
+    if (supabaseClient && currentUser) {
+        // Se houver qualquer sincronização pendente na fila offline, não busca dados do servidor ainda.
+        // Isso impede que dados antigos do servidor sobrescrevam alterações locais que ainda não foram enviadas.
+        const localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+        const hasPendingCats = localCats.some(c => isTemporaryId(c.id) && c.is_active !== false);
+        
+        const localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+        const hasPendingTasks = localTasks.some(t => isTemporaryId(t.id) && t.is_active !== false);
+        
+        const compQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+        const hasPendingCompletions = Object.keys(compQueue).length > 0;
+        
+        const updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+        const hasPendingUpdates = Object.keys(updatesQueue).length > 0;
+        const categoryUpdatesQueue = JSON.parse(localStorage.getItem("offline_category_updates_queue")) || {};
+        const hasPendingCategoryUpdates = Object.keys(categoryUpdatesQueue).length > 0;
+
+        if (hasPendingCats || hasPendingTasks || hasPendingCompletions || hasPendingUpdates || hasPendingCategoryUpdates) {
+            // loadData mescla tarefas/categorias temporárias e aplica as filas
+            // por cima da resposta. Portanto podemos receber alterações de
+            // outros aparelhos sem deixar uma única pendência congelar toda a
+            // conta.
+            console.log("[Sync] Revalidando com alterações locais protegidas pela fila.");
+        }
+
+        // Guarda fingerprint dos dados atuais para comparar depois
+        const fingerprintBefore = getTaskRenderFingerprint();
+        const catFingerprintBefore = getCategoryRenderFingerprint();
+
+        loadData().then((didUpdate) => {
+            if (!didUpdate) return; // Se o fetch foi abortado (ex: o usuário arrastou uma tarefa), não re-renderiza nada
+
+            // Só re-renderiza se os dados realmente mudaram — evita flash desnecessário
+            const fingerprintAfter = getTaskRenderFingerprint();
+            const catFingerprintAfter = getCategoryRenderFingerprint();
+
+            const editorStillOpen = Boolean(modalAddTask?.classList.contains("active") || modalEditTask?.classList.contains("active"));
+            if (editorStillOpen && (fingerprintAfter !== fingerprintBefore || catFingerprintAfter !== catFingerprintBefore)) {
+                deferredTaskEditorBackgroundRender = true;
+            } else if (fingerprintAfter !== fingerprintBefore) {
+                renderChecklist();
+                updateProgress();
+            }
+            if (!editorStillOpen && catFingerprintAfter !== catFingerprintBefore) {
+                renderCategories();
+            }
+            updateCollaborationInviteAttention();
+        }).catch(err => {
+            console.warn("Erro silencioso ao revalidar dados do Supabase:", err);
+        });
+    }
+}
+
+function normalizeAccountEmail(email) {
+    return String(email || "").trim().toLowerCase();
+}
+
+function normalizeUserIdentifier(value) {
+    return String(value || "").trim().toLowerCase().replace(/\s+/g, "");
+}
+
+function getIdentityLabel(email) {
+    const normalized = normalizeAccountEmail(email);
+    if (currentUser && normalized === normalizeAccountEmail(currentUser.email) && currentUsername) return `@${currentUsername}`;
+    const username = collaborationIdentityByEmail.get(normalized);
+    return username ? `@${username}` : normalized;
+}
+
+function getPlainIdentityLabel(email) {
+    return getIdentityLabel(email).replace(/^@/, "");
+}
+
+function getIdentityAvatar(email) {
+    return getCachedAvatarUrl(collaborationAvatarByEmail.get(normalizeAccountEmail(email)) || "");
+}
+
+function getIdentityLabelByUserId(userId) {
+    const username = collaborationIdentityByUserId.get(String(userId || ""));
+    return username ? `@${username}` : "";
+}
+
+function getIdentityAvatarByUserId(userId) {
+    return getCachedAvatarUrl(collaborationAvatarByUserId.get(String(userId || "")) || "");
+}
+
+function getCachedAvatarUrl(url) {
+    return url ? (persistentAvatarByUrl.get(url) || url) : "";
+}
+
+async function createProfileAvatarThumbnail(url) {
+    const response = await fetch(url, { cache: "force-cache" });
+    if (!response.ok) throw new Error("avatar indisponível");
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+        const image = await new Promise((resolve, reject) => {
+            const candidate = new Image();
+            candidate.onload = () => resolve(candidate);
+            candidate.onerror = () => reject(new Error("avatar inválido"));
+            candidate.src = objectUrl;
+        });
+        const size = 128;
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const context = canvas.getContext("2d");
+        const scale = Math.max(size / image.width, size / image.height);
+        const width = image.width * scale;
+        const height = image.height * scale;
+        context.drawImage(image, (size - width) / 2, (size - height) / 2, width, height);
+        return canvas.toDataURL("image/jpeg", .76);
+    } finally {
+        URL.revokeObjectURL(objectUrl);
+    }
+}
+
+function cachePriorityAvatars(urls) {
+    const uniqueUrls = [...new Set((urls || []).filter(url => url && !persistentAvatarByUrl.has(url) && !pendingAvatarCacheUrls.has(url)))];
+    if (!uniqueUrls.length) return;
+    const prioritizedUrls = uniqueUrls.slice(0, 12);
+    prioritizedUrls.forEach(url => pendingAvatarCacheUrls.add(url));
+    Promise.all(prioritizedUrls.map(async url => {
+        try {
+            persistentAvatarByUrl.set(url, await createProfileAvatarThumbnail(url));
+        } catch (_) {
+            // O endereço original continua sendo usado se a cópia local falhar.
+        } finally {
+            pendingAvatarCacheUrls.delete(url);
+        }
+    })).then(async () => {
+        const compactCache = Object.fromEntries([...persistentAvatarByUrl.entries()].slice(-40));
+        await idb.put("priority_profile_avatars", compactCache);
+        // A imagem original já está visível. A miniatura persistente entra na
+        // próxima abertura sem reconstruir toda a lista nesta sessão.
+        if (modalTrainingReport?.classList.contains("active")) paintTrainingReport(currentFilter !== "all" ? currentFilter : null);
+    }).catch(() => {});
+}
+
+function renderSettingsProfileAvatar() {
+    if (!settingsProfileAvatar) return;
+    const avatarUrl = currentUser ? getIdentityAvatar(currentUser.email) : "";
+    settingsProfileAvatar.innerHTML = avatarUrl ? `<img src="${escapeHTML(avatarUrl)}" alt="Foto do perfil">` : '<i data-lucide="user-round"></i>';
+    if (!avatarUrl && window.lucide) window.lucide.createIcons();
+}
+
+function refreshVisibleAssignedTaskAvatars() {
+    document.querySelectorAll(".task-item[data-id]").forEach(card => {
+        const task = tasks.find(item => String(item.id) === String(card.dataset.id));
+        if (!task?.assigned_to || isTrainingCollaborativeCategory(task.category)) return;
+        const avatar = card.querySelector(".task-assignee-avatar:not(.owner)");
+        if (!avatar) return;
+        const identityLabel = getIdentityLabel(task.assigned_to);
+        const avatarUrl = getIdentityAvatar(task.assigned_to);
+        avatar.title = `Atribuído a: ${identityLabel}`;
+        avatar.classList.toggle("has-photo", Boolean(avatarUrl));
+        if (avatarUrl) {
+            let image = avatar.querySelector("img");
+            if (!image) {
+                image = document.createElement("img");
+                image.alt = "";
+                avatar.replaceChildren(image);
+            }
+            if (image.getAttribute("src") !== avatarUrl) image.src = avatarUrl;
+        } else {
+            avatar.textContent = identityLabel.replace("@", "").substring(0, 2).toUpperCase();
+        }
+    });
+}
+
+async function uploadProfileAvatar(file) {
+    if (!supabaseClient || !currentUser || !file) return;
+    if (file.size > 5 * 1024 * 1024) throw new Error("Escolha uma imagem de até 5 MB.");
+    const extension = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+    const path = `${currentUser.id}/avatar.${extension}`;
+    const { error: uploadError } = await supabaseClient.storage.from("avatars").upload(path, file, { upsert: true, contentType: file.type });
+    if (uploadError) throw uploadError;
+    const { data } = supabaseClient.storage.from("avatars").getPublicUrl(path);
+    const avatarUrl = `${data.publicUrl}?v=${Date.now()}`;
+    const { error: profileError } = await supabaseClient.from("profiles").upsert({ id: currentUser.id, email: normalizeAccountEmail(currentUser.email), avatar_url: avatarUrl, updated_at: new Date().toISOString() });
+    if (profileError) throw profileError;
+    collaborationAvatarByEmail.set(normalizeAccountEmail(currentUser.email), avatarUrl);
+    collaborationAvatarByUserId.set(String(currentUser.id), avatarUrl);
+    cachePriorityAvatars([avatarUrl]);
+    renderSettingsProfileAvatar();
+    renderChecklist();
+}
+
+async function loadCollaborationIdentityLabels() {
+    if (!supabaseClient || !currentUser) return;
+    const emails = new Set([currentUser.email]);
+    (categoryShares || []).forEach(share => {
+        if (share.owner_email) emails.add(share.owner_email);
+        if (share.collaborator_email) emails.add(share.collaborator_email);
+    });
+    (allActiveTasks || []).forEach(task => { if (task.assigned_to) emails.add(task.assigned_to); });
+    const { data, error } = await supabaseClient.rpc("resolve_collaboration_identifiers", { lookup_emails: [...emails] });
+    if (error) console.warn("Não foi possível carregar IDs públicos por e-mail:", error.message);
+    else {
+        collaborationIdentityByEmail.clear();
+        collaborationAvatarByEmail.clear();
+        (data || []).forEach(item => {
+            collaborationIdentityByEmail.set(normalizeAccountEmail(item.email), item.username);
+            if (item.avatar_url) collaborationAvatarByEmail.set(normalizeAccountEmail(item.email), item.avatar_url);
+        });
+    }
+    const userIds = new Set([currentUser.id]);
+    (categories || []).forEach(category => { if (category.user_id) userIds.add(category.user_id); });
+    (allActiveTasks || []).forEach(task => { if (task.user_id) userIds.add(task.user_id); });
+    const { data: profiles, error: profilesError } = await supabaseClient.rpc("resolve_collaboration_profiles", { lookup_user_ids: [...userIds] });
+    if (profilesError) console.warn("Não foi possível carregar perfis pelo usuário:", profilesError.message);
+    else {
+        collaborationIdentityByUserId.clear();
+        collaborationAvatarByUserId.clear();
+        (profiles || []).forEach(profile => {
+            const userId = String(profile.user_id);
+            if (profile.username) collaborationIdentityByUserId.set(userId, profile.username);
+            if (profile.avatar_url) collaborationAvatarByUserId.set(userId, profile.avatar_url);
+            if (profile.email) {
+                collaborationIdentityByEmail.set(normalizeAccountEmail(profile.email), profile.username);
+                if (profile.avatar_url) collaborationAvatarByEmail.set(normalizeAccountEmail(profile.email), profile.avatar_url);
+            }
+        });
+    }
+    saveCollaborationIdentityCache();
+    renderSettingsProfileAvatar();
+    refreshVisibleAssignedTaskAvatars();
+    cachePriorityAvatars([
+        ...collaborationAvatarByEmail.values(),
+        ...collaborationAvatarByUserId.values(),
+        ...(allActiveTasks || []).map(task => task.context?.creator_avatar_url)
+    ]);
+}
+
+async function ensureCollaborationProfile(userId) {
+    const normalizedId = String(userId || "");
+    if (!normalizedId || collaborationIdentityByUserId.has(normalizedId) || !supabaseClient) return;
+    const { data, error } = await supabaseClient.rpc("resolve_collaboration_profiles", { lookup_user_ids: [normalizedId] });
+    if (error || !data?.[0]) return;
+    const profile = data[0];
+    if (profile.username) collaborationIdentityByUserId.set(normalizedId, profile.username);
+    if (profile.avatar_url) {
+        collaborationAvatarByUserId.set(normalizedId, profile.avatar_url);
+        cachePriorityAvatars([profile.avatar_url]);
+    }
+}
+
+async function ensureUserIdentifier() {
+    if (!supabaseClient || !currentUser) return;
+    const { data, error } = await supabaseClient.rpc("get_my_identifier");
+    if (error) throw new Error("A migração de ID ainda não foi aplicada no Supabase: " + error.message);
+    if (data) {
+        currentUsername = data;
+        collaborationIdentityByEmail.set(normalizeAccountEmail(currentUser.email), data);
+        return;
+    }
+    modalCreateIdentifier.classList.add("active");
+    modalCreateIdentifier.setAttribute("aria-hidden", "false");
+    setTimeout(() => inputUserIdentifier && inputUserIdentifier.focus(), 250);
+    await new Promise(resolve => { identifierSetupResolver = resolve; });
+}
+
+function getNotificationsPreferenceKey() {
+    return `notifications_enabled_${currentUser ? currentUser.id : "local"}`;
+}
+
+function urlBase64ToUint8Array(value) {
+    const padding = "=".repeat((4 - value.length % 4) % 4);
+    const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const raw = atob(base64);
+    return Uint8Array.from([...raw].map(character => character.charCodeAt(0)));
+}
+
+async function savePushSubscription(subscription) {
+    if (!supabaseClient || !currentUser || !subscription) return;
+    const json = subscription.toJSON();
+    // Mantém somente a assinatura atual deste navegador. Reinstalações e
+    // renovações do Web Push podem deixar endpoints antigos associados à conta.
+    const { error: cleanupError } = await supabaseClient.from("push_subscriptions")
+        .delete()
+        .eq("user_id", currentUser.id)
+        .eq("user_agent", navigator.userAgent)
+        .neq("endpoint", json.endpoint);
+    if (cleanupError) console.warn("Não foi possível remover assinaturas antigas deste navegador:", cleanupError.message);
+    const { error } = await supabaseClient.from("push_subscriptions").upsert({
+        user_id: currentUser.id,
+        endpoint: json.endpoint,
+        p256dh: json.keys && json.keys.p256dh,
+        auth: json.keys && json.keys.auth,
+        user_agent: navigator.userAgent,
+        updated_at: new Date().toISOString()
+    }, { onConflict: "endpoint" });
+    if (error) throw error;
+}
+
+let pushSubscriptionInFlight = null;
+let pushSubscriptionGeneration = 0;
+function awaitPushStep(promise, milliseconds, timeoutMessage) {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(timeoutMessage)), milliseconds)),
+    ]);
+}
+
+async function createOrRepairPushSubscription({ forceRefresh = false, onProgress = null } = {}) {
+    const reportProgress = (title, detail) => {
+        if (typeof onProgress === "function") onProgress(title, detail);
+    };
+    const operationGeneration = pushSubscriptionGeneration;
+    const assertCurrentOperation = () => {
+        if (operationGeneration !== pushSubscriptionGeneration) throw new Error("Cadastro substituído por uma nova tentativa.");
+    };
+    if (!areNotificationsEnabled() || !currentUser || Notification.permission !== "granted") return null;
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+        throw new Error("Este navegador não oferece suporte a Web Push.");
+    }
+    // `serviceWorker.ready` pode nunca resolver no Safari durante uma troca de
+    // versão, mesmo quando já existe um worker ativo controlando o PWA. Usa o
+    // registro atual diretamente e deixa `ready` apenas como último recurso.
+    reportProgress("Registrando aplicativo…", "Preparando o serviço de notificações");
+    let registration;
+    try {
+        registration = await awaitPushStep(
+            navigator.serviceWorker.register(SERVICE_WORKER_URL, { scope: "./", updateViaCache: "none" }),
+            15000,
+            "ETAPA 1: o Safari não respondeu ao registrar o service worker.",
+        );
+    } catch (error) {
+        throw new Error(`ETAPA 1: falha ao registrar o service worker (${error.message}).`);
+    }
+    if (!registration.active) {
+        reportProgress("Atualizando aplicativo…", "Ativando o serviço de notificações");
+        if (registration.waiting) registration.waiting.postMessage({ type: "SKIP_WAITING" });
+        registration = await awaitPushStep(navigator.serviceWorker.ready, 20000, "ETAPA 1: o service worker foi registrado, mas não ficou ativo.");
+    }
+    assertCurrentOperation();
+    reportProgress("Consultando iPhone…", "Procurando uma assinatura push existente");
+    let subscription = await awaitPushStep(
+        registration.pushManager.getSubscription(),
+        12000,
+        "ETAPA 2: o iPhone não respondeu ao consultar a assinatura push.",
+    );
+    assertCurrentOperation();
+    if (subscription && forceRefresh) {
+        if (supabaseClient && currentUser) {
+            await supabaseClient.from("push_subscriptions").delete().eq("endpoint", subscription.endpoint);
+        }
+        await awaitPushStep(
+            subscription.unsubscribe().catch(() => false),
+            10000,
+            "ETAPA 3: o iPhone não conseguiu remover a assinatura expirada.",
+        );
+        assertCurrentOperation();
+        subscription = null;
+    }
+    if (!subscription) {
+        reportProgress("Cadastrando iPhone…", "Criando a assinatura Web Push");
+        subscription = await awaitPushStep(
+            registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+            }),
+            25000,
+            "ETAPA 3: o iPhone não respondeu ao criar a assinatura Web Push.",
+        );
+        assertCurrentOperation();
+    }
+    reportProgress("Salvando aparelho…", "Registrando a assinatura no Supabase");
+    await awaitPushStep(
+        savePushSubscription(subscription),
+        15000,
+        "ETAPA 4: o Supabase não respondeu ao salvar este aparelho.",
+    );
+    assertCurrentOperation();
+    return subscription;
+}
+
+function ensurePushSubscription(options = {}) {
+    // Login, retomada do PWA e botão de configurações podem pedir o registro
+    // quase juntos no iOS. Uma única operação evita que uma chamada cancele
+    // o endpoint recém-criado pela outra.
+    if (pushSubscriptionInFlight) return pushSubscriptionInFlight;
+    const operation = createOrRepairPushSubscription(options);
+    let wrappedOperation = null;
+    wrappedOperation = operation.finally(() => {
+        if (pushSubscriptionInFlight === wrappedOperation) pushSubscriptionInFlight = null;
+    });
+    pushSubscriptionInFlight = wrappedOperation;
+    return wrappedOperation;
+}
+
+async function removePushSubscription({ unsubscribeDevice = false } = {}) {
+    if (!("serviceWorker" in navigator)) return;
+    const registration = await navigator.serviceWorker.ready;
+    const subscription = await registration.pushManager.getSubscription();
+    if (!subscription) return;
+    if (supabaseClient && currentUser) {
+        const { error } = await supabaseClient.from("push_subscriptions").delete().eq("endpoint", subscription.endpoint);
+        if (error) console.warn("Não foi possível remover a inscrição push do banco:", error.message);
+    }
+    // Desativar no app remove o destino do servidor, mas preserva a assinatura
+    // do navegador. Assim, reativar no iOS apenas cadastra o mesmo endpoint de
+    // novo, sem depender de uma nova chamada instável ao PushManager.subscribe.
+    if (unsubscribeDevice) await subscription.unsubscribe();
+}
+
+function areNotificationsEnabled() {
+    const storedPreference = localStorage.getItem(getNotificationsPreferenceKey());
+    if (storedPreference !== null) return storedPreference === "true";
+    return "Notification" in window && Notification.permission === "granted";
+}
+
+function updateNotificationsSettingUI() {
+    if (!notificationsEnabledToggle) return;
+    const enabled = areNotificationsEnabled();
+    notificationsEnabledToggle.classList.toggle("is-on", enabled);
+    notificationsEnabledToggle.setAttribute("aria-checked", enabled ? "true" : "false");
+
+    if (!notificationsPermissionStatus) return;
+    if (!("Notification" in window)) {
+        notificationsPermissionStatus.textContent = "Este navegador não oferece notificações do dispositivo.";
+    } else if (!enabled) {
+        notificationsPermissionStatus.textContent = "Os avisos push estão desativados neste aparelho.";
+    } else if (Notification.permission === "denied") {
+        notificationsPermissionStatus.textContent = "Permissão bloqueada pelo navegador. Libere-a nas configurações do site.";
+    } else if (Notification.permission === "granted") {
+        notificationsPermissionStatus.textContent = "Notificações permitidas neste aparelho.";
+    } else {
+        notificationsPermissionStatus.textContent = "Toque no botão para autorizar as notificações.";
+    }
+}
+
+function renderSiriShortcutStatus(configured, token = "") {
+    if (!siriShortcutStatus) return;
+    const endpoint = `${SUPABASE_URL}/functions/v1/create-siri-task`;
+    siriShortcutUrl.value = endpoint;
+    siriShortcutToken.value = token;
+    siriShortcutCredentials.hidden = !configured && !token;
+    btnRevokeSiriToken.hidden = !configured;
+    btnGenerateSiriToken.innerHTML = configured
+        ? '<i data-lucide="refresh-cw"></i> Gerar nova chave'
+        : '<i data-lucide="key-round"></i> Gerar chave';
+    siriShortcutStatus.textContent = configured
+        ? (token ? "Chave gerada. Copie a chave e a URL abaixo para configurar no iPhone." : "A Siri está autorizada. Gere uma nova chave se precisar configurá-la em outro aparelho.")
+        : "Ainda não há uma chave gerada para a Siri.";
+    lucide.createIcons();
+}
+
+async function refreshSiriShortcutStatus() {
+    if (!siriShortcutStatus || !supabaseClient || !currentUser) return;
+    siriShortcutStatus.textContent = "Verificando configuracao…";
+    const { data, error } = await supabaseClient.functions.invoke("create-siri-task", { body: { action: "status" } });
+    if (error || data?.error) {
+        siriShortcutStatus.textContent = "A integracao ainda precisa ser publicada no Supabase.";
+        return;
+    }
+    renderSiriShortcutStatus(Boolean(data.configured));
+}
+
+async function copySiriValue(value, label) {
+    if (!value) return showAppNotice(`Gere a ${label.toLowerCase()} primeiro.`, "warning");
+    await navigator.clipboard.writeText(value);
+    showAppNotice(`${label} copiada.`, "success");
+}
+
+async function generateSiriShortcutToken() {
+    if (!supabaseClient || !currentUser) return;
+    btnGenerateSiriToken.disabled = true;
+    const { data, error } = await supabaseClient.functions.invoke("create-siri-task", { body: { action: "issue_token" } });
+    btnGenerateSiriToken.disabled = false;
+    if (error || data?.error || !data?.token) return showAppNotice(`Nao foi possivel gerar a chave: ${data?.error || error?.message || "erro desconhecido"}`, "error");
+    renderSiriShortcutStatus(true, data.token);
+}
+
+async function revokeSiriShortcutToken() {
+    if (!await showAppConfirm("O Atalho deixara de criar tarefas ate uma nova chave ser configurada.", { title: "Revogar chave da Siri?", confirmText: "Revogar" })) return;
+    btnRevokeSiriToken.disabled = true;
+    const { data, error } = await supabaseClient.functions.invoke("create-siri-task", { body: { action: "revoke_token" } });
+    btnRevokeSiriToken.disabled = false;
+    if (error || data?.error) return showAppNotice(`Nao foi possivel revogar: ${data?.error || error?.message}`, "error");
+    renderSiriShortcutStatus(false);
+    showAppNotice("Chave da Siri revogada.", "success");
+}
+
+btnGenerateSiriToken?.addEventListener("click", generateSiriShortcutToken);
+btnRevokeSiriToken?.addEventListener("click", revokeSiriShortcutToken);
+btnCopySiriUrl?.addEventListener("click", () => copySiriValue(siriShortcutUrl.value, "URL"));
+btnCopySiriToken?.addEventListener("click", () => copySiriValue(siriShortcutToken.value, "Chave"));
+
+let notificationsPreferenceRequestId = 0;
+async function toggleNotificationsPreference() {
+    const requestId = ++notificationsPreferenceRequestId;
+    const shouldEnable = !areNotificationsEnabled();
+    if (!shouldEnable) {
+        localStorage.setItem(getNotificationsPreferenceKey(), "false");
+        updateNotificationsSettingUI();
+        removePushSubscription().catch(error => console.warn("Erro ao desativar Web Push:", error));
+        return;
+    }
+
+    if (!("Notification" in window)) {
+        localStorage.setItem(getNotificationsPreferenceKey(), "false");
+        updateNotificationsSettingUI();
+        return;
+    }
+
+    // Salva primeiro a intenção do usuário. Se a permissão ainda não existe,
+    // o pedido ocorre dentro deste clique (exigência de iOS/Chrome).
+    localStorage.setItem(getNotificationsPreferenceKey(), "true");
+    updateNotificationsSettingUI();
+    let permission = Notification.permission;
+    if (permission === "default") permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+        localStorage.setItem(getNotificationsPreferenceKey(), "false");
+        updateNotificationsSettingUI();
+        if (permission === "denied") {
+            alert("As notificações estão bloqueadas pelo navegador. Abra as configurações deste site ou web app, permita Notificações e tente novamente.");
+        }
+    } else {
+        // Atualiza o botão assim que o iOS concede a permissão. O registro de
+        // rede continua em segundo plano e não bloqueia a resposta visual.
+        updateNotificationsSettingUI();
+        ensurePushSubscription().catch(error => {
+            if (requestId !== notificationsPreferenceRequestId) return;
+            updateNotificationsSettingUI();
+            alert("Não foi possível registrar este aparelho para notificações: " + error.message);
+        });
+    }
+}
+
+async function repairAndTestPushNotifications() {
+    if (!btnRepairTestPush || !supabaseClient || !currentUser) return;
+    const original = btnRepairTestPush.innerHTML;
+    btnRepairTestPush.disabled = true;
+    btnRepairTestPush.innerHTML = '<span class="loading-spinner"></span><span><strong>Configurando…</strong><small>Aguarde alguns segundos</small></span>';
+    const setRepairStatus = (title, detail) => {
+        btnRepairTestPush.innerHTML = `<span class="loading-spinner"></span><span><strong>${title}</strong><small>${detail}</small></span>`;
+    };
+    const withTimeout = (promise, milliseconds, message) => Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(message)), milliseconds)),
+    ]);
+    try {
+        if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) throw new Error("Este navegador não oferece Web Push.");
+        let permission = Notification.permission;
+        if (permission === "default") {
+            setRepairStatus("Aguardando permissão…", "Confirme o aviso do aparelho");
+            permission = await withTimeout(Notification.requestPermission(), 30000, "O aparelho não respondeu ao pedido de permissão.");
+        }
+        if (permission !== "granted") throw new Error("As notificações estão bloqueadas nos Ajustes do aparelho.");
+        localStorage.setItem(getNotificationsPreferenceKey(), "true");
+        // O reparo explícito tem prioridade. Invalida qualquer tentativa
+        // automática anterior sem ficar esperando uma Promise presa no iOS.
+        pushSubscriptionGeneration += 1;
+        pushSubscriptionInFlight = null;
+        setRepairStatus("Recuperando aparelho…", "Validando a assinatura atual do iPhone");
+        let subscription = await withTimeout(
+            ensurePushSubscription({ forceRefresh: false, onProgress: setRepairStatus }),
+            65000,
+            "O iPhone não concluiu o cadastro push. Feche e abra o app e tente novamente.",
+        );
+        if (!subscription?.endpoint) throw new Error("O aparelho não criou uma assinatura push.");
+        setRepairStatus("Enviando teste…", "Confirmando a comunicação com o servidor");
+        let result = await withTimeout(
+            supabaseClient.functions.invoke("send-task-push", { body: { test_push: true, endpoint: subscription.endpoint } }),
+            20000,
+            "O servidor demorou demais para responder ao teste.",
+        );
+        if (result.error) throw result.error;
+        let failure = Array.isArray(result.data?.failures) ? result.data.failures[0] : null;
+        if (Number(result.data?.sent || 0) < 1 && [404, 410].includes(Number(failure?.status))) {
+            setRepairStatus("Renovando aparelho…", "A assinatura antiga expirou; criando outra");
+            pushSubscriptionGeneration += 1;
+            pushSubscriptionInFlight = null;
+            subscription = await withTimeout(
+                ensurePushSubscription({ forceRefresh: true, onProgress: setRepairStatus }),
+                65000,
+                "O iPhone não conseguiu renovar a assinatura push.",
+            );
+            if (!subscription?.endpoint) throw new Error("O aparelho não criou uma assinatura push nova.");
+            setRepairStatus("Enviando novo teste…", "Confirmando a assinatura renovada");
+            result = await withTimeout(
+                supabaseClient.functions.invoke("send-task-push", { body: { test_push: true, endpoint: subscription.endpoint } }),
+                20000,
+                "O servidor demorou demais para responder ao novo teste.",
+            );
+            if (result.error) throw result.error;
+            failure = Array.isArray(result.data?.failures) ? result.data.failures[0] : null;
+        }
+        if (Number(result.data?.sent || 0) < 1) {
+            throw new Error(failure ? `O serviço recusou a assinatura (${failure.status || "sem código"}).` : "O servidor não encontrou este aparelho.");
+        }
+        updateNotificationsSettingUI();
+        showAppNotice("Push enviado. Este aparelho está configurado corretamente.", "success");
+    } catch (error) {
+        showAppNotice(`Não foi possível configurar o push: ${error.message}`, "error");
+    } finally {
+        btnRepairTestPush.disabled = false;
+        btnRepairTestPush.innerHTML = original;
+        if (window.lucide) window.lucide.createIcons();
+    }
+}
+
+function canCurrentUserCheckTask(task, allowCachedViewer = false) {
+    if (task && isTrainingCategory(task.category)) return isTrainingTaskOwnedByCurrentUser(task, allowCachedViewer);
+    if (!task || !normalizeAccountEmail(task.assigned_to)) return true;
+    const viewerEmail = currentUser?.email || (allowCachedViewer ? localPrefs.getItem("checklist_last_user_email") : "");
+    return Boolean(viewerEmail) && normalizeAccountEmail(task.assigned_to) === normalizeAccountEmail(viewerEmail);
+}
+
+function isTrainingTaskOwnedByCurrentUser(task, allowCachedViewer = false) {
+    if (!task) return false;
+    const viewerId = currentUser?.id || (allowCachedViewer ? localPrefs.getItem("checklist_last_user_id") : null);
+    if (!viewerId) return false;
+    if (task.user_id) return String(task.user_id) === String(viewerId);
+    // A regra alternativa depende da sessão ativa e nunca usa a identidade em
+    // cache para conceder permissão de check ou gerenciamento.
+    if (!currentUser) return false;
+    return canManageTrainingCollaborativeCategory(task.category);
+}
+
+function getTrainingTaskOwnerEmail(task) {
+    if (!task) return "";
+    if (currentUser && String(task.user_id || "") === String(currentUser.id)) return currentUser.email || "";
+    const category = categories.find(cat => cat.name === task.category);
+    const ownerShare = (categoryShares || []).find(share => String(share.category_id) === String(category?.id) && share.owner_email);
+    if (category && String(task.user_id || category.user_id || "") === String(category.user_id || "")) return ownerShare?.owner_email || "";
+    return "";
+}
+
+function showTaskCheckPermissionNotice(task) {
+    const trainingViewOnly = task && isTrainingCategory(task.category) && !isTrainingTaskOwnedByCurrentUser(task);
+    const responsible = task && task.assigned_to ? getIdentityLabel(task.assigned_to) : "o responsável";
+    const toast = document.createElement("div");
+    toast.className = "shared-task-toast task-check-permission-toast";
+    toast.setAttribute("role", "status");
+    toast.innerHTML = trainingViewOnly
+        ? `<i data-lucide="eye"></i><div><strong>Tarefa somente para visualização</strong><span>Somente a pessoa dona desta tarefa de treino pode dar check.</span></div>`
+        : `<i data-lucide="lock-keyhole"></i><div><strong>Check restrito</strong><span>Esta tarefa foi atribuída a ${escapeHTML(responsible)}. Somente essa pessoa pode dar check.</span></div>`;
+    document.body.appendChild(toast);
+    if (window.lucide) window.lucide.createIcons();
+    requestAnimationFrame(() => toast.classList.add("active"));
+    setTimeout(() => {
+        toast.classList.remove("active");
+        setTimeout(() => toast.remove(), 300);
+    }, 4200);
+}
+
+function getInviteSeenKey(inviteId) {
+    const account = currentUser ? currentUser.id : "anonymous";
+    return `collab_invite_seen_${account}_${inviteId}`;
+}
+
+function updateCollaborationInviteAttention() {
+    if (!btnNotifications) return;
+    const unseenInvites = (pendingInvites || []).filter(invite => localStorage.getItem(getInviteSeenKey(invite.id)) !== "true");
+    const unreadTasks = (sharedTaskNotifications || []).filter(notification => !notification.read_at);
+    const needsAttention = unseenInvites.length > 0 || unreadTasks.length > 0;
+    if (notificationsBadge) notificationsBadge.style.display = needsAttention ? "block" : "none";
+    if (collabInviteReadyLabel) {
+        const unreadTrainingOnly = unreadTasks.length > 0 && unreadTasks.every(notification => isTrainingCategory(notification.category_name));
+        const latestTrainingActor = unreadTrainingOnly ? (getIdentityLabelByUserId(unreadTasks[0]?.actor_id) || "Participante").replace(/^@/, "") : "";
+        collabInviteReadyLabel.textContent = unseenInvites.length > 0
+            ? "Você recebeu um convite"
+            : unreadTrainingOnly ? `${latestTrainingActor} adicionou um novo treino` : "Você recebeu uma nova tarefa";
+    }
+    const previewKey = needsAttention
+        ? [...unseenInvites.map(item => `invite:${item.id}`), ...unreadTasks.map(item => `task:${item.id}`)].sort().join("|")
+        : "";
+    if (!needsAttention) {
+        clearTimeout(notificationPreviewTimer);
+        notificationPreviewTimer = null;
+        lastNotificationPreviewKey = "";
+        btnNotifications.classList.remove("invite-attention");
+        collabInviteReadyLabel?.setAttribute("aria-hidden", "true");
+    } else if (previewKey !== lastNotificationPreviewKey) {
+        lastNotificationPreviewKey = previewKey;
+        clearTimeout(notificationPreviewTimer);
+        btnNotifications.classList.add("invite-attention");
+        collabInviteReadyLabel?.setAttribute("aria-hidden", "false");
+        notificationPreviewTimer = setTimeout(() => {
+            btnNotifications?.classList.remove("invite-attention");
+            collabInviteReadyLabel?.setAttribute("aria-hidden", "true");
+            notificationPreviewTimer = null;
+        }, 3000);
+    }
+}
+
+function markCurrentInvitesAsSeen() {
+    (pendingInvites || []).forEach(invite => localStorage.setItem(getInviteSeenKey(invite.id), "true"));
+    if (btnNotifications) btnNotifications.classList.remove("invite-attention");
+    if (collabInviteReadyLabel) collabInviteReadyLabel.setAttribute("aria-hidden", "true");
+    clearTimeout(notificationPreviewTimer);
+    notificationPreviewTimer = null;
+    // Recalcula imediatamente. Antes, um convite já visto podia manter a
+    // bolinha acesa até a próxima sincronização ou troca de tela.
+    updateCollaborationInviteAttention();
+}
+
+async function markSharedTaskNotificationsAsRead() {
+    const unreadIds = (sharedTaskNotifications || []).filter(item => !item.read_at).map(item => item.id);
+    if (!unreadIds.length) return;
+    const readAt = new Date().toISOString();
+    sharedTaskNotifications = sharedTaskNotifications.map(item => unreadIds.includes(item.id) ? { ...item, read_at: readAt } : item);
+    updateCollaborationInviteAttention();
+    if (!supabaseClient || !currentUser) return;
+    const { error } = await supabaseClient.from("shared_task_notifications").update({ read_at: readAt }).in("id", unreadIds);
+    if (error) console.warn("Não foi possível marcar as notificações como lidas:", error.message);
+}
+
+function subscribeToCollaborationUpdates() {
+    if (!supabaseClient || !currentUser) return;
+    if (collaborationRealtimeChannel) supabaseClient.removeChannel(collaborationRealtimeChannel);
+    const email = normalizeAccountEmail(currentUser.email);
+    let refreshTimer = null;
+    const refreshSharedTrainingData = () => {
+        clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(async () => {
+            await loadChecklistAndProgress();
+            await loadCollaborationIdentityLabels();
+            renderChecklist();
+            if (modalTrainingReport?.classList.contains("active")) await renderTrainingReport();
+        }, 220);
+    };
+    const applyRealtimeCompletion = payload => {
+        const record = payload?.eventType === "DELETE" ? payload.old : payload?.new;
+        const taskId = String(record?.task_id || "");
+        const date = String(record?.date || "");
+        if (!taskId || !date) return false;
+
+        const queueKey = `${taskId}_${date}`;
+        const localQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+        // Nunca deixa um eco remoto atropelar uma alteração ainda pendente
+        // neste próprio aparelho.
+        if (Object.prototype.hasOwnProperty.call(localQueue, queueKey)) return true;
+
+        const completed = payload.eventType !== "DELETE" && record.completed === true;
+        let cachedCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+        cachedCompletions = cachedCompletions.filter(item =>
+            !(String(item.task_id) === taskId && item.date === date)
+        );
+        if (payload.eventType !== "DELETE") {
+            cachedCompletions.push({ task_id: taskId, date, completed: record.completed === true });
+        }
+        localStorage.setItem("offline_completions", JSON.stringify(cachedCompletions));
+
+        if (date === selectedDate) {
+            tasks = tasks.map(task => String(task.id) === taskId ? { ...task, completed } : task);
+            if (modalAddTask?.classList.contains("active") || modalEditTask?.classList.contains("active")) {
+                deferredTaskEditorBackgroundRender = true;
+            } else {
+                renderChecklist();
+                updateProgress();
+            }
+        }
+        return true;
+    };
+    const applyRealtimeTask = payload => {
+        const record = payload?.eventType === "DELETE" ? payload.old : payload?.new;
+        const taskId = String(record?.id || "");
+        if (!taskId) return false;
+
+        const updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+        if (Object.prototype.hasOwnProperty.call(updatesQueue, taskId)) return true;
+
+        let cachedTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+        if (payload.eventType === "DELETE" || record.is_active === false) {
+            cachedTasks = cachedTasks.filter(task => String(task.id) !== taskId);
+        } else {
+            let recordContext = record.context || {};
+            if (typeof recordContext === "string") {
+                try { recordContext = JSON.parse(recordContext); } catch (_) { recordContext = {}; }
+            }
+            const syncToken = String(recordContext.sync_token || "");
+            const index = cachedTasks.findIndex(task => {
+                if (String(task.id) === taskId) return true;
+                if (!syncToken || !isTemporaryId(task.id)) return false;
+                let taskContext = task.context || {};
+                if (typeof taskContext === "string") {
+                    try { taskContext = JSON.parse(taskContext); } catch (_) { taskContext = {}; }
+                }
+                return String(taskContext.sync_token || "") === syncToken;
+            });
+            if (index >= 0) cachedTasks[index] = record;
+            else cachedTasks.push(record);
+        }
+        localStorage.setItem("offline_tasks", JSON.stringify(cachedTasks));
+        loadDataOffline();
+        if (modalAddTask?.classList.contains("active") || modalEditTask?.classList.contains("active")) {
+            deferredTaskEditorBackgroundRender = true;
+        } else {
+            renderChecklist();
+            updateProgress();
+        }
+        return true;
+    };
+    collaborationRealtimeChannel = supabaseClient
+        .channel(`collaboration-invites-${currentUser.id}`)
+        .on("postgres_changes", {
+            event: "*",
+            schema: "public",
+            table: "category_shares",
+            filter: `collaborator_email=eq.${email}`
+        }, () => loadChecklistAndProgress())
+        .on("postgres_changes", {
+            event: "*",
+            schema: "public",
+            table: "category_shares",
+            filter: `owner_id=eq.${currentUser.id}`
+        }, () => loadChecklistAndProgress())
+        .on("postgres_changes", {
+            event: "INSERT",
+            schema: "public",
+            table: "shared_task_notifications",
+            filter: `recipient_id=eq.${currentUser.id}`
+        }, async payload => {
+            const notification = payload.new || {};
+            await ensureCollaborationProfile(notification.actor_id);
+            if (!sharedTaskNotifications.some(item => String(item.id) === String(notification.id))) {
+                sharedTaskNotifications.unshift(notification);
+            }
+            // A notificação e a tarefa são entregues por eventos Realtime
+            // independentes. Busca a tarefa pelo ID da notificação para não
+            // deixar a tela presa no cache antigo quando o evento de tasks
+            // chegar depois ou não for entregue pelo navegador.
+            if (notification.task_id) {
+                await primeTaskFromPush(notification.task_id, { navigate: false });
+            }
+            updateCollaborationInviteAttention();
+            if (areNotificationsEnabled()) showSharedTaskAlert(notification);
+        })
+        .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, payload => {
+            if (!applyRealtimeTask(payload)) refreshSharedTrainingData();
+        })
+        .on("postgres_changes", { event: "*", schema: "public", table: "completions" }, payload => {
+            if (!applyRealtimeCompletion(payload)) refreshSharedTrainingData();
+        })
+        .on("postgres_changes", { event: "*", schema: "public", table: "training_photos" }, () => {
+            if (modalTrainingReport?.classList.contains("active")) renderTrainingReport();
+            setTimeout(warmTrainingPhotoCache, 300);
+        })
+        .subscribe();
+}
+
+function showSharedTaskAlert(notification) {
+    const trainingNotification = isTrainingCategory(notification.category_name);
+    const actorLabel = (getIdentityLabelByUserId(notification.actor_id) || "Participante").replace(/^@/, "");
+    const title = trainingNotification ? `${actorLabel} adicionou um novo treino` : "Nova tarefa compartilhada";
+    const categoryText = notification.category_name ? ` em ${notification.category_name}` : "";
+    const body = trainingNotification
+        ? `“${notification.task_title || "Treino"}” foi adicionado${categoryText}. Disponível somente para visualização.`
+        : `“${notification.task_title || "Nova tarefa"}” foi adicionada${categoryText}.`;
+
+    const toast = document.createElement("div");
+    toast.className = "shared-task-toast";
+    toast.setAttribute("role", "status");
+    toast.innerHTML = `<i data-lucide="users"></i><div><strong>${escapeHTML(title)}</strong><span>${escapeHTML(body)}</span></div>`;
+    document.body.appendChild(toast);
+    if (window.lucide) window.lucide.createIcons();
+    requestAnimationFrame(() => toast.classList.add("active"));
+    setTimeout(() => {
+        toast.classList.remove("active");
+        setTimeout(() => toast.remove(), 300);
+    }, 5200);
+
+    showWebNotification(title, body, notification.task_id, `shared-task-${notification.id || notification.task_id}`);
+}
+
+async function loadData() {
+    const versionAtFetchStart = localDataVersion;
+    const selectedDateAtFetchStart = selectedDate;
+    const requestVersionAtFetchStart = ++dataLoadRequestVersion;
+    if (supabaseClient && currentUser) {
+        try {
+            await loadFunctionAssociationsFromCloud();
+            // Executa as consultas ao banco de dados em paralelo usando Promise.all para máxima velocidade de carregamento
+            const [
+                catsResult,
+                tasksResult,
+                compTodayResult,
+                compBeforeResult,
+                sharesOwnerResult,
+                sharesCollabResult,
+                sharedNotificationsResult
+            ] = await Promise.all([
+                // select('*') mantém compatibilidade com bancos que ainda não
+                // receberam a coluna opcional de cor.
+                supabaseClient.from('categories').select('*').eq('is_active', true),
+                supabaseClient.from('tasks').select('id,title,category,category_id,user_id,is_recurring,is_active,created_at,repeat_days,assigned_to,context').eq('is_active', true),
+                supabaseClient.from('completions').select('task_id,date,completed').eq('date', selectedDateAtFetchStart),
+                supabaseClient.from('completions').select('task_id,date,completed').lt('date', selectedDateAtFetchStart).eq('completed', true),
+                supabaseClient.from('category_shares').select('*').eq('owner_id', currentUser.id).then(r => r, err => {
+                    console.warn("Tabela 'category_shares' não encontrada ou inacessível ao buscar proprietário.", err);
+                    return { data: [], error: null };
+                }),
+                supabaseClient.from('category_shares').select('*').ilike('collaborator_email', currentUser.email.trim()).then(r => r, err => {
+                    console.warn("Tabela 'category_shares' não encontrada ou inacessível ao buscar colaborador.", err);
+                    return { data: [], error: null };
+                }),
+                supabaseClient.from('shared_task_notifications').select('*').eq('recipient_id', currentUser.id).order('created_at', { ascending: false }).limit(50).then(r => r, err => {
+                    console.warn("Tabela de notificações compartilhadas não encontrada ou inacessível.", err);
+                    return { data: [], error: null };
+                })
+            ]);
+
+            // A navegação pode iniciar outro carregamento antes deste terminar.
+            // Nesse caso, a resposta pertence a uma tela antiga e deve ser ignorada.
+            if (requestVersionAtFetchStart !== dataLoadRequestVersion || selectedDateAtFetchStart !== selectedDate) {
+                console.log("[Data] Resposta obsoleta ignorada após troca de data.");
+                return false;
+            }
+
+            let dbCats = catsResult.data || [];
+            const errCats = catsResult.error;
+            
+            let dbTasks = tasksResult.data || [];
+            const errTasks = tasksResult.error;
+            
+            const dbCompletionsToday = compTodayResult.data || [];
+            const errCompToday = compTodayResult.error;
+            
+            const dbCompletionsBefore = compBeforeResult.data || [];
+            const errCompBefore = compBeforeResult.error;
+
+            if (errCats) throw errCats;
+            if (errTasks) throw errTasks;
+            if (errCompToday) throw errCompToday;
+            if (errCompBefore) throw errCompBefore;
+
+            // Remove o antigo conjunto pessoal que versões anteriores copiavam
+            // automaticamente para contas vazias. A condição estrita evita
+            // tocar em contas que já criaram categorias ou tarefas próprias.
+            const ownedActiveCats = dbCats.filter(cat => String(cat.user_id) === String(currentUser.id));
+            const ownedNames = ownedActiveCats.map(cat => cat.name).sort();
+            const legacyNames = [...LEGACY_AUTO_SEEDED_CATEGORIES].sort();
+            const isUntouchedLegacyAccount = dbTasks.length === 0
+                && ownedNames.length === legacyNames.length
+                && ownedNames.every((name, index) => name === legacyNames[index]);
+            if (isUntouchedLegacyAccount) {
+                const legacyIds = ownedActiveCats.map(cat => cat.id);
+                const { error: cleanupError } = await supabaseClient
+                    .from('categories')
+                    .update({ is_active: false })
+                    .in('id', legacyIds);
+                if (!cleanupError) dbCats = dbCats.filter(cat => !legacyIds.some(id => String(id) === String(cat.id)));
+                else console.warn("Não foi possível limpar categorias legadas desta conta:", cleanupError.message);
+            }
+
+            // Mescla compartilhamentos únicos
+            const sharesOwner = sharesOwnerResult.data || [];
+            const sharesCollab = sharesCollabResult.data || [];
+            sharedTaskNotifications = sharedNotificationsResult.data || [];
+            const mergedSharesMap = new Map();
+            sharesOwner.forEach(s => mergedSharesMap.set(String(s.id), s));
+            sharesCollab.forEach(s => mergedSharesMap.set(String(s.id), s));
+            categoryShares = Array.from(mergedSharesMap.values());
+            localStorage.setItem("offline_category_shares", JSON.stringify(categoryShares));
+
+            // Filtra os convites pendentes recebidos
+            const signedInEmail = normalizeAccountEmail(currentUser.email);
+            pendingInvites = categoryShares.filter(s => normalizeAccountEmail(s.collaborator_email) === signedInEmail && s.accepted !== true);
+            const collaboratorShares = categoryShares.filter(s => normalizeAccountEmail(s.collaborator_email) === signedInEmail && s.accepted === true);
+            const acceptedSharedCategoryIds = new Set(collaboratorShares.map(share => String(share.category_id)));
+
+            // A política do banco permite ler a categoria de um convite pendente
+            // para exibir seu nome no sininho. Isso não significa que ela já
+            // deva entrar na navegação: somente categorias próprias ou aceitas.
+            dbCats = dbCats.filter(cat =>
+                String(cat.user_id) === String(currentUser.id)
+                || acceptedSharedCategoryIds.has(String(cat.id))
+            );
+
+            // Busca as categorias compartilhadas comigo (aceitas e pendentes)
+            const allSharedShares = categoryShares.filter(s => normalizeAccountEmail(s.collaborator_email) === signedInEmail && s.owner_id !== currentUser.id);
+            const allSharedCatIds = allSharedShares.map(s => s.category_id);
+            
+            if (allSharedCatIds.length > 0) {
+                try {
+                    const { data: sharedCats, error: errSharedCats } = await supabaseClient
+                        .from('categories')
+                        .select('*')
+                        .in('id', allSharedCatIds)
+                        .eq('is_active', true);
+                    if (!errSharedCats && sharedCats) {
+                        // 1. Vincula o nome da categoria nos convites pendentes
+                        pendingInvites.forEach(invite => {
+                            const catObj = sharedCats.find(c => c.id === invite.category_id);
+                            invite.category_name = catObj ? catObj.name : "Guia Compartilhada";
+                        });
+
+                        // 2. Mescla apenas as categorias que já foram aceitas
+                        const acceptedCatIds = collaboratorShares.map(s => String(s.category_id));
+                        sharedCats.forEach(sc => {
+                            if (acceptedCatIds.includes(String(sc.id)) && !dbCats.some(c => String(c.id) === String(sc.id))) {
+                                dbCats.push(sc);
+                            }
+                        });
+                    }
+                } catch (err) {
+                    console.error("Erro ao carregar categorias compartilhadas:", err);
+                }
+            }
+            dbCats = dedupeCategories(dbCats);
+            const cachedCategoryOrder = JSON.parse(localStorage.getItem("offline_categories")) || [];
+            const pendingLocalCategories = cachedCategoryOrder.filter(category =>
+                isTemporaryId(category.id) && category.is_active !== false
+            );
+            pendingLocalCategories.forEach(category => {
+                if (!dbCats.some(dbCategory => dbCategory.name === category.name)) dbCats.push(category);
+            });
+            const categoryUpdatesQueue = JSON.parse(localStorage.getItem("offline_category_updates_queue")) || {};
+            dbCats = dbCats.map(category => {
+                const queued = categoryUpdatesQueue[String(category.id)];
+                if (!queued) return category;
+                const { previous_name: _previousName, ...cloudFields } = queued;
+                return { ...category, ...cloudFields };
+            });
+            const cachedOrderById = new Map(cachedCategoryOrder.map((cat, index) => [String(cat.id), index]));
+            const cachedOrderByName = new Map(cachedCategoryOrder.map((cat, index) => [cat.name, index]));
+            dbCats.sort((a, b) => {
+                const aLocal = cachedOrderById.get(String(a.id)) ?? cachedOrderByName.get(a.name);
+                const bLocal = cachedOrderById.get(String(b.id)) ?? cachedOrderByName.get(b.name);
+                if (aLocal !== undefined && bLocal !== undefined) return aLocal - bLocal;
+                if (aLocal !== undefined) return -1;
+                if (bLocal !== undefined) return 1;
+                const aCloud = Number.isFinite(Number(a.sort_order)) ? Number(a.sort_order) : Number.MAX_SAFE_INTEGER;
+                const bCloud = Number.isFinite(Number(b.sort_order)) ? Number(b.sort_order) : Number.MAX_SAFE_INTEGER;
+                return aCloud - bCloud;
+            });
+            
+            // Contas novas começam vazias. Os padrões só são criados quando o
+            // usuário escolhe explicitamente "Restaurar Padrões do App".
+            if (
+                localDataVersion !== versionAtFetchStart ||
+                requestVersionAtFetchStart !== dataLoadRequestVersion ||
+                selectedDateAtFetchStart !== selectedDate
+            ) {
+                console.warn("Dados ou data mudaram durante o carregamento assíncrono. Descartando resposta obsoleta.");
+                return false;
+            }
+
+            // Aplica as atualizações offline na listagem do Supabase antes de renderizar
+            let taskUpdatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+            if (dbTasks) {
+                const existingLocal = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+                dbTasks = dbTasks.map(dbTask => {
+                    // Garantir que context seja um objeto se vier como string
+                    let currentContext = {};
+                    if (dbTask.context) {
+                        if (typeof dbTask.context === 'string') {
+                            try { currentContext = JSON.parse(dbTask.context); } catch (e) { currentContext = {}; }
+                        } else {
+                            currentContext = { ...dbTask.context };
+                        }
+                    }
+
+                    // Tenta recuperar a posição da versão local correspondente
+                    const localEquiv = existingLocal.find(lt => String(lt.id) === String(dbTask.id));
+                    if (localEquiv && localEquiv.context && typeof localEquiv.context.position === 'number') {
+                        currentContext.position = localEquiv.context.position;
+                    }
+                    
+                    return { ...dbTask, context: currentContext };
+                });
+
+                // Aplica a fila de atualizações pendentes por cima
+                Object.keys(taskUpdatesQueue).forEach(id => {
+                    const dbUpdates = taskUpdatesQueue[id];
+                    const taskIndex = dbTasks.findIndex(t => String(t.id) === String(id));
+                    if (taskIndex !== -1) {
+                        dbTasks[taskIndex] = { ...dbTasks[taskIndex], ...dbUpdates };
+                    }
+                });
+
+                // Mantém criações locais visíveis enquanto o identificador
+                // temporário ainda está sendo trocado pelo UUID do Supabase.
+                existingLocal
+                    .filter(task => isTemporaryId(task.id) && task.is_active !== false)
+                    .forEach(pendingTask => {
+                        const pendingToken = pendingTask.context?.sync_token;
+                        const alreadyExists = dbTasks.some(task =>
+                            (pendingToken && task.context?.sync_token === pendingToken)
+                            || (task.title === pendingTask.title && task.category === pendingTask.category)
+                        );
+                        if (!alreadyExists) dbTasks.push(pendingTask);
+                    });
+
+                const recentDeletionCutoff = Date.now() - 24 * 60 * 60 * 1000;
+                const localDeletionIds = new Set(existingLocal
+                    .filter(task => task.is_active === false && (!task.local_deleted_at || new Date(task.local_deleted_at).getTime() >= recentDeletionCutoff))
+                    .map(task => String(task.id)));
+                const pendingDeleteIds = new Set([...pendingDeletes].map(String));
+                dbTasks = dbTasks.filter(task =>
+                    task.is_active !== false
+                    && !localDeletionIds.has(String(task.id))
+                    && !pendingDeleteIds.has(String(task.id))
+                );
+            }
+
+            categories = dbCats;
+            allActiveTasks = dedupeDashboardTasks(dbTasks || []);
+
+            const completedBeforeIds = new Set(dbCompletionsBefore.map(c => String(c.task_id)));
+            
+            let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+            Object.keys(queue).forEach(key => {
+                const [taskIdStr, dateStr] = key.split('_');
+                if (dateStr === selectedDate) {
+                    const completed = queue[key];
+                    const existingIndex = dbCompletionsToday.findIndex(c => String(c.task_id) === taskIdStr);
+                    if (completed === true) {
+                        if (existingIndex !== -1) {
+                            dbCompletionsToday[existingIndex].completed = true;
+                        } else {
+                            dbCompletionsToday.push({ task_id: taskIdStr, date: selectedDate, completed: true });
+                        }
+                    } else if (completed === "excluded") {
+                        if (existingIndex !== -1) dbCompletionsToday.splice(existingIndex, 1);
+                        dbCompletionsToday.push({ task_id: taskIdStr, date: selectedDate, completed: false });
+                    } else {
+                        // Uncheck action: remove from completions if it exists
+                        if (existingIndex !== -1 && dbCompletionsToday[existingIndex].completed === true) {
+                            dbCompletionsToday.splice(existingIndex, 1);
+                        }
+                    }
+                }
+            });
+
+            const completedTodayIds = new Set(dbCompletionsToday.filter(c => c.completed === true).map(c => String(c.task_id)));
+            const excludedTodayIds = new Set(dbCompletionsToday.filter(c => c.completed === false).map(c => String(c.task_id)));
+
+            const todayStr = getLocalDateString(new Date());
+
+            // Map tasks with Rollover and Recurrence
+            tasks = dedupeDashboardTasks(dbTasks.filter(task => {
+                if (excludedTodayIds.has(String(task.id))) return false;
+                
+                const taskCreatedDate = extractDateFromTimestamp(task.created_at);
+                
+                if (task.is_recurring) {
+                    return recurringTaskOccursOnDate(task, selectedDate);
+                } else {
+                    if (selectedDate === todayStr) {
+                        return taskCreatedDate === selectedDate || (taskCreatedDate < selectedDate && !completedBeforeIds.has(String(task.id)));
+                    } else if (selectedDate < todayStr) {
+                        return completedTodayIds.has(String(task.id));
+                    } else {
+                        return taskCreatedDate === selectedDate;
+                    }
+                }
+            }).map(task => ({
+                id: task.id,
+                title: task.title,
+                category: task.category,
+                category_id: task.category_id || null,
+                is_recurring: task.is_recurring,
+                repeat_days: task.repeat_days || null,
+                context: typeof task.context === 'string' ? ( () => { try { return JSON.parse(task.context); } catch(e) { return {}; } } )() : task.context || null,
+                assigned_to: task.assigned_to || null,
+                user_id: task.user_id || null,
+                created_at: task.created_at,
+                completed: completedTodayIds.has(String(task.id))
+            })));
+
+            // Salva os dados mais recentes carregados do Supabase no cache local.
+            // MERGE: Preserva tarefas com tempId pendentes (ainda não confirmadas pelo Supabase)
+            // para evitar race condition onde loadData sobrescreve o localStorage antes
+            // do addTask background insert concluir e atualizar o tempId para UUID real.
+            const localCatsBefore = JSON.parse(localStorage.getItem("offline_categories")) || [];
+            dbCats = dbCats.map(dbCat => {
+                const localCat = localCatsBefore.find(lc => String(lc.id) === String(dbCat.id) || lc.name === dbCat.name);
+                if (localCat && localCat.type && !dbCat.type) {
+                    if (CATEGORIES_CLOUD_SUPPORTS_TYPE && String(dbCat.user_id) === String(currentUser.id) && !isTemporaryId(dbCat.id)) {
+                        enqueueCategoryCloudUpdate(dbCat.id, { type: localCat.type }, "reparar-tipo-da-categoria");
+                    }
+                    return { ...dbCat, type: localCat.type };
+                }
+                return dbCat;
+            });
+            dbCats = dedupeCategories(dbCats);
+            localStorage.setItem("offline_categories", JSON.stringify(dbCats));
+            // Usa imediatamente os tipos recuperados do cache local. Antes eles
+            // eram salvos, mas a lista em memória continuava desatualizada.
+            categories = dbCats;
+
+            const existingLocal = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+            const pendingLocalTasks = existingLocal.filter(t => isTemporaryId(t.id) && t.is_active !== false);
+            const recentLocalDeletions = existingLocal.filter(task =>
+                task.is_active === false
+                && task.local_deleted_at
+                && Date.now() - new Date(task.local_deleted_at).getTime() < 24 * 60 * 60 * 1000
+            );
+            
+            // mergedTasks já é dbTasks com as posições locais mescladas
+            const mergedTasks = [...dbTasks];
+            for (const pending of pendingLocalTasks) {
+                // Só inclui se não existe uma tarefa idêntica (mesmo titulo+categoria) já no Supabase
+                const alreadyExists = mergedTasks.some(d => d.title === pending.title && d.category === pending.category);
+                if (!alreadyExists) mergedTasks.push(pending);
+            }
+            recentLocalDeletions.forEach(deleted => {
+                if (!mergedTasks.some(task => String(task.id) === String(deleted.id))) mergedTasks.push(deleted);
+            });
+            localStorage.setItem("offline_tasks", JSON.stringify(mergedTasks));
+
+            let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+            
+            // Remove conclusões locais obsoletas para a data de hoje e as datas do histórico recebido
+            const dbCompBeforeIds = new Set(dbCompletionsBefore.map(c => String(c.task_id)));
+            localCompletions = localCompletions.filter(c => {
+                const qKey = `${c.task_id}_${c.date}`;
+                // Preserva o estado local se esta tarefa estiver com sincronização pendente para a nuvem
+                if (pendingToggles.has(c.task_id) || pendingToggles.has(String(c.task_id)) || pendingToggles.has(Number(c.task_id)) || queue.hasOwnProperty(qKey)) {
+                    return true;
+                }
+                if (c.date === selectedDate) return false;
+                if (dbCompBeforeIds.has(String(c.task_id)) && c.date < selectedDate) return false;
+                return true;
+            });
+
+            // Adiciona as conclusões do Supabase para hoje (ignorando as que estão com sync pendente localmente)
+            dbCompletionsToday.forEach(c => {
+                const qKey = `${c.task_id}_${c.date}`;
+                const isPending = pendingToggles.has(c.task_id) || pendingToggles.has(String(c.task_id)) || pendingToggles.has(Number(c.task_id)) || queue.hasOwnProperty(qKey);
+                if (!isPending) {
+                    localCompletions.push({
+                        task_id: c.task_id,
+                        date: c.date,
+                        completed: c.completed
+                    });
+                }
+            });
+
+            // Adiciona as conclusões do Supabase para o histórico
+            dbCompletionsBefore.forEach(c => {
+                localCompletions.push({
+                    task_id: c.task_id,
+                    date: c.date,
+                    completed: c.completed
+                });
+            });
+
+            localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
+            return true;
+        } catch (err) {
+            console.error("Erro ao consultar Supabase. Usando fallback offline.", err);
+            loadDataOffline();
+        }
+    } else {
+        loadDataOffline();
+    }
+}
+
+function loadDataOffline() {
+    categoryShares = JSON.parse(localStorage.getItem("offline_category_shares")) || [];
+    pendingInvites = [];
+    let localCats = dedupeCategories(JSON.parse(localStorage.getItem("offline_categories")) || []);
+    localStorage.setItem("offline_categories", JSON.stringify(localCats));
+    categories = localCats.filter(c => c.is_active);
+
+    // 2. Fetch tasks offline
+    let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    allActiveTasks = dedupeDashboardTasks(localTasks.filter(task => task.is_active !== false));
+
+    // 3. Fetch completions
+    let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+
+    const completedBeforeIds = new Set(
+        localCompletions.filter(c => c.date < selectedDate && c.completed === true).map(c => String(c.task_id))
+    );
+    const completedTodayIds = new Set(
+        localCompletions.filter(c => c.date === selectedDate && c.completed === true).map(c => String(c.task_id))
+    );
+    const excludedTodayIds = new Set(
+        localCompletions.filter(c => c.date === selectedDate && c.completed === false).map(c => String(c.task_id))
+    );
+
+    // Map tasks
+    const todayStr = getLocalDateString(new Date());
+
+    tasks = dedupeDashboardTasks(localTasks.filter(task => {
+        if (!task.is_active) return false;
+        if (excludedTodayIds.has(String(task.id))) return false;
+        
+        const taskCreatedDate = extractDateFromTimestamp(task.created_at);
+        
+        if (task.is_recurring) {
+            return recurringTaskOccursOnDate(task, selectedDate);
+        } else {
+            if (selectedDate === todayStr) {
+                return taskCreatedDate === selectedDate || (taskCreatedDate < selectedDate && !completedBeforeIds.has(String(task.id)));
+            } else if (selectedDate < todayStr) {
+                return completedTodayIds.has(String(task.id));
+            } else {
+                return taskCreatedDate === selectedDate;
+            }
+        }
+    }).map(task => ({
+        id: task.id,
+        title: task.title,
+        category: task.category,
+        category_id: task.category_id || null,
+        is_recurring: task.is_recurring,
+        repeat_days: task.repeat_days || null,
+        context: typeof task.context === 'string' ? ( () => { try { return JSON.parse(task.context); } catch(e) { return {}; } } )() : task.context || null,
+        assigned_to: task.assigned_to || null,
+        user_id: task.user_id || null,
+        created_at: task.created_at,
+        completed: completedTodayIds.has(String(task.id))
+    })));
+}
+
+let categoriesOverflowEventsBound = false;
+
+function updateCategoriesOverflowFade() {
+    const bar = document.getElementById("categories-bar");
+    if (!bar) return;
+
+    const maxScrollLeft = Math.max(0, bar.scrollWidth - bar.clientWidth);
+    bar.classList.toggle("has-overflow-left", bar.scrollLeft > 3);
+    bar.classList.toggle("has-overflow-right", bar.scrollLeft < maxScrollLeft - 3);
+}
+
+function setupCategoriesOverflowFade() {
+    const bar = document.getElementById("categories-bar");
+    if (!bar || categoriesOverflowEventsBound) return;
+    categoriesOverflowEventsBound = true;
+    bar.addEventListener("scroll", updateCategoriesOverflowFade, { passive: true });
+    window.addEventListener("resize", updateCategoriesOverflowFade, { passive: true });
+}
+
+function renderCategories() {
+    categories = dedupeCategories(categories);
+    const bar = document.getElementById("categories-bar");
+    const select = document.getElementById("task-category");
+    const manageList = document.getElementById("manage-categories-list");
+    // Uma sincronização pode terminar enquanto o modal de criação/edição está
+    // aberto. Guardamos a escolha feita pela pessoa antes de recriar as opções
+    // para ela não voltar silenciosamente para a primeira categoria da lista.
+    const selectedAddCategory = select?.value || "";
+    const selectedEditCategory = selectEditTaskCategory?.value || "";
+
+    // 1. Render Category Filter Chips
+    const activeCategory = currentFilter;
+    bar.innerHTML = "";
+
+    const allChip = document.createElement("button");
+    allChip.className = `category-chip ${activeCategory === 'all' ? 'active' : ''}`;
+    allChip.dataset.category = "all";
+    allChip.innerHTML = `
+        <i data-lucide="layers" class="chip-icon"></i>
+        <span>Todos</span>
+    `;
+    
+    allChip.addEventListener("click", () => {
+        if (isEditMode) {
+            toggleEditMode(false);
+        }
+        document.querySelectorAll(".category-chip").forEach(c => c.classList.remove("active"));
+        allChip.classList.add("active");
+        currentFilter = "all";
+        renderChecklist();
+    });
+    bar.appendChild(allChip);
+
+    categories.forEach(cat => {
+        const chip = document.createElement("button");
+        const categoryColor = getCategoryColorStyle(cat.name).color;
+        chip.className = `category-chip ${activeCategory === cat.name ? 'active' : ''}`;
+        chip.dataset.category = cat.name;
+        chip.innerHTML = `
+            <i data-lucide="map-pin" class="chip-icon"></i>
+            <span>${escapeHTML(cat.name)}</span>
+            <b class="category-chip-color" style="--category-chip-color:${categoryColor}" aria-hidden="true"></b>
+        `;
+
+        chip.setAttribute("draggable", "true");
+        setupDragAndDrop(chip, cat);
+
+        chip.addEventListener("click", (e) => {
+            if (window.wasCategoryDragged) {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+            }
+            if (isEditMode) {
+                // Clicar em qualquer guia durante a edição conclui e filtra
+                toggleEditMode(false);
+            }
+            document.querySelectorAll(".category-chip").forEach(c => c.classList.remove("active"));
+            chip.classList.add("active");
+            currentFilter = cat.name;
+            renderChecklist();
+        });
+        bar.appendChild(chip);
+    });
+
+    setupCategoriesOverflowFade();
+    requestAnimationFrame(updateCategoriesOverflowFade);
+
+    // 2. Render options in task category dropdowns (Add and Edit)
+    select.innerHTML = "";
+    if (selectEditTaskCategory) selectEditTaskCategory.innerHTML = "";
+    categories.forEach(cat => {
+        const opt = document.createElement("option");
+        opt.value = cat.name;
+        opt.textContent = cat.name;
+        select.appendChild(opt);
+
+        if (selectEditTaskCategory) {
+            const optEdit = document.createElement("option");
+            optEdit.value = cat.name;
+            optEdit.textContent = cat.name;
+            selectEditTaskCategory.appendChild(optEdit);
+        }
+    });
+    if (selectedAddCategory && categories.some(cat => cat.name === selectedAddCategory)) {
+        select.value = selectedAddCategory;
+    }
+    if (selectEditTaskCategory && selectedEditCategory && categories.some(cat => cat.name === selectedEditCategory)) {
+        selectEditTaskCategory.value = selectedEditCategory;
+    }
+
+    // 3. Render categories list in Settings Modal
+    manageList.innerHTML = "";
+    if (categories.length === 0) {
+        manageList.innerHTML = `<p style="font-size:0.8rem; color:var(--text-muted); text-align:center; padding: 10px;">Nenhum local cadastrado.</p>`;
+    } else {
+        categories.forEach(cat => {
+            const item = document.createElement("div");
+            item.className = "manage-item category-manager-card";
+            
+            const hasType = !!cat.type;
+            item.style.cssText = `
+                background: rgba(255, 255, 255, 0.02);
+                border: 1px solid ${hasType ? 'var(--border-color)' : 'rgba(245, 158, 11, 0.3)'};
+                padding: 12px;
+                border-radius: var(--radius-md);
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                transition: border-color 0.2s, background-color 0.2s;
+                box-sizing: border-box;
+                width: 100%;
+            `;
+            if (!hasType) {
+                item.style.backgroundColor = "rgba(245, 158, 11, 0.02)";
+            }
+            
+            const isOwner = currentUser && cat.user_id === currentUser.id;
+            item.classList.toggle("shared-category-readonly", !isOwner);
+            let collabBtnHtml = "";
+            if (currentUser) {
+                collabBtnHtml = `
+                    <button class="btn-collab-cat" data-id="${cat.id}" style="background: transparent; border: none; color: var(--primary); cursor: pointer; padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; transition: background-color 0.2s, color 0.2s;" onmouseover="this.style.backgroundColor='rgba(139,92,246,0.1)';" onmouseout="this.style.backgroundColor='transparent';" title="Colaboradores">
+                        <i data-lucide="users" style="width: 14px; height: 14px; color: var(--primary);"></i>
+                    </button>
+                `;
+            }
+
+            const typeOptions = ["Trabalho", "Empresa", "Faculdade/Estudos", "Projeto", "Pessoal", "Saúde", "Finanças", "Casa", "Lazer", "Outro"];
+            const isCustomType = cat.type && !typeOptions.slice(0, -1).includes(cat.type);
+            const selectedType = isCustomType ? "Outro" : (cat.type || "");
+            const categoryColor = getCategoryColorStyle(cat.name).color;
+
+            item.innerHTML = `
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;">
+                    <input type="text" class="input-edit-cat-name" value="${escapeHTML(cat.name)}" ${isOwner ? "" : "readonly"} style="flex: 1; min-width: 0; padding: 7px 10px; font-size: 0.82rem; font-weight: 600; background: rgba(0,0,0,0.15); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; outline: none; transition: border-color 0.2s;" placeholder="Nome da Categoria">
+                    <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
+                        ${collabBtnHtml}
+                        <button class="btn-delete-cat ${isOwner ? "" : "btn-leave-shared-category"}" data-id="${cat.id}" style="background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; transition: background-color 0.2s, color 0.2s;" title="${isOwner ? "Excluir" : "Sair da categoria"}">
+                            <i data-lucide="${isOwner ? "trash-2" : "log-out"}" style="width: 14px; height: 14px;"></i>
+                        </button>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 8px; width: 100%; align-items: center;">
+                    <div style="display: flex; align-items: center; gap: 6px; flex: 1;">
+                        <span style="font-size: 0.65rem; font-weight: 800; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.02em;">Tipo:</span>
+                        <select class="select-edit-cat-type" ${isOwner ? "" : "disabled"} style="flex: 1; padding: 6px 10px; font-size: 0.78rem; background: rgba(0,0,0,0.15); color: var(--text-primary); border: 1px solid ${hasType ? 'var(--border-color)' : '#f59e0b'}; border-radius: 6px; outline: none; cursor: pointer; font-weight: 500;">
+                            <option value="" disabled ${!selectedType ? "selected" : ""}>Não classificada</option>
+                            ${typeOptions.map(t => `<option value="${t}" ${selectedType === t ? "selected" : ""}>${t}</option>`).join("")}
+                        </select>
+                    </div>
+                </div>
+                <label class="category-color-setting">
+                    <span>Cor da etiqueta</span>
+                    <span class="category-color-control">
+                        <i style="--category-preview-color:${categoryColor}"></i>
+                        <input type="color" class="input-edit-cat-color" value="${categoryColor}" ${isOwner ? "" : "disabled"} aria-label="Cor da etiqueta da categoria ${escapeHTML(cat.name)}">
+                        <small>${isOwner ? "Alterar" : "Definida pelo proprietário"}</small>
+                    </span>
+                </label>
+                <div class="edit-custom-type-wrapper" style="display: ${selectedType === "Outro" ? "flex" : "none"}; align-items: center; gap: 6px; width: 100%;">
+                    <span style="font-size: 0.65rem; font-weight: 800; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.02em;">Custom:</span>
+                    <input type="text" class="input-edit-cat-custom-type" value="${escapeHTML(isCustomType ? cat.type : "")}" ${isOwner ? "" : "readonly"} placeholder="Ex: Viagens" style="flex: 1; padding: 6px 10px; font-size: 0.78rem; background: rgba(0,0,0,0.15); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; outline: none;">
+                </div>
+            `;
+            
+            const btnDel = item.querySelector(".btn-delete-cat");
+            btnDel.addEventListener("click", (e) => {
+                e.stopPropagation();
+                if (isOwner) deleteCategory(cat.id);
+                else leaveSharedCategory(cat);
+            });
+
+            if (currentUser) {
+                const btnCollab = item.querySelector(".btn-collab-cat");
+                if (btnCollab) {
+                    btnCollab.addEventListener("click", (e) => {
+                        e.stopPropagation();
+                        openCollaboratorsModal(cat);
+                    });
+                }
+            }
+
+            const inputName = item.querySelector(".input-edit-cat-name");
+            const selectType = item.querySelector(".select-edit-cat-type");
+            const inputCustom = item.querySelector(".input-edit-cat-custom-type");
+            const inputColor = item.querySelector(".input-edit-cat-color");
+            const customWrapper = item.querySelector(".edit-custom-type-wrapper");
+
+            const triggerUpdate = async () => {
+                const nameVal = inputName.value.trim();
+                let typeVal = selectType.value;
+                if (typeVal === "Outro") {
+                    typeVal = inputCustom.value.trim();
+                }
+                if (!nameVal) return;
+                await updateCategoryFields(cat.id, nameVal, typeVal, inputColor.value);
+            };
+
+            if (isOwner) selectType.addEventListener("change", () => {
+                if (selectType.value === "Outro") {
+                    customWrapper.style.display = "flex";
+                } else {
+                    customWrapper.style.display = "none";
+                    triggerUpdate();
+                }
+            });
+
+            if (isOwner) {
+                inputName.addEventListener("change", triggerUpdate);
+                inputCustom.addEventListener("change", triggerUpdate);
+                inputColor.addEventListener("change", triggerUpdate);
+            }
+            
+            manageList.appendChild(item);
+        });
+    }
+
+    // 3.1. Render Classificar Categorias Antigas (if any unclassified)
+    const settingsClassifyWrapper = document.getElementById("settings-classify-unclassified-cats-wrapper");
+    const settingsClassifyList = document.getElementById("settings-unclassified-cats-list");
+    
+    if (settingsClassifyWrapper && settingsClassifyList) {
+        const unclassifiedCats = categories.filter(c => !c.type && c.is_active && currentUser && String(c.user_id) === String(currentUser.id));
+        if (unclassifiedCats.length > 0) {
+            settingsClassifyWrapper.style.display = "block";
+            settingsClassifyList.innerHTML = unclassifiedCats.map(cat => `
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; background: rgba(0,0,0,0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(245, 158, 11, 0.2); box-sizing: border-box; width: 100%;">
+                    <span style="font-weight: 700; color: var(--text-primary); font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px;">"${escapeHTML(cat.name)}"</span>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <select class="settings-classify-cat-select" data-id="${cat.id}" style="background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); padding: 4px 6px; border-radius: 4px; font-size: 0.76rem;">
+                            <option value="Trabalho">Trabalho</option>
+                            <option value="Empresa">Empresa</option>
+                            <option value="Faculdade/Estudos">Faculdade/Estudos</option>
+                            <option value="Projeto">Projeto</option>
+                            <option value="Pessoal">Pessoal</option>
+                            <option value="Saúde">Saúde</option>
+                            <option value="Finanças">Finanças</option>
+                            <option value="Casa">Casa</option>
+                            <option value="Lazer">Lazer</option>
+                            <option value="Outro">Outro...</option>
+                        </select>
+                        <button class="btn-save-settings-cat-type" data-id="${cat.id}" style="background: #eab308; color: black; border: none; padding: 4px 8px; border-radius: 4px; font-size: 0.76rem; font-weight: bold; cursor: pointer;">Salvar</button>
+                    </div>
+                </div>
+            `).join("");
+            
+            // Add click listeners
+            settingsClassifyList.querySelectorAll(".btn-save-settings-cat-type").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    const catId = btn.dataset.id;
+                    const select = settingsClassifyList.querySelector(`.settings-classify-cat-select[data-id="${catId}"]`);
+                    if (select) {
+                        const typeVal = select.value;
+                        const cat = categories.find(c => String(c.id) === String(catId));
+                        if (cat) {
+                            updateCategoryFields(cat.id, cat.name, typeVal);
+                        }
+                    }
+                });
+            });
+        } else {
+            settingsClassifyWrapper.style.display = "none";
+        }
+    }
+
+    // 3.2. Render Ensine o App (funções ainda não reconhecidas)
+    const settingsTeachWrapper = document.getElementById("settings-teach-app-wrapper");
+    const settingsTeachList = document.getElementById("settings-teach-app-list");
+    
+    if (settingsTeachWrapper && settingsTeachList) {
+        const unclassifiedTerms = getRecentUnclassifiedTerms();
+        if (unclassifiedTerms.length > 0) {
+            settingsTeachWrapper.style.display = "block";
+            settingsTeachList.innerHTML = unclassifiedTerms.map(term => `
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; background: rgba(0,0,0,0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color); box-sizing: border-box; width: 100%;">
+                    <span style="font-weight: 700; color: var(--text-primary); font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px;">"${escapeHTML(term)}"</span>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <select class="settings-teach-term-select" data-term="${encodeURIComponent(term.toLowerCase())}" style="background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); padding: 4px 6px; border-radius: 4px; font-size: 0.76rem; max-width: 150px;">
+                            <option value="" selected disabled>Selecionar…</option>
+                            <option value="delivery">Entrega</option>
+                            <option value="billing">Cobrança/Financeiro</option>
+                            <option value="production">Produção/Operação</option>
+                            <option value="marketing">Divulgação</option>
+                            <option value="sales">Vendas/Comercial</option>
+                            <option value="service">Atendimento</option>
+                            <option value="supply">Compra/Abastecimento</option>
+                            <option value="assessment">Avaliação/Prova</option>
+                            <option value="academic_work">Trabalho acadêmico</option>
+                            <option value="study">Estudo/Revisão</option>
+                            <option value="exercise">Atividade física</option>
+                            <option value="self_care">Saúde/Autocuidado</option>
+                            <option value="home">Casa/Organização</option>
+                            <option value="personal_learning">Aprendizado</option>
+                            <option value="planning">Rotina/Planejamento</option>
+                            <option value="other">Outra atividade</option>
+                        </select>
+                        <button class="btn-save-settings-teach-term" data-term="${encodeURIComponent(term.toLowerCase())}" style="background: var(--primary); color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 0.76rem; font-weight: bold; cursor: pointer;">Salvar</button>
+                    </div>
+                </div>
+            `).join("");
+            
+            // Add click listeners
+            settingsTeachList.querySelectorAll(".btn-save-settings-teach-term").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    const encodedTerm = btn.dataset.term;
+                    const term = decodeURIComponent(encodedTerm);
+                    const select = settingsTeachList.querySelector(`.settings-teach-term-select[data-term="${encodedTerm}"]`);
+                    if (select) {
+                        if (!select.value) {
+                            select.focus();
+                            return;
+                        }
+                        saveLearnedFunctionAssociation(term, select.value);
+                        btn.textContent = "Aprendido ✓";
+                        btn.disabled = true;
+                        setTimeout(() => renderCategories(), 650);
+                    }
+                });
+            });
+        } else {
+            settingsTeachWrapper.style.display = "block";
+            settingsTeachList.innerHTML = '<p style="margin:0; color:var(--text-muted); font-size:.72rem; text-align:center;">Nenhuma sugestão pendente. Você ainda pode ensinar um termo manualmente acima.</p>';
+        }
+    }
+
+    const learnedWrapper = document.getElementById("settings-learned-functions-wrapper");
+    const learnedList = document.getElementById("settings-learned-functions-list");
+    if (learnedWrapper && learnedList) {
+        const learned = JSON.parse(localStorage.getItem("user_function_associations")) || {};
+        const learnedEntries = Object.entries(learned).filter(([, functionId]) => REPORT_FUNCTION_CATALOG[functionId]);
+        if (learnedEntries.length > 0) {
+            learnedWrapper.style.display = "block";
+            learnedList.innerHTML = learnedEntries.map(([term, functionId]) => {
+                const encodedTerm = encodeURIComponent(term);
+                return `
+                    <div style="display:flex; align-items:center; gap:7px; padding:7px 9px; border-radius:7px; background:rgba(255,255,255,.025); border:1px solid var(--border-color);">
+                        <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; font-size:.76rem; font-weight:700; color:var(--text-primary);">${escapeHTML(term)}</span>
+                        <span style="font-size:.7rem; color:var(--text-secondary);">${escapeHTML(REPORT_FUNCTION_CATALOG[functionId].singular)}</span>
+                        <button class="btn-remove-learned-function" data-term="${encodedTerm}" title="Remover aprendizado" style="display:flex; padding:4px; border:0; background:transparent; color:#ef4444; cursor:pointer;"><i data-lucide="x" style="width:14px;height:14px;"></i></button>
+                    </div>`;
+            }).join("");
+            learnedList.querySelectorAll(".btn-remove-learned-function").forEach(button => {
+                button.addEventListener("click", () => {
+                    const term = decodeURIComponent(button.dataset.term);
+                    const latestLearned = JSON.parse(localStorage.getItem("user_function_associations")) || {};
+                    delete latestLearned[term];
+                    localStorage.setItem("user_function_associations", JSON.stringify(latestLearned));
+                    syncFunctionAssociationsToCloud(latestLearned);
+                    renderCategories();
+                });
+            });
+        } else {
+            learnedWrapper.style.display = "none";
+            learnedList.innerHTML = "";
+        }
+    }
+    
+    // Atualiza os ícones após renderizar as guias e listas
+    lucide.createIcons();
+}
+
+function getRecentUnclassifiedTerms() {
+    const associations = JSON.parse(localStorage.getItem("user_function_associations")) || {};
+    const unclassifiedCandidates = new Set();
+    const stopWords = ["para", "com", "uma", "uns", "das", "dos", "pelo", "pela", "seus", "suas", "como", "mais", "fazer", "cada", "toda", "todo", "hoje", "ontem", "amanha", "amanhã", "tarefa", "editar"];
+    
+    // Analisa conclusões dos últimos 30 dias para aprender com mais histórico.
+    const now = new Date();
+    const sevenDaysAgo = new Date(now);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 30);
+    const startStr = getLocalDateString(sevenDaysAgo);
+    
+    let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+    const recentCompletions = localCompletions.filter(c => c.date >= startStr && c.completed === true);
+    
+    recentCompletions.forEach(c => {
+        const task = allActiveTasks.find(t => String(t.id) === String(c.task_id));
+        if (task) {
+            if (classifyTaskFunction(task).singular !== "Outra atividade") return;
+            const words = task.title.split(/\s+/);
+            words.forEach((word, idx) => {
+                    const cleaned = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+                    if (cleaned.length > 3 && !stopWords.includes(cleaned.toLowerCase())) {
+                        const isCapitalized = cleaned[0] === cleaned[0].toUpperCase() && cleaned[0] !== cleaned[0].toLowerCase();
+                        const wLower = cleaned.toLowerCase();
+                        
+                        // Não transforma verbos comuns terminados em 'ar', 'er', 'ir' em termos aprendidos
+                        if (wLower.match(/(ar|er|ir)$/) && wLower.length <= 8) {
+                            return;
+                        }
+                        
+                        if (!associations[normalizeReportText(wLower)]) {
+                            if (isCapitalized || idx > 0) {
+                                unclassifiedCandidates.add(cleaned);
+                            }
+                        }
+                    }
+                });
+        }
+    });
+    
+    return Array.from(unclassifiedCandidates).slice(0, 8);
+}
+
+function taskTitleEditDistance(first, second) {
+    const a = normalizeReportText(first);
+    const b = normalizeReportText(second);
+    const row = Array.from({ length: b.length + 1 }, (_, index) => index);
+    for (let i = 1; i <= a.length; i++) {
+        let previousDiagonal = row[0];
+        row[0] = i;
+        for (let j = 1; j <= b.length; j++) {
+            const previousAbove = row[j];
+            row[j] = Math.min(
+                row[j] + 1,
+                row[j - 1] + 1,
+                previousDiagonal + (a[i - 1] === b[j - 1] ? 0 : 1)
+            );
+            previousDiagonal = previousAbove;
+        }
+    }
+    return row[b.length];
+}
+
+function getTaskTitleSuggestions(query) {
+    const normalizedQuery = normalizeReportText(query).trim();
+    if (normalizedQuery.length < 2) return [];
+    const queryLastWord = normalizedQuery.split(/\s+/).pop();
+    const selectedCategory = document.getElementById("task-category")?.value;
+    const uniqueTitles = new Map();
+
+    allActiveTasks.forEach(task => {
+        if (!task?.title) return;
+        const normalizedTitle = normalizeReportText(task.title).trim();
+        const existing = uniqueTitles.get(normalizedTitle);
+        if (!existing || task.category === selectedCategory) uniqueTitles.set(normalizedTitle, task);
+    });
+
+    return Array.from(uniqueTitles.values()).map(task => {
+        const normalizedTitle = normalizeReportText(task.title);
+        const titleWords = normalizedTitle.split(/\s+/);
+        let score = Infinity;
+        if (normalizedTitle.startsWith(normalizedQuery)) score = 0;
+        else if (titleWords.some(word => word.startsWith(queryLastWord))) score = 1;
+        else if (normalizedTitle.includes(normalizedQuery) || normalizedTitle.includes(queryLastWord)) score = 2;
+        else {
+            const closestDistance = Math.min(...titleWords.map(word => taskTitleEditDistance(queryLastWord, word)));
+            const allowedDistance = Math.max(1, Math.floor(queryLastWord.length * 0.34));
+            if (closestDistance <= allowedDistance) score = 3 + (closestDistance / 10);
+        }
+        if (task.category === selectedCategory) score -= 0.25;
+        return { task, score };
+    }).filter(item => Number.isFinite(item.score))
+        .sort((a, b) => a.score - b.score || a.task.title.localeCompare(b.task.title, "pt-BR"))
+        .slice(0, 6)
+        .map(item => item.task);
+}
+
+function setupTaskTitleAutocomplete() {
+    const input = document.getElementById("task-title");
+    const dropdown = document.getElementById("task-title-autocomplete");
+    if (!input || !dropdown || input.dataset.autocompleteReady === "true") return;
+    input.dataset.autocompleteReady = "true";
+    let suggestions = [];
+    let activeIndex = -1;
+    const autofillOffer = document.getElementById("task-autofill-offer");
+    const btnTitleOnly = document.getElementById("btn-autofill-title-only");
+    const btnAutofillDetails = document.getElementById("btn-autofill-details");
+
+    const hideAutofillOffer = () => {
+        autofillOffer?.classList.remove("open");
+        pendingAutocompleteDetailsTask = null;
+    };
+
+    const applyTaskDetails = task => {
+        if (!task) return;
+        const categorySelect = document.getElementById("task-category");
+        if (categorySelect && Array.from(categorySelect.options).some(option => option.value === task.category)) {
+            categorySelect.value = task.category;
+        }
+        const recurringSelect = document.getElementById("task-recurring");
+        const repeatDays = Array.isArray(task.repeat_days) ? task.repeat_days.map(Number) : [];
+        if (recurringSelect) {
+            recurringSelect.value = getTaskRecurrenceMode(task);
+            recurringSelect.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        document.querySelectorAll("#repeat-days-group .day-toggle").forEach(button => {
+            button.classList.toggle("active", repeatDays.includes(Number(button.dataset.day)));
+        });
+        let context = task.context || {};
+        if (typeof context === "string") {
+            try { context = JSON.parse(context); } catch (error) { context = {}; }
+        }
+        const shifts = Array.isArray(context.turnos) ? context.turnos : [];
+        document.querySelectorAll("#add-shift-selector .shift-toggle-btn").forEach(button => {
+            button.classList.toggle("active", shifts.includes(button.dataset.shift));
+        });
+        const importantInput = document.getElementById("task-important");
+        if (importantInput) importantInput.checked = context.important === true || context.important === "true";
+    };
+
+    btnTitleOnly?.addEventListener("click", hideAutofillOffer);
+    btnAutofillDetails?.addEventListener("click", () => {
+        applyTaskDetails(pendingAutocompleteDetailsTask);
+        hideAutofillOffer();
+    });
+
+    const closeSuggestions = () => {
+        dropdown.classList.remove("open");
+        dropdown.innerHTML = "";
+        input.setAttribute("aria-expanded", "false");
+        activeIndex = -1;
+    };
+
+    const chooseSuggestion = index => {
+        const task = suggestions[index];
+        if (!task) return;
+        input.value = task.title;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        closeSuggestions();
+        pendingAutocompleteDetailsTask = task;
+        autofillOffer?.classList.add("open");
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    };
+
+    const updateActiveSuggestion = () => {
+        dropdown.querySelectorAll(".task-title-suggestion").forEach((button, index) => {
+            button.classList.toggle("active", index === activeIndex);
+            button.setAttribute("aria-selected", index === activeIndex ? "true" : "false");
+            if (index === activeIndex) button.scrollIntoView({ block: "nearest" });
+        });
+    };
+
+    const renderSuggestions = () => {
+        suggestions = getTaskTitleSuggestions(input.value);
+        activeIndex = -1;
+        if (suggestions.length === 0) {
+            closeSuggestions();
+            return;
+        }
+        dropdown.innerHTML = suggestions.map((task, index) => `
+            <button type="button" class="task-title-suggestion" role="option" aria-selected="false" data-index="${index}">
+                <i data-lucide="history"></i>
+                <span class="task-title-suggestion-text">
+                    <span class="task-title-suggestion-title">${escapeHTML(task.title)}</span>
+                    <span class="task-title-suggestion-meta">${escapeHTML(task.category || "Sem categoria")}</span>
+                </span>
+            </button>`).join("");
+        dropdown.classList.add("open");
+        input.setAttribute("aria-expanded", "true");
+        dropdown.querySelectorAll(".task-title-suggestion").forEach(button => {
+            button.addEventListener("pointerdown", event => event.preventDefault());
+            button.addEventListener("click", () => chooseSuggestion(Number(button.dataset.index)));
+        });
+        if (window.lucide) window.lucide.createIcons();
+    };
+
+    input.addEventListener("input", renderSuggestions);
+    input.addEventListener("input", () => {
+        if (pendingAutocompleteDetailsTask && input.value !== pendingAutocompleteDetailsTask.title) hideAutofillOffer();
+    });
+    input.addEventListener("focus", () => {
+        if (input.value.trim().length >= 2) renderSuggestions();
+    });
+    input.addEventListener("blur", () => setTimeout(closeSuggestions, 120));
+    input.addEventListener("keydown", event => {
+        if (!dropdown.classList.contains("open")) return;
+        if (event.key === "ArrowDown") {
+            event.preventDefault();
+            activeIndex = (activeIndex + 1) % suggestions.length;
+            updateActiveSuggestion();
+        } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            activeIndex = activeIndex <= 0 ? suggestions.length - 1 : activeIndex - 1;
+            updateActiveSuggestion();
+        } else if (event.key === "Enter") {
+            event.preventDefault();
+            event.stopPropagation();
+            suppressTaskAutocompleteSubmit = true;
+            chooseSuggestion(activeIndex >= 0 ? activeIndex : 0);
+            setTimeout(() => { suppressTaskAutocompleteSubmit = false; }, 250);
+        } else if (event.key === "Escape") {
+            closeSuggestions();
+        }
+    });
+}
+
+function renderChecklist() {
+    updateTrainingProgressMode();
+    // Aborta a renderização se o usuário estiver arrastando uma tarefa para não causar flash/zerar a tela
+    if (isDraggingTask) return;
+
+    // Não recria o cartão enquanto o destaque do push está em andamento.
+    // Recriações reiniciavam a animação e causavam o efeito travado no Android.
+    if (activePushFocusUntil > Date.now() && tasksListEl.querySelector(".task-item.shared-task-focus")) {
+        clearTimeout(pendingPushFocusRender);
+        pendingPushFocusRender = setTimeout(renderChecklist, Math.max(80, activePushFocusUntil - Date.now() + 40));
+        return;
+    }
+
+    // A sincronização inicial pode terminar durante o primeiro swipe. Nesse caso,
+    // aguarda o gesto acabar para não substituir o cartão sob o dedo.
+    if (isSwipeRevealInteracting) {
+        clearTimeout(pendingSwipeSafeRender);
+        pendingSwipeSafeRender = setTimeout(renderChecklist, 180);
+        return;
+    }
+
+    // A animação do check é consumida somente pelo primeiro render após a ação.
+    // Renderizações posteriores de sincronização não devem pulsar checks antigos.
+    renderCompletionAnimationTaskId = pendingCompletionAnimationTaskId;
+    pendingCompletionAnimationTaskId = null;
+
+    // Preserva as ações abertas caso uma atualização em segundo plano realmente
+    // precise reconstruir a lista logo após o gesto.
+    const openSwipeTask = tasksListEl.querySelector(".task-item.swiped");
+    const openSwipeTaskId = openSwipeTask ? String(openSwipeTask.dataset.id) : null;
+    const protectedPushFocusId = activePushFocusUntil > Date.now() ? String(activePushFocusTaskId) : null;
+
+    tasksListEl.innerHTML = "";
+    
+    // A categoria exibida pode representar mais de uma categoria física no
+    // banco (por exemplo, o Treino compartilhado e um Treino antigo). O
+    // calendário já consulta todos esses IDs; a lista precisa usar a mesma
+    // regra para não esconder treinos de outro participante.
+    const taskMatchesSelectedCategory = (task, categoryName) => {
+        const normalizedName = normalizeCategoryName(categoryName);
+        const selectedCategory = categories.find(category => category.name === categoryName)
+            || categories.find(category => normalizeCategoryName(category.name) === normalizedName);
+        const relatedIds = new Set((selectedCategory?.merged_category_ids || [selectedCategory?.id])
+            .filter(id => id !== undefined && id !== null)
+            .map(String));
+
+        if (task.category_id && relatedIds.has(String(task.category_id))) return true;
+        // Compatibilidade com tarefas antigas que ainda não tinham category_id.
+        return normalizeCategoryName(task.category) === normalizedName;
+    };
+
+    // Filter tasks
+    const filteredTasks = tasks.filter(task => {
+        if (currentFilter === "all") {
+            // Treinos de outros participantes ficam disponíveis somente dentro
+            // da categoria Treino; não ocupam a rotina pessoal da aba Todos.
+            return !isTrainingCategory(task.category) || isTrainingTaskOwnedByCurrentUser(task, true);
+        }
+        return taskMatchesSelectedCategory(task, currentFilter);
+    });
+
+    if (isEditMode) {
+        tasksListEl.classList.add("edit-mode");
+    } else {
+        tasksListEl.classList.remove("edit-mode");
+    }
+
+    const needsCategoryOnboarding = categories.length === 0 && document.body.dataset.awaitingCloud !== "true";
+    emptyStateEl.classList.toggle("category-onboarding-active", needsCategoryOnboarding);
+    updateCategoryOnboardingPlayback(needsCategoryOnboarding);
+    updateTaskCreationOnboarding();
+
+    if (filteredTasks.length === 0) {
+        emptyStateEl.classList.toggle("hidden", document.body.dataset.awaitingCloud === "true");
+        tasksListEl.classList.add("hidden");
+    } else {
+        emptyStateEl.classList.add("hidden");
+        tasksListEl.classList.remove("hidden");
+
+        // Sort: unchecked first, completed last. Within groups, sort by custom order position
+        const sortedTasks = isEditMode
+            ? [...filteredTasks].sort((a, b) => getTaskOrder(a) - getTaskOrder(b))
+            : [...filteredTasks].sort((a, b) => {
+                if (a.completed !== b.completed) {
+                    return a.completed ? 1 : -1;
+                }
+                return getTaskOrder(a) - getTaskOrder(b);
+            });
+
+        if (currentFilter === "all") {
+            const now = new Date();
+            const yesterdayDate = new Date(now);
+            yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+            const yesterdayStr = getLocalDateString(yesterdayDate);
+            const isPastNightShiftExceptionPeriod = (selectedDate === yesterdayStr && now.getHours() < 12);
+
+            // Separa tarefas por turnos para a aba "TODOS"
+            const manhaTasks = [];
+            const tardeTasks = [];
+            const noiteTasks = [];
+            const semTurnoTasks = [];
+
+            sortedTasks.forEach(task => {
+                const turnos = (task.context && task.context.turnos) ? task.context.turnos : [];
+                if (turnos.length === 0) {
+                    semTurnoTasks.push(task);
+                } else {
+                    if (turnos.includes("Manhã")) manhaTasks.push(task);
+                    if (turnos.includes("Tarde")) tardeTasks.push(task);
+                    if (turnos.includes("Noite")) noiteTasks.push(task);
+                }
+            });
+
+            const renderGroup = (title, iconName, groupTasks) => {
+                if (groupTasks.length === 0) return;
+                
+                // Div principal do grupo de turno
+                const groupContainer = document.createElement("div");
+                groupContainer.className = "shift-group";
+                groupContainer.dataset.shift = title;
+
+                // Cabeçalho de divisão de Turno
+                const header = document.createElement("div");
+                header.className = "shift-group-header";
+                
+                let shiftLabelExtra = "";
+                if (title === "Noite" && isPastNightShiftExceptionPeriod) {
+                    shiftLabelExtra = `
+                        <span class="past-night-check-window" title="A noite anterior permanece aberta para marcar tarefas até 12h" aria-label="A noite anterior permanece aberta para marcar tarefas até 12h">
+                            <i data-lucide="clock"></i>
+                            <span class="past-night-check-full">aberto para check até 12h</span>
+                            <span class="past-night-check-compact">até 12h</span>
+                            <button type="button" class="btn-past-night-info" aria-label="Entenda por que a noite anterior fica aberta até 12h" title="Como funciona?">
+                                <i data-lucide="circle-alert"></i>
+                            </button>
+                        </span>`;
+                }
+                
+                header.innerHTML = `
+                    <div class="shift-group-title" style="display: flex; align-items: center; flex-wrap: wrap;">
+                        <i data-lucide="${iconName}"></i>
+                        <span>${title}</span>
+                        ${shiftLabelExtra}
+                    </div>
+                    <span class="shift-group-count">${groupTasks.length} ${groupTasks.length === 1 ? 'tarefa' : 'tarefas'}</span>
+                `;
+                groupContainer.appendChild(header);
+
+                // Contêiner das tarefas do turno
+                const tasksContainer = document.createElement("div");
+                tasksContainer.className = "shift-group-tasks";
+                
+                // Insere os elementos das tarefas
+                groupTasks.forEach(task => {
+                    tasksContainer.appendChild(createTaskDOMElement(task));
+                });
+                
+                groupContainer.appendChild(tasksContainer);
+                tasksListEl.appendChild(groupContainer);
+                
+                // Ativa a reordenação por pressionamento tátil (Hold and Drag) neste contêiner
+                setupTaskDragAndDrop(tasksContainer, title);
+            };
+
+            // Determina o turno que deve liderar a lista do dia selecionado.
+            // Entre 00h e 04h59 a data já mudou: a "Noite" dessa nova data ainda
+            // acontecerá mais tarde, por isso a hierarquia começa pela Manhã.
+            const getCurrentShift = () => {
+                const hour = new Date().getHours();
+                if (hour < 5) return "Manhã";
+                if (hour >= 5 && hour < 12) return "Manhã";
+                if (hour >= 12 && hour < 18) return "Tarde";
+                return "Noite";
+            };
+
+            const currentShift = getCurrentShift();
+            const groupDefinitions = [
+                { name: "Manhã", icon: "sunrise", tasks: manhaTasks },
+                { name: "Tarde", icon: "sun", tasks: tardeTasks },
+                { name: "Noite", icon: "moon", tasks: noiteTasks },
+                { name: "Sem Turno / Geral", icon: "archive", tasks: semTurnoTasks }
+            ];
+
+            let orderedGroups = [];
+            const todayStr = getLocalDateString(now);
+            const isToday = (selectedDate === todayStr);
+
+            if (isToday) {
+                const currentShift = getCurrentShift();
+                const currentGroup = groupDefinitions.find(g => g.name === currentShift);
+                if (currentGroup) orderedGroups.push(currentGroup);
+
+                const shiftsOrder = {
+                    "Manhã": ["Tarde", "Noite"],
+                    "Tarde": ["Noite", "Manhã"],
+                    "Noite": ["Tarde", "Manhã"]
+                };
+                const nextShifts = shiftsOrder[currentShift] || ["Manhã", "Tarde", "Noite"];
+                nextShifts.forEach(shiftName => {
+                    const group = groupDefinitions.find(g => g.name === shiftName);
+                    if (group) orderedGroups.push(group);
+                });
+            } else {
+                // Ordem fixa para outros dias
+                // EXCEÇÃO: Se for a manhã do dia seguinte e estivermos visualizando ontem, colocar Noite primeiro!
+                if (isPastNightShiftExceptionPeriod) {
+                    const nightGroup = groupDefinitions.find(g => g.name === "Noite");
+                    if (nightGroup) orderedGroups.push(nightGroup);
+                    
+                    ["Manhã", "Tarde"].forEach(shiftName => {
+                        const group = groupDefinitions.find(g => g.name === shiftName);
+                        if (group) orderedGroups.push(group);
+                    });
+                } else {
+                    ["Manhã", "Tarde", "Noite"].forEach(shiftName => {
+                        const group = groupDefinitions.find(g => g.name === shiftName);
+                        if (group) orderedGroups.push(group);
+                    });
+                }
+            }
+
+            const semTurnoGroup = groupDefinitions.find(g => g.name === "Sem Turno / Geral");
+            if (semTurnoGroup) orderedGroups.push(semTurnoGroup);
+
+            // Renderiza na ordem de prioridade
+            orderedGroups.forEach(group => {
+                renderGroup(group.name, group.icon, group.tasks);
+            });
+        } else {
+            // Categorias específicas permanecem em uma lista plana, sem
+            // subtítulos, mas seguem a cronologia natural do dia.
+            const getChronologicalShiftRank = (task) => {
+                const shifts = (task.context && Array.isArray(task.context.turnos))
+                    ? task.context.turnos
+                    : [];
+                if (shifts.includes("Manhã")) return 0;
+                if (shifts.includes("Tarde")) return 1;
+                if (shifts.includes("Noite")) return 2;
+                return 3;
+            };
+
+            const categoryChronologicalTasks = [...filteredTasks].sort((a, b) => {
+                const shiftDifference = getChronologicalShiftRank(a) - getChronologicalShiftRank(b);
+                if (shiftDifference !== 0) return shiftDifference;
+                if (!isEditMode && a.completed !== b.completed) return a.completed ? 1 : -1;
+                return getTaskOrder(a) - getTaskOrder(b);
+            });
+
+            categoryChronologicalTasks.forEach(task => {
+                tasksListEl.appendChild(createTaskDOMElement(task));
+            });
+        }
+        
+        if (openSwipeTaskId) {
+            const restoredSwipe = Array.from(tasksListEl.querySelectorAll(".task-item"))
+                .find(item => String(item.dataset.id) === openSwipeTaskId);
+            if (restoredSwipe) {
+                restoredSwipe.classList.add("swiped");
+                const foreground = restoredSwipe.querySelector(".task-item-foreground");
+                if (foreground) {
+                    foreground.style.transition = "none";
+                    foreground.style.transform = "translateX(-136px)";
+                }
+            }
+        }
+
+        if (protectedPushFocusId) {
+            const restoredFocus = Array.from(tasksListEl.querySelectorAll(".task-item"))
+                .find(item => String(item.dataset.id) === protectedPushFocusId);
+            if (restoredFocus) restoredFocus.classList.add("shared-task-focus");
+        }
+
+        lucide.createIcons();
+    }
+    renderCompletionAnimationTaskId = null;
+}
+
+function updateTrainingProgressMode() {
+    const block = document.querySelector(".compact-progress-block");
+    if (!block) return;
+    const trainingSelected = currentFilter !== "all" && isTrainingCategory(currentFilter);
+    if (trainingSelected && block.classList.contains("completed")) block.dataset.progressWasCompleted = "true";
+    block.classList.toggle("training-report-mode", trainingSelected);
+    if (trainingSelected) block.classList.remove("completed");
+    else if (block.dataset.progressWasCompleted === "true") {
+        block.classList.add("completed");
+        delete block.dataset.progressWasCompleted;
+    }
+    if (trainingSelected) {
+        block.querySelector(".training-report-shortcut")?.setAttribute("aria-hidden", "false");
+    } else {
+        block.querySelector(".training-report-shortcut")?.setAttribute("aria-hidden", "true");
+    }
+    if (window.lucide) window.lucide.createIcons();
+}
+
+function showCategoryOnboardingSlide(index) {
+    const slides = Array.from(document.querySelectorAll(".category-onboarding-slide"));
+    const dots = Array.from(document.querySelectorAll(".category-onboarding-dots span"));
+    if (!slides.length) return;
+    categoryOnboardingSlide = ((index % slides.length) + slides.length) % slides.length;
+    slides.forEach((slide, slideIndex) => slide.classList.toggle("active", slideIndex === categoryOnboardingSlide));
+    dots.forEach((dot, dotIndex) => dot.classList.toggle("active", dotIndex === categoryOnboardingSlide));
+}
+
+function updateCategoryOnboardingPlayback(shouldPlay) {
+    if (!shouldPlay) {
+        if (categoryOnboardingTimer) clearInterval(categoryOnboardingTimer);
+        categoryOnboardingTimer = null;
+        categoryOnboardingSlide = 0;
+        return;
+    }
+    showCategoryOnboardingSlide(categoryOnboardingSlide);
+    if (!categoryOnboardingTimer) {
+        categoryOnboardingTimer = setInterval(() => showCategoryOnboardingSlide(categoryOnboardingSlide + 1), 3200);
+    }
+}
+
+function updateTaskCreationOnboarding() {
+    if (!taskCreationOnboarding) return;
+    const hasActiveTask = (allActiveTasks || []).some(task => task.is_active !== false);
+    const shouldShow = categories.length > 0 && !hasActiveTask && !isHistoryMode;
+    taskCreationOnboarding.hidden = !shouldShow;
+    document.body.classList.toggle("task-onboarding-visible", shouldShow);
+}
+
+function getTaskReminderDateTimes(task, occurrenceDate = selectedDate) {
+    if (!occurrenceDate) return [];
+    return normalizeTaskReminders(task).map(reminder => {
+        const reminderAt = new Date(`${occurrenceDate}T${reminder.time}:00`);
+        reminderAt.setDate(reminderAt.getDate() - reminder.offset_days);
+        return reminderAt;
+    }).filter(date => !Number.isNaN(date.getTime()));
+}
+
+function getTaskReminderDateTime(task, occurrenceDate = selectedDate) {
+    const dates = getTaskReminderDateTimes(task, occurrenceDate);
+    return dates.find(date => date.getTime() > Date.now()) || dates[0] || null;
+}
+
+function hasPendingTaskReminder(task, occurrenceDate = selectedDate) {
+    const important = task?.context?.important === true || task?.context?.important === "true";
+    return important && getTaskReminderDateTimes(task, occurrenceDate).some(date => date.getTime() > Date.now());
+}
+
+function refreshExpiredReminderIndicators() {
+    const now = Date.now();
+    document.querySelectorAll(".task-reminder-indicator[data-reminder-at]").forEach(indicator => {
+        if (Number(indicator.dataset.reminderAt) <= now) indicator.remove();
+    });
+}
+
+// Cria e configura o elemento DOM de um card de tarefa reutilizável
+function createTaskDOMElement(task) {
+    const taskEl = document.createElement("div");
+    // O cache antecipa apenas a aparência; o clique revalida a sessão atual.
+    const canCheckTask = canCurrentUserCheckTask(task, true);
+    const trainingCollaborative = isTrainingCategory(task.category);
+    const trainingViewOnly = trainingCollaborative && !isTrainingTaskOwnedByCurrentUser(task, true);
+    const trainingOwnerEmail = trainingCollaborative ? getTrainingTaskOwnerEmail(task) : "";
+    const trainingOwnerLabel = task.context?.creator_label || getIdentityLabelByUserId(task.user_id) || (trainingOwnerEmail ? getIdentityLabel(trainingOwnerEmail) : "Dono da tarefa");
+    const trainingOwnerAvatar = getIdentityAvatarByUserId(task.user_id) || getCachedAvatarUrl(task.context?.creator_avatar_url || "") || (trainingOwnerEmail ? getIdentityAvatar(trainingOwnerEmail) : "");
+    const trainingOwnerInitials = trainingOwnerLabel.replace("@", "").substring(0, 2).toUpperCase() || "DT";
+    const taskDescription = String(task.context?.description || "").trim();
+    const reminderAt = getTaskReminderDateTime(task);
+    const showReminderIndicator = hasPendingTaskReminder(task);
+    const reminderCount = normalizeTaskReminders(task).length;
+    
+    // Exception for completing night shift tasks of the previous day during the morning (before 12 PM)
+    const now = new Date();
+    const yesterdayDate = new Date(now);
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterdayStr = getLocalDateString(yesterdayDate);
+    
+    let isPastNightShiftException = false;
+    const turnos = (task.context && task.context.turnos) ? task.context.turnos : [];
+    if (selectedDate === yesterdayStr && now.getHours() < 12 && turnos.includes("Noite")) {
+        isPastNightShiftException = true;
+    }
+    
+    const animateCompletion = task.completed && String(task.id) === String(renderCompletionAnimationTaskId);
+    taskEl.className = `task-item ${task.completed ? 'completed' : ''} ${animateCompletion ? 'just-completed' : ''} ${isPastNightShiftException ? 'editable-past-night' : ''} ${canCheckTask ? '' : 'check-locked'} ${taskDescription ? 'has-description' : ''}`;
+    taskEl.dataset.id = task.id;
+
+    // Estilo dinâmico da categoria
+    const colorStyle = getCategoryColorStyle(task.category);
+    const tagStyle = `color: ${colorStyle.color}; background: ${colorStyle.bg}; border: 1px solid rgba(255,255,255,0.03);`;
+
+    taskEl.innerHTML = `
+        <!-- Actions revealed on swipe (underneath) -->
+        <div class="task-swipe-actions">
+            <button class="swipe-action-btn rename-btn" title="Renomear">
+                <i data-lucide="pencil"></i>
+            </button>
+            <button class="swipe-action-btn delete-btn" title="Excluir">
+                <i data-lucide="trash-2"></i>
+            </button>
+        </div>
+        <!-- Main content of the task (on top) -->
+        <div class="task-item-foreground">
+            <div class="task-checkbox-wrapper" ${canCheckTask ? '' : `title="${trainingViewOnly ? 'Somente a pessoa dona desta tarefa de treino pode dar check' : `Somente ${escapeHTML(getIdentityLabel(task.assigned_to))} pode dar check`}" aria-disabled="true"`}>
+                <div class="task-checkbox">
+                    <i data-lucide="${task.completed || canCheckTask ? 'check' : 'lock-keyhole'}"></i>
+                </div>
+            </div>
+            <div class="task-content">
+                <span class="task-title">${escapeHTML(task.title)}</span>
+                <div class="task-meta">
+                    <span class="task-tag" style="${tagStyle}">${escapeHTML(task.category)}</span>
+                    <span class="task-tag" style="background: rgba(255,255,255,0.02);">${getRecurrenceLabel(task)}</span>
+                    ${showReminderIndicator ? `
+                        <span class="task-reminder-indicator" data-reminder-at="${reminderAt.getTime()}" title="${reminderCount} ${reminderCount === 1 ? 'notificação programada' : 'notificações programadas'}" aria-label="${reminderCount} ${reminderCount === 1 ? 'notificação programada' : 'notificações programadas'}">
+                            <i data-lucide="alarm-clock"></i>
+                        </span>
+                    ` : ''}
+                    ${task.context && task.context.turnos && task.context.turnos.length > 0 ? task.context.turnos.map(t => {
+                        let iconName = 'sun';
+                        if (t === 'Tarde') iconName = 'sunset';
+                        if (t === 'Noite') iconName = 'moon';
+                        return `<span class="task-tag shift-tag" style="background: rgba(139, 92, 246, 0.06); color: var(--primary); font-weight: 700; display: inline-flex; align-items: center; gap: 3px;"><i data-lucide="${iconName}" style="width: 10px; height: 10px;"></i>${escapeHTML(t)}</span>`;
+                    }).join('') : ''}
+                    ${task.assigned_to && !isTrainingCollaborativeCategory(task.category) ? (() => {
+                        const identityLabel = getIdentityLabel(task.assigned_to);
+                        const initials = identityLabel.replace('@', '').substring(0, 2).toUpperCase();
+                        const avatarUrl = getIdentityAvatar(task.assigned_to);
+                        const isMe = currentUser && task.assigned_to.toLowerCase() === currentUser.email.toLowerCase();
+                        return `<span class="task-assignee-avatar ${isMe ? '' : 'partner'} ${avatarUrl ? 'has-photo' : ''}" title="Atribuído a: ${escapeHTML(identityLabel)}">${avatarUrl ? `<img src="${escapeHTML(avatarUrl)}" alt="">` : escapeHTML(initials)}</span>`;
+                    })() : ''}
+                    ${trainingCollaborative ? `<span class="task-assignee-avatar owner ${trainingOwnerAvatar ? 'has-photo' : ''}" title="Tarefa de ${escapeHTML(trainingOwnerLabel)}" aria-label="Tarefa de ${escapeHTML(trainingOwnerLabel)}">${trainingOwnerAvatar ? `<img src="${escapeHTML(trainingOwnerAvatar)}" alt="Foto de ${escapeHTML(trainingOwnerLabel)}" loading="eager" decoding="async" fetchpriority="high">` : escapeHTML(trainingOwnerInitials)}</span>` : ''}
+                </div>
+            </div>
+            ${taskDescription ? `<button type="button" class="task-description-toggle" aria-expanded="false" aria-label="Mostrar descrição" title="Mostrar descrição"><i data-lucide="align-left"></i></button>` : ''}
+            <!-- Global edit mode actions -->
+            <div class="task-edit-actions">
+                <button class="btn-task-action rename" title="Renomear">
+                    <i data-lucide="pencil"></i>
+                </button>
+                <button class="btn-task-action delete" title="Excluir">
+                    <i data-lucide="trash-2"></i>
+                </button>
+            </div>
+        </div>
+        ${taskDescription ? `<div class="task-description-panel" hidden><p>${escapeHTML(taskDescription)}</p></div>` : ''}
+    `;
+
+    const descriptionToggle = taskEl.querySelector(".task-description-toggle");
+    const descriptionPanel = taskEl.querySelector(".task-description-panel");
+    descriptionToggle?.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const opening = descriptionPanel.hidden;
+        descriptionPanel.hidden = !opening;
+        taskEl.classList.toggle("description-open", opening);
+        const foreground = taskEl.querySelector(".task-item-foreground");
+        if (opening && foreground) taskEl.style.setProperty("--task-actions-center", `${foreground.offsetHeight / 2}px`);
+        else taskEl.style.removeProperty("--task-actions-center");
+        descriptionToggle.setAttribute("aria-expanded", String(opening));
+        descriptionToggle.setAttribute("aria-label", opening ? "Ocultar descrição" : "Mostrar descrição");
+        descriptionToggle.title = opening ? "Ocultar descrição" : "Mostrar descrição";
+    });
+
+    if (trainingViewOnly) {
+        taskEl.classList.add("training-view-only");
+        taskEl.querySelectorAll(".task-edit-actions, .task-swipe-actions").forEach(element => { element.style.display = "none"; });
+    }
+
+    // Configura botões de ação estáticos (Modo Edição global)
+    const btnDelete = taskEl.querySelector(".task-edit-actions .btn-task-action.delete");
+    btnDelete.addEventListener("click", (e) => {
+        e.stopPropagation();
+        showConfirmDelete(task, (choice) => {
+            if (choice !== "cancel") {
+                taskEl.classList.add("deleting");
+                setTimeout(() => {
+                    if (choice === "all") {
+                        deleteTask(task.id);
+                    } else if (choice === "today") {
+                        excludeTaskForToday(task.id);
+                    }
+                }, 400);
+            }
+        });
+    });
+
+    const btnRename = taskEl.querySelector(".task-edit-actions .btn-task-action.rename");
+    btnRename.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openEditTaskModal(task);
+    });
+
+    // Configura botões de swipe (WhatsApp/iOS style)
+    const btnSwipeDelete = taskEl.querySelector(".task-swipe-actions .delete-btn");
+    const handleDeleteAction = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showConfirmDelete(task, (choice) => {
+            if (choice === "cancel") {
+                const fg = taskEl.querySelector(".task-item-foreground");
+                if (fg) {
+                    fg.style.transition = "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)";
+                    fg.style.transform = "translateX(0px)";
+                }
+                taskEl.classList.remove("swiped");
+            } else {
+                taskEl.classList.add("deleting");
+                setTimeout(() => {
+                    if (choice === "all") {
+                        deleteTask(task.id);
+                    } else if (choice === "today") {
+                        excludeTaskForToday(task.id);
+                    }
+                }, 400);
+            }
+        });
+    };
+    btnSwipeDelete.addEventListener("click", handleDeleteAction);
+    btnSwipeDelete.addEventListener("touchend", handleDeleteAction, { passive: false });
+
+    const btnSwipeRename = taskEl.querySelector(".task-swipe-actions .rename-btn");
+    const handleRenameAction = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const fg = taskEl.querySelector(".task-item-foreground");
+        if (fg) {
+            fg.style.transition = "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)";
+            fg.style.transform = "translateX(0px)";
+        }
+        taskEl.classList.remove("swiped");
+        openEditTaskModal(task);
+    };
+    btnSwipeRename.addEventListener("click", handleRenameAction);
+    btnSwipeRename.addEventListener("touchend", handleRenameAction, { passive: false });
+
+    // Configura o gesto físico de deslize
+    if (!trainingViewOnly) setupSwipeToReveal(taskEl);
+
+    return taskEl;
+}
+
+// Retorna a posição personalizada de ordenação da tarefa
+function getTaskOrder(task) {
+    if (task.context && typeof task.context.position === 'number') {
+        return task.context.position;
+    }
+    // Fallback: usar o ID numérico ou string
+    const idVal = typeof task.id === 'number' ? task.id : parseFloat(task.id) || 0;
+    return idVal;
+}
+
+// Configura o sistema de arrastar e soltar (Drag and Drop) para as tarefas dentro de um turno
+function setupTaskDragAndDrop(container, shiftName) {
+    let dragItem = null;
+    let pressTimer = null;
+    let isDragging = false;
+    let startY = 0;
+
+    container.addEventListener("touchstart", onStart, { passive: false });
+    container.addEventListener("mousedown", onStart);
+    container.addEventListener("touchend", cancelPress, { passive: true });
+    container.addEventListener("touchcancel", cancelPress, { passive: true });
+    container.addEventListener("mouseup", cancelPress);
+    container.addEventListener("touchmove", (e) => {
+        if (!isDragging) {
+            cancelPress();
+        }
+    }, { passive: true });
+
+    function onStart(e) {
+        const item = e.target.closest(".task-item");
+        if (!item) return;
+
+        // Não arrasta se clicar em botões de ação ou checkbox
+        if (e.target.closest(".btn-task-action") || e.target.closest(".swipe-action-btn") || e.target.closest(".task-checkbox-wrapper") || e.target.closest(".task-description-toggle") || e.target.closest(".task-description-panel")) return;
+
+        const touch = e.touches ? e.touches[0] : e;
+        startY = touch.clientY;
+
+        // Long press de 600ms
+        pressTimer = setTimeout(() => {
+            isDragging = true;
+            isDraggingTask = true;
+            dragItem = item;
+            dragItem.classList.add("dragging");
+
+            // Feedback háptico de toque longo
+            if (navigator.vibrate) {
+                navigator.vibrate(20);
+            }
+
+            if (e.touches) {
+                window.addEventListener("touchmove", onMove, { passive: false });
+                window.addEventListener("touchend", onEnd);
+                window.addEventListener("touchcancel", onEnd);
+            } else {
+                window.addEventListener("mousemove", onMove);
+                window.addEventListener("mouseup", onEnd);
+            }
+        }, 600);
+    }
+
+    function onMove(e) {
+        if (!isDragging || !dragItem) return;
+
+        // Bloqueia scroll do navegador
+        e.preventDefault();
+
+        const touch = e.touches ? e.touches[0] : e;
+        const currentY = touch.clientY;
+
+        const siblings = [...container.querySelectorAll(".task-item:not(.dragging)")];
+        let nextSibling = siblings.find(sibling => {
+            const box = sibling.getBoundingClientRect();
+            const offset = currentY - box.top - box.height / 2;
+            return offset < 0;
+        });
+
+        if (nextSibling) {
+            container.insertBefore(dragItem, nextSibling);
+        } else {
+            container.appendChild(dragItem);
+        }
+    }
+
+    function onEnd() {
+        cancelPress();
+        window.removeEventListener("touchmove", onMove);
+        window.removeEventListener("touchend", onEnd);
+        window.removeEventListener("touchcancel", onEnd);
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onEnd);
+
+        if (isDragging && dragItem) {
+            dragItem.classList.remove("dragging");
+            saveNewTasksOrder(container);
+        }
+
+        isDragging = false;
+        isDraggingTask = false;
+        dragItem = null;
+    }
+
+    function cancelPress() {
+        if (pressTimer) {
+            clearTimeout(pressTimer);
+            pressTimer = null;
+        }
+    }
+}
+
+// Salva a nova ordenação no cache local e dispara update para o banco
+function saveNewTasksOrder(container) {
+    try {
+        beginOptimisticMutation();
+        const items = [...container.querySelectorAll(".task-item")];
+
+        // Cria um mapa rápido de realId -> index para este container
+        const positionMap = {};
+        items.forEach((item, index) => {
+            const idString = String(item.dataset.id);
+            const realId = idString.includes("_") ? idString.split("_")[0] : idString;
+            positionMap[realId] = index;
+        });
+
+        // Helper para atualizar o contexto de uma tarefa
+        const updateTaskContext = (t) => {
+            const realId = String(t.id);
+            if (positionMap[realId] !== undefined) {
+                let currentContext = {};
+                if (t.context) {
+                    if (typeof t.context === 'string') {
+                        try { currentContext = JSON.parse(t.context); } catch (e) { currentContext = {}; }
+                    } else {
+                        currentContext = { ...t.context };
+                    }
+                }
+                currentContext.position = positionMap[realId];
+                return { ...t, context: currentContext };
+            }
+            return t;
+        };
+
+        // 1. Atualiza memória (tasks e allActiveTasks)
+        tasks = tasks.map(updateTaskContext);
+        allActiveTasks = allActiveTasks.map(updateTaskContext);
+
+        // 2. Atualiza offline_tasks (localStorage)
+        let localTasksFinal = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+        localTasksFinal = localTasksFinal.map(updateTaskContext);
+        localStorage.setItem("offline_tasks", JSON.stringify(localTasksFinal));
+
+        // 3. Atualiza banco de dados (Supabase) e fila offline
+        if (supabaseClient && currentUser) {
+            Object.keys(positionMap).forEach(realId => {
+                if (isTemporaryId(realId)) return;
+                
+                const task = tasks.find(t => String(t.id) === realId);
+                if (task && task.context) {
+                    const dbUpdates = { context: task.context };
+                    
+                    enqueueTaskCloudUpdate(realId, dbUpdates, "reordenação-de-tarefas");
+                }
+            });
+        }
+
+    } catch(err) { 
+        alert("Erro de ordenação: " + err.message); 
+    }
+}
+
+function renderChecklistWithAnimation() {
+    // 1. FIRST
+    const items = Array.from(tasksListEl.children);
+    const firstPositions = {};
+    items.forEach(item => {
+        const id = item.dataset.id;
+        if (id) {
+            firstPositions[id] = item.getBoundingClientRect();
+        }
+    });
+
+    // 2. State change (render DOM)
+    renderChecklist();
+
+    // 3. LAST, INVERT & PLAY
+    const newItems = Array.from(tasksListEl.children);
+    newItems.forEach(item => {
+        const id = item.dataset.id;
+        if (id && firstPositions[id]) {
+            const firstRect = firstPositions[id];
+            const lastRect = item.getBoundingClientRect();
+            const deltaY = firstRect.top - lastRect.top;
+
+            if (deltaY !== 0) {
+                item.style.transition = 'none';
+                item.style.transform = `translateY(${deltaY}px)`;
+                item.offsetHeight; // force reflow
+
+                item.style.transition = 'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)';
+                item.style.transform = 'translateY(0)';
+                
+                item.addEventListener('transitionend', function cleanup() {
+                    item.style.transition = '';
+                    item.style.transform = '';
+                    item.removeEventListener('transitionend', cleanup);
+                });
+            }
+        }
+    });
+}
+
+function updateProgress() {
+    const visibleTasks = tasks.filter(task => !isTrainingCategory(task.category) || isTrainingTaskOwnedByCurrentUser(task, true));
+    const total = visibleTasks.length;
+    const completed = visibleTasks.filter(t => t.completed).length;
+    const percentage = total === 0 ? 0 : Math.round((completed / total) * 100);
+
+    // Update text
+    progressPercentageEl.textContent = `${percentage}%`;
+    if (percentage >= 100) {
+        progressPercentageEl.classList.add("long-text");
+    } else {
+        progressPercentageEl.classList.remove("long-text");
+    }
+    progressTasksCountEl.innerHTML = `${completed} de ${total}<br>concluídos`;
+
+    // Update Linear progress bar
+    progressBarFill.style.width = `${percentage}%`;
+
+    // Update Circular progress ring
+    const radius = 32;
+    const circumference = 2 * Math.PI * radius;
+    progressCircle.style.strokeDasharray = `${circumference} ${circumference}`;
+    
+    const offset = circumference - (percentage / 100) * circumference;
+    progressCircle.style.strokeDashoffset = offset;
+
+    const compactProgressBlock = document.querySelector(".compact-progress-block");
+    if (percentage === 100 && total > 0) {
+        progressRingWrapper.classList.add("completed");
+        if (compactProgressBlock?.classList.contains("training-report-mode")) {
+            compactProgressBlock.dataset.progressWasCompleted = "true";
+            compactProgressBlock.classList.remove("completed");
+        } else if (compactProgressBlock) compactProgressBlock.classList.add("completed");
+    } else {
+        progressRingWrapper.classList.remove("completed");
+        if (compactProgressBlock) {
+            compactProgressBlock.classList.remove("completed");
+            compactProgressBlock.dataset.progressWasCompleted = "false";
+        }
+    }
+}
+
+// ----------------------------------------------------
+// State Management & Storage
+// ----------------------------------------------------
+function getCurrentShiftName(date = new Date()) {
+    const hour = date.getHours();
+    if (hour >= 12 && hour < 18) return "Tarde";
+    if (hour >= 18) return "Noite";
+    return "Manhã";
+}
+
+async function moveFutureTaskToCurrentMoment(id) {
+    beginOptimisticMutation();
+    const now = new Date();
+    const todayStr = getLocalDateString(now);
+    const task = tasks.find(item => String(item.id) === String(id)) || allActiveTasks.find(item => String(item.id) === String(id));
+    if (!task) return false;
+    let context = {};
+    if (typeof task.context === "string") {
+        try { context = JSON.parse(task.context); } catch (_) { context = {}; }
+    } else context = { ...(task.context || {}) };
+    if (!context.future_move_origin) {
+        context.future_move_origin = {
+            created_at: task.created_at,
+            scheduled_date: selectedDate,
+            turnos: Array.isArray(context.turnos) ? [...context.turnos] : null
+        };
+    }
+    context.turnos = [getCurrentShiftName(now)];
+    const updates = { created_at: now.toISOString(), context };
+    const applyUpdates = item => String(item.id) === String(id) ? { ...item, ...updates, completed: false } : item;
+    tasks = tasks.map(applyUpdates);
+    allActiveTasks = allActiveTasks.map(applyUpdates);
+    const localTasks = (JSON.parse(localStorage.getItem("offline_tasks")) || []).map(applyUpdates);
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+    if (supabaseClient && currentUser && !isTemporaryId(id)) {
+        enqueueTaskCloudUpdate(id, updates, "mover-tarefa-para-hoje");
+    }
+    selectedDate = todayStr;
+    updateDateDisplay();
+    loadDataOffline();
+    // Uma recorrência planejada para outro dia da semana também precisa
+    // aparecer hoje como ocorrência excepcional quando foi realizada agora.
+    if (!tasks.some(item => String(item.id) === String(id))) {
+        const movedTask = allActiveTasks.find(item => String(item.id) === String(id));
+        if (movedTask) tasks.push({ ...movedTask, completed: false });
+    }
+    renderChecklist();
+    updateProgress();
+    showAppNotice(`Tarefa movida para hoje, no turno da ${getCurrentShiftName(now)}.`, "success");
+    return true;
+}
+
+function getFutureMoveOrigin(task) {
+    if (!task) return null;
+    let context = task.context || {};
+    if (typeof context === "string") {
+        try { context = JSON.parse(context); } catch (_) { return null; }
+    }
+    const origin = context.future_move_origin;
+    return origin?.created_at && /^\d{4}-\d{2}-\d{2}$/.test(String(origin.scheduled_date || "")) ? origin : null;
+}
+
+async function restoreMovedFutureTask(id, task) {
+    const origin = getFutureMoveOrigin(task);
+    if (!origin) return false;
+    // Primeiro desfaz a conclusão de hoje usando a mesma fila offline segura.
+    await commitTaskToggle(id, false);
+
+    let context = task.context || {};
+    if (typeof context === "string") {
+        try { context = JSON.parse(context); } catch (_) { context = {}; }
+    } else context = { ...context };
+    delete context.future_move_origin;
+    if (Array.isArray(origin.turnos)) context.turnos = [...origin.turnos];
+    else delete context.turnos;
+    const updates = { created_at: origin.created_at, context };
+    const restore = item => String(item.id) === String(id) ? { ...item, ...updates, completed: false } : item;
+    tasks = tasks.map(restore);
+    allActiveTasks = allActiveTasks.map(restore);
+    const localTasks = (JSON.parse(localStorage.getItem("offline_tasks")) || []).map(restore);
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+
+    if (supabaseClient && currentUser && !isTemporaryId(id)) {
+        enqueueTaskCloudUpdate(id, updates, "restaurar-data-da-tarefa");
+    }
+
+    loadDataOffline();
+    renderChecklist();
+    updateProgress();
+    const dateLabel = new Date(`${origin.scheduled_date}T12:00:00`).toLocaleDateString("pt-BR", { day: "2-digit", month: "long" });
+    showAppNotice(`Check desmarcado. A tarefa voltou para ${dateLabel}.`, "success");
+    return true;
+}
+
+async function toggleTask(id, options = {}) {
+    // No Android, o PWA pode restaurar a tela do cache alguns instantes antes
+    // da sessão. O toque continua válido e será confirmado quando a sessão
+    // voltar, em vez de ser silenciosamente descartado.
+    if (!canQueueCompletionOnThisDevice()) {
+        showAppNotice("Aguarde a sessão do Checklist terminar de carregar para marcar a tarefa.", "warning");
+        recoverSessionForPendingCompletion();
+        return;
+    }
+    if (pendingToggles.has(String(id))) return;
+    if (options.completeAtCurrentMoment && selectedDate > getLocalDateString(new Date())) {
+        const futureTask = tasks.find(item => String(item.id) === String(id)) || allActiveTasks.find(item => String(item.id) === String(id));
+        if (futureTask && isTrainingCategory(futureTask.category)) {
+            showAppNotice("Tarefas de treino só podem ser finalizadas no dia programado.", "warning");
+            return;
+        }
+        if (!options.futureMoveConfirmed) {
+            const scheduledLabel = new Date(`${selectedDate}T12:00:00`).toLocaleDateString("pt-BR", { day: "2-digit", month: "long" });
+            const confirmed = await showAppConfirm(
+                `Esta tarefa está programada para ${scheduledLabel}. Ao marcar como feita, ela será movida para hoje, no turno da ${getCurrentShiftName(new Date())}.`,
+                { title: "Concluir tarefa futura?", confirmText: "Mover e concluir" }
+            );
+            if (!confirmed) return;
+        }
+        const moved = await moveFutureTaskToCurrentMoment(id);
+        if (!moved) return;
+    }
+    // Exception for completing night shift tasks of the previous day during the morning (before 12 PM)
+    const now = new Date();
+    const todayStr = getLocalDateString(now);
+    const yesterdayDate = new Date(now);
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterdayStr = getLocalDateString(yesterdayDate);
+    
+    let isPastNightShiftException = false;
+    let task = tasks.find(t => String(t.id) === String(id));
+    if (task?.completed && isTrainingCategory(task.category)) {
+        showAppNotice("Um treino finalizado não pode ser desmarcado.", "warning");
+        return;
+    }
+    if (!canCurrentUserCheckTask(task, true)) {
+        showTaskCheckPermissionNotice(task);
+        return;
+    }
+    const futureMoveOrigin = task?.completed ? getFutureMoveOrigin(task) : null;
+    if (futureMoveOrigin) {
+        const dateLabel = new Date(`${futureMoveOrigin.scheduled_date}T12:00:00`).toLocaleDateString("pt-BR", { day: "2-digit", month: "long" });
+        const confirmed = await showAppConfirm(
+            `Ao desmarcar este check, a tarefa voltará para sua data original: ${dateLabel}.`,
+            { title: "Devolver tarefa à data original?", confirmText: "Desmarcar e devolver" }
+        );
+        if (!confirmed) return;
+        await restoreMovedFutureTask(id, task);
+        return;
+    }
+    const turnos = (task && task.context && task.context.turnos) ? task.context.turnos : [];
+    
+    if (selectedDate === yesterdayStr && now.getHours() < 12 && turnos.includes("Noite")) {
+        isPastNightShiftException = true;
+    }
+    
+    if (isHistoryMode && !isPastNightShiftException) return;
+    if (pendingTrainingCompletionId !== null) return;
+
+    if (task && !task.completed && isTrainingCategory(task.category)) {
+        pendingTrainingCompletionId = id;
+        pendingTrainingPastNightException = isPastNightShiftException;
+        openModal(modalTrainingPhoto);
+        return;
+    }
+    await commitTaskToggle(id, isPastNightShiftException);
+}
+
+async function commitTaskToggle(id, isPastNightShiftException = false) {
+    if (isHistoryMode && !isPastNightShiftException) return;
+    if (!canQueueCompletionOnThisDevice() || isTemporaryId(id)) return;
+    const previousTask = tasks.find(t => String(t.id) === String(id));
+    if (!previousTask) return;
+    const pendingId = String(id);
+    if (pendingToggles.has(pendingId)) return;
+    pendingToggles.add(pendingId);
+    const wasCompleted = previousTask.completed === true;
+    const completed = !wasCompleted;
+    // Resposta visual imediata, sem gravar em fila offline. Se o Supabase
+    // recusar, o estado local é revertido logo abaixo.
+    beginOptimisticMutation();
+    if (!wasCompleted) pendingCompletionAnimationTaskId = id;
+    tasks = tasks.map(t => {
+        if (String(t.id) === String(id)) return { ...t, completed };
+        return t;
+    });
+    updateProgress();
+    renderChecklistWithAnimation();
+    
+    if (navigator.vibrate) {
+        navigator.vibrate(12);
+    }
+
+    const task = tasks.find(t => String(t.id) === String(id));
+    if (!task) return;
+    // Impede que uma leitura do Dashboard iniciada antes deste toque devolva
+    // o estado anterior enquanto o check ainda está a caminho da integração.
+    if (isCassolDashboardTask(task)) cassolDashboardLastPushAt = Date.now();
+
+    // Persiste imediatamente no cache e na fila idempotente. O check não deve
+    // ser revertido só porque a resposta HTTP demorou: com internet, o envio
+    // começa agora e continua sendo repetido até o Supabase confirmar.
+    let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+    localCompletions = localCompletions.filter(item => !(String(item.task_id) === String(id) && item.date === selectedDate));
+    if (completed) localCompletions.push({ task_id: id, date: selectedDate, completed: true });
+    localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
+    const completionQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+    completionQueue[`${pendingId}_${selectedDate}`] = completed;
+    localStorage.setItem("offline_completions_queue", JSON.stringify(completionQueue));
+    // Supabase e Dashboard são destinos independentes. O envio ao Dashboard
+    // começa agora e não fica bloqueado por uma resposta lenta de completions.
+    if (isCassolDashboardTask(task)) {
+        queueCassolDashboardTaskSync(id, {
+            operation: "completion",
+            date: selectedDate,
+            completed
+        });
+    }
+    setSyncStatus("syncing", "Salvando…", "Check salvo neste aparelho e sendo confirmado pelo servidor");
+    syncCompletionImmediately(id, selectedDate, completed);
+    return true;
+}
+
+function syncCompletionImmediately(taskId, date, completed) {
+    const pendingId = String(taskId);
+    if (!currentUser) {
+        recoverSessionForPendingCompletion().then(restored => {
+            pendingToggles.delete(pendingId);
+            if (restored && navigator.onLine) syncCompletionImmediately(taskId, date, completed);
+            else {
+                scheduleCloudSync("check-aguardando-sessão", 120);
+                refreshSyncStatusFromQueues();
+            }
+        });
+        return;
+    }
+    if (!supabaseClient || !navigator.onLine || isTemporaryId(taskId)) {
+        pendingToggles.delete(pendingId);
+        scheduleCloudSync("check-pendente", 120);
+        refreshSyncStatusFromQueues();
+        return;
+    }
+
+    const id = pendingId;
+    const queueKey = `${id}_${date}`;
+    const queuedValue = completed;
+    pendingToggles.add(id);
+    const previous = immediateCompletionSyncChains.get(id) || Promise.resolve();
+    const job = previous.catch(() => {}).then(async () => {
+        const currentQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+        // Se houve outro toque enquanto esta operação aguardava, somente o
+        // estado mais recente precisa chegar ao servidor.
+        if (!Object.prototype.hasOwnProperty.call(currentQueue, queueKey)
+            || currentQueue[queueKey] !== queuedValue) return;
+
+        const query = completed
+            ? supabaseClient.from("completions").upsert(
+                { task_id: taskId, date, completed: true },
+                { onConflict: "task_id,date" }
+            )
+            : supabaseClient.from("completions").delete().eq("task_id", taskId).eq("date", date);
+        const { error } = await Promise.race([
+            query,
+            new Promise((_, reject) => setTimeout(
+                () => reject(new Error("Confirmação ainda pendente; será tentada novamente.")),
+                8000
+            )),
+        ]);
+        if (error) throw error;
+        clearQueuedEntryIfCurrent("offline_completions_queue", queueKey, queuedValue);
+
+        cloudSyncLastSuccessAt = Date.now();
+        cloudSyncLastError = "";
+    }).catch(error => {
+        cloudSyncLastError = error?.message || String(error);
+        console.warn("[Sync] Envio imediato do check indisponível; mantendo na fila:", cloudSyncLastError);
+    }).finally(() => {
+        if (immediateCompletionSyncChains.get(id) !== job) return;
+        immediateCompletionSyncChains.delete(id);
+        pendingToggles.delete(id);
+        refreshSyncStatusFromQueues();
+        const remainingQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+        if (Object.prototype.hasOwnProperty.call(remainingQueue, queueKey)) {
+            scheduleCloudSync("fallback-do-check", 80);
+        }
+    });
+    immediateCompletionSyncChains.set(id, job);
+}
+
+function isTrainingCategory(categoryName) {
+    const category = categories.find(cat => cat.name === categoryName);
+    const value = `${category?.type || ""} ${category?.name || categoryName || ""}`
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    return /(^|\s)(treino|academia|gym|musculacao)(\s|$)/.test(value);
+}
+
+async function finishPendingTrainingCompletion(photoDataUrl) {
+    const id = pendingTrainingCompletionId;
+    if (id === null) return;
+    const pendingTask = tasks.find(item => String(item.id) === String(id))
+        || allActiveTasks.find(item => String(item.id) === String(id))
+        || (JSON.parse(localStorage.getItem("offline_tasks")) || []).find(item => String(item.id) === String(id));
+    const pastNightException = pendingTrainingPastNightException;
+    const trainingDate = selectedDate;
+    pendingTrainingCompletionId = null;
+    pendingTrainingPastNightException = false;
+    closeModal(modalTrainingPhoto);
+    await commitTaskToggle(id, pastNightException);
+    const notifyCompletion = taskId => {
+        if (pendingTask && (isCollaborativeCategory(pendingTask.category_id) || isTrainingCollaborativeCategory(pendingTask.category))) {
+            requestSharedTaskPush(taskId, true, "training_completed", trainingDate);
+        }
+    };
+    if (!photoDataUrl) {
+        notifyCompletion(id);
+        return;
+    }
+    const records = await idb.get("training_photo_records") || [];
+    const record = { id: `${id}_${trainingDate}_${Date.now()}`, taskId: id, taskTitle: pendingTask?.title || "Treino", category: pendingTask?.category || currentFilter || "Treino", date: trainingDate, photo: photoDataUrl, createdBy: currentUser?.id || null, createdAt: new Date().toISOString() };
+    records.unshift(record);
+    await idb.put("training_photo_records", records.slice(0, 120));
+    updatePendingTrainingPhotoFlag(records.slice(0, 120));
+    scheduleTrainingThumbnailCache([record]);
+    // O check já pode ser confirmado; a imagem segue pela fila independente
+    // para não deixar o status do Checklist inteiro preso em “pendente”.
+    scheduleTrainingPhotoUpload("novo-registro", 0);
+    showAppNotice("Treino concluído. Foto sendo enviada em segundo plano.", "success");
+}
+
+function updatePendingTrainingPhotoFlag(records) {
+    const pendingCount = currentUser
+        ? (records || []).filter(record => record.photo && !record.photoPath && String(record.createdBy || "") === String(currentUser.id)).length
+        : 0;
+    if (pendingCount) localPrefs.setItem("pending_training_photo_uploads", String(pendingCount));
+    else localPrefs.removeItem("pending_training_photo_uploads");
+    // O indicador geral continua refletindo somente tarefas e categorias.
+    // A foto tem sua própria fila de envio em segundo plano.
+    scheduleSyncStatusRefresh();
+}
+
+async function uploadTrainingPhotoRecord(record) {
+    if (!supabaseClient) return { ok: false, error: "Supabase indisponível" };
+    if (!currentUser) return { ok: false, error: "sessão não encontrada" };
+    if (!navigator.onLine) return { ok: false, error: "aparelho sem internet" };
+    const category = categories.find(cat => cat.name === record.category);
+    if (!category) return { ok: false, error: "categoria não encontrada" };
+    if (isTemporaryId(category.id)) return { ok: false, error: "categoria ainda não sincronizada" };
+    try {
+        if (isTemporaryId(record.taskId)) {
+            for (let attempt = 0; attempt < 12 && isTemporaryId(record.taskId); attempt++) {
+                if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 500));
+                const { data: cloudTask, error: lookupError } = await supabaseClient.from("tasks")
+                    .select("id")
+                    .eq("category_id", category.id)
+                    .eq("user_id", currentUser.id)
+                    .eq("title", record.taskTitle)
+                    .order("created_at", { ascending: false })
+                    .limit(1)
+                    .maybeSingle();
+                if (lookupError) throw lookupError;
+                if (cloudTask?.id) record.taskId = cloudTask.id;
+            }
+            if (isTemporaryId(record.taskId)) throw new Error("A tarefa ainda não terminou de sincronizar.");
+        }
+        const blob = await (await fetch(record.photo)).blob();
+        const safeRecordId = String(record.id).replace(/[^a-zA-Z0-9_-]/g, "-");
+        const path = `${category.id}/${currentUser.id}/${safeRecordId}.jpg`;
+        const { error: uploadError } = await supabaseClient.storage.from("training-photos").upload(path, blob, { contentType: "image/jpeg", upsert: true });
+        if (uploadError) throw new Error(`envio do arquivo: ${uploadError.message}`);
+        const { error: metadataError } = await supabaseClient.from("training_photos").upsert({
+            id: record.id,
+            category_id: category.id,
+            task_id: String(record.taskId),
+            task_title: record.taskTitle,
+            training_date: record.date,
+            photo_path: path,
+            created_by: currentUser.id,
+            creator_label: getIdentityLabel(currentUser.email),
+            creator_avatar_url: getIdentityAvatar(currentUser.email) || null
+        }, { onConflict: "id" });
+        if (metadataError) throw new Error(`registro da foto: ${metadataError.message}`);
+        const cachedRecords = await idb.get("training_photo_records") || [];
+        const updatedRecords = cachedRecords.map(item => String(item.id) === String(record.id) ? { ...item, taskId: record.taskId, photoPath: path } : item);
+        await idb.put("training_photo_records", updatedRecords);
+        updatePendingTrainingPhotoFlag(updatedRecords);
+        return { ok: true };
+    } catch (error) {
+        console.warn("A foto do treino ficou apenas no aparelho:", error.message);
+        return { ok: false, error: error.message || "erro desconhecido" };
+    }
+}
+
+async function syncPendingTrainingPhotoUploads() {
+    const records = await idb.get("training_photo_records") || [];
+    const pending = records.filter(record => record.photo && !record.photoPath && String(record.createdBy || "") === String(currentUser?.id || ""));
+    updatePendingTrainingPhotoFlag(records);
+    if (!pending.length) return;
+    const failures = [];
+    for (const record of pending) {
+        const result = await uploadTrainingPhotoRecord(record);
+        if (result.ok) {
+            const task = getTaskById(record.taskId) || allActiveTasks.find(item => item.title === record.taskTitle && item.category === record.category);
+            if (task && (isCollaborativeCategory(task.category_id) || isTrainingCollaborativeCategory(task.category))) {
+                await requestSharedTaskPush(task.id, true, "training_completed", record.date);
+            }
+        } else {
+            failures.push(result.error);
+        }
+    }
+    if (failures.length) throw new Error(`Fotos pendentes: ${failures[0]}`);
+}
+
+async function deleteTrainingPhotosForTask(task) {
+    if (!task || !isTrainingCategory(task.category)) return { ok: true };
+    const localRecords = await idb.get("training_photo_records") || [];
+    const recordsToRemove = localRecords.filter(record => String(record.taskId) === String(task.id));
+    const retainedRecords = localRecords.filter(record => String(record.taskId) !== String(task.id));
+    await idb.put("training_photo_records", retainedRecords);
+    updatePendingTrainingPhotoFlag(retainedRecords);
+    await removeTrainingThumbnailCache(recordsToRemove.map(record => record.id));
+    if (!supabaseClient || !currentUser || isTemporaryId(task.id) || !navigator.onLine) {
+        return { ok: true, localOnly: true };
+    }
+    try {
+        const { data, error: lookupError } = await supabaseClient.from("training_photos")
+            .select("id,photo_path")
+            .eq("task_id", String(task.id));
+        if (lookupError) throw lookupError;
+        const paths = (data || []).map(item => item.photo_path).filter(Boolean);
+        const { data: deletedRows, error: metadataError } = await supabaseClient.from("training_photos")
+            .delete()
+            .eq("task_id", String(task.id))
+            .select("id");
+        if (metadataError) throw metadataError;
+        if ((data || []).length && !(deletedRows || []).length) {
+            throw new Error("a permissão do Supabase não autorizou excluir o registro da foto");
+        }
+        if (paths.length) {
+            const { error: storageError } = await supabaseClient.storage.from("training-photos").remove(paths);
+            if (storageError) throw storageError;
+        }
+        await removeTrainingThumbnailCache((data || []).map(item => item.id));
+        return { ok: true, removed: Math.max(recordsToRemove.length, (data || []).length) };
+    } catch (error) {
+        console.warn("A tarefa foi excluída, mas a foto não pôde ser removida da nuvem:", error.message);
+        return { ok: false, error: error.message || "erro desconhecido" };
+    }
+}
+
+async function deleteTrainingCompletionsForTask(task) {
+    if (!task || !isTrainingCategory(task.category)) return { ok: true };
+    const taskId = String(task.id);
+    const localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+    localStorage.setItem("offline_completions", JSON.stringify(
+        localCompletions.filter(item => String(item.task_id) !== taskId)
+    ));
+    const completionQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+    Object.keys(completionQueue).forEach(key => {
+        if (key.startsWith(`${taskId}_`)) delete completionQueue[key];
+    });
+    localStorage.setItem("offline_completions_queue", JSON.stringify(completionQueue));
+    if (!supabaseClient || !currentUser || isTemporaryId(task.id) || !navigator.onLine) {
+        return { ok: true, localOnly: true };
+    }
+    const { error } = await supabaseClient.from("completions").delete().eq("task_id", task.id);
+    return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+let trainingOrphanCleanupPromise = null;
+async function cleanupOrphanedTrainingPhotos() {
+    if (trainingOrphanCleanupPromise) return trainingOrphanCleanupPromise;
+    trainingOrphanCleanupPromise = (async () => {
+        const cachedTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+        const activeTaskIds = new Set(cachedTasks.filter(task => task.is_active !== false).map(task => String(task.id)));
+        const localRecords = await idb.get("training_photo_records") || [];
+        await idb.put("training_photo_records", localRecords.filter(record => activeTaskIds.has(String(record.taskId))));
+
+        if (!supabaseClient || !currentUser || !navigator.onLine) return;
+        const { data: ownPhotos, error: photoError } = await supabaseClient.from("training_photos")
+            .select("id,task_id,photo_path")
+            .eq("created_by", currentUser.id);
+        if (photoError) throw photoError;
+        if (!ownPhotos?.length) return;
+
+        const taskIds = [...new Set(ownPhotos.map(photo => String(photo.task_id)).filter(Boolean))];
+        const { data: linkedTasks, error: taskError } = taskIds.length
+            ? await supabaseClient.from("tasks").select("id,is_active").in("id", taskIds)
+            : { data: [], error: null };
+        if (taskError) throw taskError;
+        const activeCloudTaskIds = new Set((linkedTasks || []).filter(task => task.is_active !== false).map(task => String(task.id)));
+        const orphanedPhotos = ownPhotos.filter(photo => !activeCloudTaskIds.has(String(photo.task_id)));
+        if (!orphanedPhotos.length) return;
+
+        const orphanIds = orphanedPhotos.map(photo => photo.id);
+        const orphanPaths = orphanedPhotos.map(photo => photo.photo_path).filter(Boolean);
+        const { error: metadataError } = await supabaseClient.from("training_photos").delete().in("id", orphanIds);
+        if (metadataError) throw metadataError;
+        if (orphanPaths.length) {
+            const { error: storageError } = await supabaseClient.storage.from("training-photos").remove(orphanPaths);
+            if (storageError) throw storageError;
+        }
+        console.log(`[Treino] ${orphanedPhotos.length} foto(s) antiga(s) sem tarefa foram removidas.`);
+    })().catch(error => {
+        console.warn("Não foi possível limpar fotos antigas sem tarefa:", error.message);
+    }).finally(() => {
+        trainingOrphanCleanupPromise = null;
+    });
+    return trainingOrphanCleanupPromise;
+}
+
+async function getTrainingPhotoRecords(categoryName = null) {
+    cleanupOrphanedTrainingPhotos();
+    const allLocalRecords = await idb.get("training_photo_records") || [];
+    const localRecords = currentUser ? allLocalRecords.filter(record => String(record.createdBy || "") === String(currentUser.id)) : [];
+    const filteredLocal = categoryName ? localRecords.filter(record => record.category === categoryName) : localRecords;
+    if (!supabaseClient || !currentUser || !navigator.onLine) return filteredLocal;
+    const visibleCategories = categories.filter(category => isTrainingCategory(category.name) && (!categoryName || normalizeCategoryName(category.name) === normalizeCategoryName(categoryName)));
+    const visibleCategoryIds = [...new Set(visibleCategories.flatMap(category => category.merged_category_ids || [category.id]).filter(id => !isTemporaryId(id)))];
+    if (!visibleCategoryIds.length) return filteredLocal;
+    try {
+        const categoryNameById = new Map(visibleCategories.flatMap(category =>
+            (category.merged_category_ids || [category.id]).map(id => [String(id), category.name])
+        ));
+        const { data: feedData, error: feedError } = await supabaseClient.functions.invoke("training-photo-feed", {
+            body: { category_ids: visibleCategoryIds }
+        });
+        if (!feedError && Array.isArray(feedData?.photos)) {
+            const cloudRecords = feedData.photos.map(item => ({
+                id: item.id, taskId: item.task_id, taskTitle: item.task_title || "Treino",
+                category: categoryNameById.get(String(item.category_id)) || "Treino",
+                date: item.training_date, photo: item.signed_url, createdBy: item.created_by,
+                creatorLabel: item.creator_label, creatorAvatar: item.creator_avatar_url, createdAt: item.created_at
+            })).filter(record => record.photo);
+            const merged = new Map(cloudRecords.map(record => [String(record.id), record]));
+            filteredLocal.forEach(record => { if (!merged.has(String(record.id))) merged.set(String(record.id), record); });
+            const result = [...merged.values()].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+            saveTrainingPhotoFeedCache(result);
+            prefetchRecentTrainingPhotos(result);
+            return result;
+        }
+        if (feedError) console.warn("Leitura protegida de fotos indisponível; tentando acesso direto:", feedError.message);
+        const { data, error } = await supabaseClient.from("training_photos")
+            .select("id,category_id,task_id,task_title,training_date,photo_path,created_by,creator_label,creator_avatar_url,created_at")
+            .in("category_id", visibleCategoryIds)
+            .order("created_at", { ascending: false });
+        if (error) throw error;
+        const photoTaskIds = [...new Set((data || []).map(item => String(item.task_id)).filter(Boolean))];
+        const { data: linkedPhotoTasks, error: linkedTasksError } = photoTaskIds.length
+            ? await supabaseClient.from("tasks").select("id,is_active").in("id", photoTaskIds)
+            : { data: [], error: null };
+        if (linkedTasksError) throw linkedTasksError;
+        const activeTaskIds = new Set((linkedPhotoTasks || []).filter(task => task.is_active !== false).map(task => String(task.id)));
+        const visiblePhotoRows = (data || []).filter(item => activeTaskIds.has(String(item.task_id)));
+        const paths = visiblePhotoRows.map(item => item.photo_path);
+        const signedByPath = new Map();
+        if (paths.length) {
+            const { data: signed, error: signedError } = await supabaseClient.storage.from("training-photos").createSignedUrls(paths, 3600);
+            if (signedError) throw signedError;
+            (signed || []).forEach(item => signedByPath.set(item.path, item.signedUrl));
+        }
+        const cloudRecords = visiblePhotoRows.map(item => ({
+            id: item.id,
+            taskId: item.task_id,
+            taskTitle: item.task_title || "Treino",
+            category: categoryNameById.get(String(item.category_id)) || "Treino",
+            date: item.training_date,
+            photo: signedByPath.get(item.photo_path),
+            createdBy: item.created_by,
+            creatorLabel: item.creator_label,
+            creatorAvatar: item.creator_avatar_url,
+            createdAt: item.created_at
+        })).filter(record => record.photo);
+        const merged = new Map(cloudRecords.map(record => [String(record.id), record]));
+        filteredLocal.forEach(record => { if (!merged.has(String(record.id))) merged.set(String(record.id), record); });
+        const result = [...merged.values()].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+        saveTrainingPhotoFeedCache(result);
+        prefetchRecentTrainingPhotos(result);
+        return result;
+    } catch (error) {
+        console.warn("Não foi possível carregar fotos compartilhadas de treino:", error.message);
+        return filteredLocal;
+    }
+}
+
+function compressTrainingPhoto(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(reader.error);
+        reader.onload = () => {
+            const image = new Image();
+            image.onerror = () => reject(new Error("Não foi possível abrir a foto."));
+            image.onload = () => {
+                // Registro visual, não arquivo original: reduz bastante o
+                // envio no celular preservando qualidade suficiente no mural.
+                const scale = Math.min(1, 1080 / Math.max(image.width, image.height));
+                const canvas = document.createElement("canvas");
+                canvas.width = Math.round(image.width * scale);
+                canvas.height = Math.round(image.height * scale);
+                canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+                resolve(canvas.toDataURL("image/jpeg", .72));
+            };
+            image.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+    });
+}
+
+function getTrainingCompletionDates(categoryName = null) {
+    const trainingTaskIds = new Set(allActiveTasks
+        .filter(task =>
+            isTrainingCategory(task.category)
+            && (!categoryName || normalizeCategoryName(task.category) === normalizeCategoryName(categoryName))
+            && isTrainingTaskOwnedByCurrentUser(task)
+        )
+        .map(task => String(task.id)));
+    return new Set((JSON.parse(localStorage.getItem("offline_completions")) || [])
+        .filter(item => item.completed === true && trainingTaskIds.has(String(item.task_id)))
+        .map(item => item.date));
+}
+
+function isTrainingRecordOwnedByCurrentUser(record) {
+    if (!record || !currentUser) return false;
+    if (record.createdBy) return String(record.createdBy) === String(currentUser.id);
+    const linkedTask = allActiveTasks.find(task => String(task.id) === String(record.taskId));
+    return Boolean(linkedTask && isTrainingTaskOwnedByCurrentUser(linkedTask));
+}
+
+function getCurrentTrainingStreak(dates) {
+    let streak = 0;
+    const cursor = new Date();
+    cursor.setHours(12, 0, 0, 0);
+    if (!dates.has(getLocalDateString(cursor))) cursor.setDate(cursor.getDate() - 1);
+    while (dates.has(getLocalDateString(cursor))) { streak++; cursor.setDate(cursor.getDate() - 1); }
+    return streak;
+}
+
+function getTrainingRecordOwner(record) {
+    if (record.creatorLabel) return { label: record.creatorLabel, avatar: getCachedAvatarUrl(record.creatorAvatar || "") };
+    const task = allActiveTasks.find(item => String(item.id) === String(record.taskId));
+    const email = task ? getTrainingTaskOwnerEmail(task) : "";
+    if (email) return { label: getIdentityLabel(email), avatar: getIdentityAvatar(email) };
+    if (currentUser && String(record.createdBy || "") === String(currentUser.id)) {
+        return { label: getIdentityLabel(currentUser.email), avatar: getIdentityAvatar(currentUser.email) };
+    }
+    return { label: "Participante", avatar: "" };
+}
+
+function renderTrainingDayGallery(dateStr) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr || ""))) {
+        currentTrainingCalendarSelectedDate = String(dateStr);
+    }
+    const heading = document.getElementById("training-day-gallery-heading");
+    const list = document.getElementById("training-report-list");
+    if (!heading || !list) return;
+    const records = currentTrainingCalendarRecords.filter(record => record.date === dateStr);
+    const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" });
+    heading.innerHTML = `<div><span>REGISTROS DO DIA</span><strong>${escapeHTML(dateLabel)}</strong></div><b>${records.length} ${records.length === 1 ? "foto" : "fotos"}</b>`;
+    list.innerHTML = records.length ? records.map(record => {
+        const owner = getTrainingRecordOwner(record);
+        const initials = owner.label.replace("@", "").substring(0, 2).toUpperCase() || "P";
+        return `<article class="training-day-photo-card"><img class="training-day-photo" data-training-photo-id="${escapeHTML(String(record.id))}" src="${record.photo}" alt="Foto do treino de ${escapeHTML(owner.label)}" title="Ampliar foto"><div class="training-day-photo-caption"><span class="task-assignee-avatar ${owner.avatar ? 'has-photo' : ''}">${owner.avatar ? `<img src="${escapeHTML(owner.avatar)}" alt="">` : escapeHTML(initials)}</span><div><strong>${escapeHTML(owner.label)}</strong><small>${escapeHTML(record.taskTitle)}</small></div></div></article>`;
+    }).join("") : `<div class="training-report-empty compact"><i data-lucide="camera-off"></i><strong>Nenhuma foto neste dia</strong><span>O fogo indica que houve treino, mesmo sem registro fotográfico.</span></div>`;
+    document.querySelectorAll(".training-calendar-day").forEach(day => day.classList.toggle("selected", day.dataset.date === dateStr));
+    renderTrainingSelectedDayInfo(dateStr, records);
+    list.querySelectorAll(".training-day-photo[data-training-photo-id]").forEach(image => image.addEventListener("click", () => {
+        const record = currentTrainingCalendarRecords.find(item => String(item.id) === String(image.dataset.trainingPhotoId));
+        if (record) openTrainingPhotoViewer(record);
+    }));
+    lucide.createIcons();
+}
+
+function renderTrainingSelectedDayInfo(dateStr, records) {
+    const info = document.getElementById("training-selected-day-info");
+    if (!info) return;
+    const trained = records.length > 0 || getTrainingCompletionDates(currentFilter !== "all" ? currentFilter : null).has(dateStr);
+    if (!trained) { info.hidden = true; return; }
+    const owners = new Map();
+    records.forEach(record => {
+        const owner = getTrainingRecordOwner(record);
+        if (!owners.has(owner.label)) owners.set(owner.label, owner);
+    });
+    const avatars = [...owners.values()].map(owner => {
+        const initials = owner.label.replace("@", "").substring(0, 2).toUpperCase() || "P";
+        return `<span class="task-assignee-avatar ${owner.avatar ? "has-photo" : ""}" title="${escapeHTML(owner.label)}">${owner.avatar ? `<img src="${escapeHTML(owner.avatar)}" alt="" loading="eager" decoding="async" fetchpriority="high">` : escapeHTML(initials)}</span>`;
+    }).join("");
+    const count = records.length;
+    info.innerHTML = `<strong>${count || 1} ${count === 1 ? "treino realizado" : "treinos realizados"}</strong><span class="training-selected-day-avatars">${avatars}</span>`;
+    info.hidden = false;
+}
+
+function openTrainingPhotoViewer(record) {
+    const owner = getTrainingRecordOwner(record);
+    const dateLabel = new Date(record.date + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" });
+    const viewer = document.createElement("div");
+    viewer.className = "training-photo-viewer";
+    viewer.innerHTML = `<div class="training-photo-viewer-backdrop"></div><article class="training-photo-viewer-card" role="dialog" aria-modal="true" aria-label="Foto do treino"><button type="button" class="training-photo-viewer-close" aria-label="Fechar"><i data-lucide="x"></i></button><img src="${escapeHTML(record.photo)}" alt="Foto do treino de ${escapeHTML(owner.label)}"><footer class="training-photo-viewer-caption"><div><strong>${escapeHTML(owner.label)} · ${escapeHTML(record.taskTitle)}</strong><span>${escapeHTML(dateLabel)}</span></div></footer></article>`;
+    document.body.appendChild(viewer);
+    if (window.lucide) window.lucide.createIcons();
+    const close = () => { viewer.classList.remove("visible"); document.removeEventListener("keydown", onKey); setTimeout(() => viewer.remove(), 210); };
+    const onKey = event => { if (event.key === "Escape") close(); };
+    viewer.querySelector(".training-photo-viewer-close").addEventListener("click", close);
+    viewer.querySelector(".training-photo-viewer-backdrop").addEventListener("click", close);
+    document.addEventListener("keydown", onKey);
+    requestAnimationFrame(() => viewer.classList.add("visible"));
+}
+
+async function renderTrainingReport() {
+    const categoryName = currentFilter !== "all" && isTrainingCategory(currentFilter) ? currentFilter : null;
+    if (!currentTrainingCalendarRecords.length) currentTrainingCalendarRecords = getTrainingPhotoFeedCache();
+    currentTrainingCalendarRecords = currentTrainingCalendarRecords.filter(record => !categoryName || normalizeCategoryName(record.category) === normalizeCategoryName(categoryName));
+    currentTrainingCalendarRecords = await applyPersistentTrainingThumbnails(currentTrainingCalendarRecords);
+    paintTrainingReport(categoryName);
+    const refreshedRecords = await getTrainingPhotoRecords(categoryName);
+    const currentById = new Map(currentTrainingCalendarRecords.map(record => [String(record.id), record]));
+    const stableRecords = refreshedRecords.map(record => {
+        const current = currentById.get(String(record.id));
+        // O Supabase gera uma URL assinada diferente a cada consulta. Enquanto a
+        // foto for o mesmo registro, mantemos a URL que o navegador já carregou.
+        return current?.photo ? { ...record, photo: current.photo, thumbnail: current.thumbnail || record.thumbnail } : record;
+    });
+    const signature = records => records.map(record => [
+        String(record.id), String(record.taskId), record.date, record.taskTitle,
+        record.createdBy, record.creatorLabel, record.creatorAvatar
+    ].join("|")).sort().join("\n");
+    if (signature(stableRecords) === signature(currentTrainingCalendarRecords)) return;
+    currentTrainingCalendarRecords = stableRecords;
+    paintTrainingReport(categoryName);
+}
+
+function getTrainingPhotoFeedCache() {
+    if (!currentUser) return [];
+    try {
+        const cached = JSON.parse(localStorage.getItem(`training_photo_feed_${currentUser.id}`)) || {};
+        if (!cached.savedAt || Date.now() - cached.savedAt > 50 * 60 * 1000) return [];
+        return Array.isArray(cached.records) ? cached.records : [];
+    } catch (_) {
+        return [];
+    }
+}
+
+function saveTrainingPhotoFeedCache(records) {
+    if (!currentUser) return;
+    const lightweightRecords = records.slice(0, 120).map(record => ({
+        id: record.id, taskId: record.taskId, taskTitle: record.taskTitle, category: record.category,
+        date: record.date, photo: record.photo, createdBy: record.createdBy, creatorLabel: record.creatorLabel,
+        creatorAvatar: record.creatorAvatar, createdAt: record.createdAt
+    }));
+    localStorage.setItem(`training_photo_feed_${currentUser.id}`, JSON.stringify({ savedAt: Date.now(), records: lightweightRecords }));
+    cachePriorityAvatars(records.map(record => record.creatorAvatar));
+    scheduleTrainingThumbnailCache(records);
+}
+
+function getTrainingThumbnailCacheKey() {
+    return currentUser ? `training_photo_thumbnails_${currentUser.id}` : "";
+}
+
+async function applyPersistentTrainingThumbnails(records) {
+    const key = getTrainingThumbnailCacheKey();
+    if (!key || !records.length) return records;
+    try {
+        const cache = await idb.get(key) || {};
+        return records.map(record => cache[String(record.id)]?.dataUrl
+            ? { ...record, thumbnail: cache[String(record.id)].dataUrl }
+            : record);
+    } catch (_) {
+        return records;
+    }
+}
+
+function createTrainingThumbnail(photoUrl) {
+    return new Promise(async (resolve, reject) => {
+        try {
+            const response = await fetch(photoUrl);
+            if (!response.ok) throw new Error("foto indisponível");
+            const blob = await response.blob();
+            const objectUrl = URL.createObjectURL(blob);
+            const image = new Image();
+            image.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error("miniatura inválida")); };
+            image.onload = () => {
+                const scale = Math.min(1, 360 / Math.max(image.width, image.height));
+                const canvas = document.createElement("canvas");
+                canvas.width = Math.max(1, Math.round(image.width * scale));
+                canvas.height = Math.max(1, Math.round(image.height * scale));
+                canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+                URL.revokeObjectURL(objectUrl);
+                resolve(canvas.toDataURL("image/jpeg", .68));
+            };
+            image.src = objectUrl;
+        } catch (error) {
+            reject(error);
+        }
+    });
+}
+
+function scheduleTrainingThumbnailCache(records) {
+    if (!currentUser || !Array.isArray(records) || !records.length || trainingThumbnailCacheJob) return;
+    const cacheKey = getTrainingThumbnailCacheKey();
+    const snapshot = records.filter(record => record.id && record.photo).slice(0, 180);
+    const run = async () => {
+        if (!cacheKey) return;
+        const cutoff = new Date();
+        cutoff.setFullYear(cutoff.getFullYear() - 1);
+        const cutoffDate = getLocalDateString(cutoff);
+        const existing = await idb.get(cacheKey) || {};
+        const retained = Object.fromEntries(Object.entries(existing)
+            .filter(([, item]) => item?.date >= cutoffDate)
+            .sort((a, b) => String(b[1].savedAt || "").localeCompare(String(a[1].savedAt || "")))
+            .slice(0, 180));
+        let created = 0;
+        for (const record of snapshot) {
+            const id = String(record.id);
+            if (retained[id]?.dataUrl) continue;
+            if (created >= 12) break;
+            try {
+                retained[id] = { dataUrl: await createTrainingThumbnail(record.photo), date: record.date, savedAt: new Date().toISOString() };
+                created++;
+            } catch (_) { /* A foto completa continua disponível pela nuvem. */ }
+        }
+        if (created || Object.keys(retained).length !== Object.keys(existing).length) await idb.put(cacheKey, retained);
+    };
+    const start = () => {
+        trainingThumbnailCacheJob = run().catch(error => console.warn("Não foi possível guardar miniaturas:", error.message))
+            .finally(() => { trainingThumbnailCacheJob = null; });
+    };
+    trainingThumbnailCacheJob = { scheduled: true };
+    if ("requestIdleCallback" in window) window.requestIdleCallback(start, { timeout: 2500 });
+    else setTimeout(start, 1200);
+}
+
+async function removeTrainingThumbnailCache(ids) {
+    const key = getTrainingThumbnailCacheKey();
+    if (!key || !ids.length) return;
+    try {
+        const cache = await idb.get(key) || {};
+        ids.forEach(id => delete cache[String(id)]);
+        await idb.put(key, cache);
+    } catch (_) { /* limpeza não deve impedir a exclusão da tarefa */ }
+}
+
+function prefetchRecentTrainingPhotos(records) {
+    const monthPrefix = getLocalDateString(new Date()).slice(0, 7);
+    const recentPhotos = records.filter(record => record.photo && String(record.date || "").startsWith(monthPrefix)).slice(0, 6);
+    const prefetch = () => recentPhotos.forEach(record => {
+        const image = new Image();
+        image.decoding = "async";
+        image.src = record.photo;
+    });
+    if ("requestIdleCallback" in window) window.requestIdleCallback(prefetch, { timeout: 2200 });
+    else setTimeout(prefetch, 900);
+}
+
+async function warmTrainingPhotoCache() {
+    if (!supabaseClient || !currentUser || !navigator.onLine || !categories.some(category => isTrainingCategory(category.name))) return;
+    const records = await getTrainingPhotoRecords();
+    currentTrainingCalendarRecords = records;
+}
+
+function paintTrainingReport(categoryName) {
+    const dates = getTrainingCompletionDates(categoryName);
+    currentTrainingCalendarRecords
+        .filter(isTrainingRecordOwnedByCurrentUser)
+        .forEach(record => dates.add(record.date));
+    const summary = document.getElementById("training-report-summary");
+    const grid = document.getElementById("training-calendar-grid");
+    const monthYear = document.getElementById("training-calendar-month-year");
+    if (!summary || !grid || !monthYear) return;
+    const year = currentTrainingCalendarMonth.getFullYear();
+    const month = currentTrainingCalendarMonth.getMonth();
+    const monthNames = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+    monthYear.textContent = `${monthNames[month]} ${year}`;
+    grid.innerHTML = "";
+    const firstDayIndex = new Date(year, month, 1).getDay();
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    for (let i = 0; i < firstDayIndex; i++) grid.insertAdjacentHTML("beforeend", '<span class="training-calendar-day-spacer"></span>');
+    const todayStr = getLocalDateString(new Date());
+    let initialGalleryDate = "";
+    let firstTrainedDate = "";
+    for (let day = 1; day <= lastDay; day++) {
+        const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        const dayRecords = currentTrainingCalendarRecords.filter(record => record.date === dateStr);
+        const trained = dates.has(dateStr);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `training-calendar-day ${trained ? "trained" : ""} ${dayRecords.length ? "has-photos" : ""} ${dateStr === todayStr ? "today" : ""}`;
+        button.dataset.date = dateStr;
+        const participantPhotos = [];
+        const participantKeys = new Set();
+        dayRecords.forEach(record => {
+            const owner = getTrainingRecordOwner(record);
+            const key = String(record.createdBy || owner.label);
+            if (!participantKeys.has(key) && (record.thumbnail || record.photo)) {
+                participantKeys.add(key);
+                participantPhotos.push(record.thumbnail || record.photo);
+            }
+        });
+        const hasTwoParticipants = participantPhotos.length > 1;
+        const calendarPhoto = participantPhotos[0] || dayRecords[0]?.thumbnail || dayRecords[0]?.photo;
+        if (calendarPhoto && !hasTwoParticipants) button.style.setProperty("background-image", `linear-gradient(rgba(8,12,22,.18),rgba(8,12,22,.52)),url("${calendarPhoto}")`, "important");
+        const additionalCount = hasTwoParticipants ? Math.max(0, dayRecords.length - 2) : Math.max(0, dayRecords.length - 1);
+        button.innerHTML = `${hasTwoParticipants ? '<i class="training-calendar-participant-photos" aria-label="Fotos de dois participantes"><u></u><u></u></i>' : ''}<span>${day}</span>${trained ? '<b aria-label="Treino realizado">🔥</b>' : ''}${additionalCount ? `<em>+${additionalCount}</em>` : ''}`;
+        if (hasTwoParticipants) {
+            button.querySelectorAll(".training-calendar-participant-photos > u").forEach((photo, index) => {
+                photo.style.backgroundImage = `url("${participantPhotos[index]}")`;
+            });
+        }
+        button.addEventListener("click", () => renderTrainingDayGallery(dateStr));
+        grid.appendChild(button);
+        if (!initialGalleryDate && dayRecords.length) initialGalleryDate = dateStr;
+        if (!firstTrainedDate && trained) firstTrainedDate = dateStr;
+    }
+    const monthPrefix = `${year}-${String(month + 1).padStart(2, "0")}`;
+    const monthRecords = currentTrainingCalendarRecords.filter(record => String(record.date || "").startsWith(monthPrefix));
+    const monthTrainedDates = new Set([...dates].filter(d => String(d).startsWith(monthPrefix)));
+    const monthParticipantCount = new Set(monthRecords.map(record => record.createdBy || getTrainingRecordOwner(record).label)).size;
+    const monthRecordCount = monthRecords.length;
+
+    summary.classList.toggle("no-own-training", monthTrainedDates.size === 0);
+    summary.innerHTML = `${monthTrainedDates.size ? '<span aria-label="Seus dias de treino">🔥</span>' : ''}<strong>${monthTrainedDates.size} ${monthTrainedDates.size === 1 ? "dia" : "dias"} de treino • ${monthParticipantCount} ${monthParticipantCount === 1 ? "participante" : "participantes"} • ${monthRecordCount} ${monthRecordCount === 1 ? "registro" : "registros"}</strong>`;
+    const activeDateStr = currentTrainingCalendarSelectedDate || selectedDate || todayStr;
+    const defaultSelectedDay = activeDateStr.startsWith(monthPrefix)
+        ? activeDateStr
+        : (todayStr.startsWith(monthPrefix) ? todayStr : (initialGalleryDate || firstTrainedDate || `${monthPrefix}-01`));
+    renderTrainingDayGallery(defaultSelectedDay);
+    lucide.createIcons();
+}
+
+function isCassolDashboardTask(task) {
+    return CASSOL_DASHBOARD_CATEGORY_NAMES.has(normalizeCategoryName(task?.category));
+}
+
+function queueCassolDashboardTaskSync(taskId, payload = {}) {
+    if (!taskId || isTemporaryId(taskId)) return;
+    cassolDashboardLastPushAt = Date.now();
+    const queue = JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {};
+    const key = String(taskId);
+    const previous = queue[key] || {};
+    const next = {
+        task_id: key,
+        operation: "upsert",
+        ...payload
+    };
+    // Uma exclusão sempre vence. Para os demais casos, não perdemos um check
+    // que ocorreu logo após a criação/edição da mesma tarefa.
+    if (next.operation !== "delete" && previous.operation === "delete") return;
+    if (next.operation === "upsert" && previous.operation === "completion") {
+        queue[key] = { ...next, ...previous, queued_at: Date.now() };
+    } else {
+        queue[key] = { ...previous, ...next, queued_at: Date.now() };
+    }
+    localStorage.setItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY, JSON.stringify(queue));
+    scheduleCassolDashboardTaskSync();
+}
+
+function scheduleCassolDashboardTaskSync(delay = 650) {
+    if (cassolDashboardSyncTimer) clearTimeout(cassolDashboardSyncTimer);
+    cassolDashboardSyncTimer = setTimeout(() => {
+        cassolDashboardSyncTimer = null;
+        syncCassolDashboardTaskQueue();
+    }, delay);
+}
+
+async function syncCassolDashboardTaskQueue() {
+    if (cassolDashboardSyncInProgress || !supabaseClient || !currentUser || !navigator.onLine) return null;
+    const queue = JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {};
+    const entries = Object.values(queue);
+    if (!entries.length) return true;
+    cassolDashboardSyncInProgress = true;
+    let succeeded = true;
+    try {
+        for (const entry of entries) {
+            const taskId = String(entry?.task_id || "");
+            if (!taskId || isTemporaryId(taskId)) continue;
+            const { data, error } = await supabaseClient.functions.invoke("sync-cassol-dashboard", { body: entry });
+            if (error || data?.error) {
+                console.warn("A tarefa Cassol será reenviada ao dashboard quando a integração estiver disponível:", error?.message || data?.error);
+                succeeded = false;
+                break;
+            }
+            const currentQueue = JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {};
+            if (JSON.stringify(currentQueue[taskId]) === JSON.stringify(entry)) {
+                delete currentQueue[taskId];
+                localStorage.setItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY, JSON.stringify(currentQueue));
+            }
+        }
+    } catch (error) {
+        succeeded = false;
+        console.warn("Não foi possível atualizar o dashboard da Cassol agora:", error?.message || error);
+    } finally {
+        cassolDashboardSyncInProgress = false;
+        const remaining = JSON.parse(localStorage.getItem(CASSOL_DASHBOARD_SYNC_QUEUE_KEY)) || {};
+        if (Object.keys(remaining).length) scheduleCassolDashboardTaskSync(5000);
+    }
+    return succeeded;
+}
+
+async function invokeCassolDashboardPullDirectly() {
+    const { data: sessionData, error: sessionError } = await supabaseClient.auth.getSession();
+    if (sessionError || !sessionData?.session?.access_token) {
+        throw sessionError || new Error("Sessão do Checklist indisponível.");
+    }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    try {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/sync-cassol-dashboard`, {
+            method: "POST",
+            headers: {
+                apikey: SUPABASE_KEY,
+                Authorization: `Bearer ${sessionData.session.access_token}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ operation: "pull" }),
+            cache: "no-store",
+            signal: controller.signal,
+        });
+        let payload = {};
+        try { payload = await response.json(); } catch (_) {}
+        if (!response.ok || payload?.error) {
+            throw new Error(payload?.error || `A sincronização respondeu HTTP ${response.status}.`);
+        }
+        return payload;
+    } catch (error) {
+        if (error?.name === "AbortError") throw new Error("A importação do Dashboard excedeu 12 segundos.");
+        throw error;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+// Uma tarefa pode ter sido excluída localmente e, depois, atribuída novamente
+// no Dashboard. Nesse caso o servidor a reativa, mas o cache mantém a marca
+// temporária de exclusão por até 24 horas. Limpamos apenas os IDs confirmados
+// pelo Dashboard, sem tocar nas demais exclusões locais.
+function restoreCassolTasksReassignedByDashboard(taskIds = []) {
+    const ids = new Set((Array.isArray(taskIds) ? taskIds : []).map(String).filter(Boolean));
+    if (!ids.size) return false;
+    let changed = false;
+    const offlineTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    const restoredTasks = offlineTasks.map(task => {
+        if (!ids.has(String(task?.id)) || task?.is_active !== false) return task;
+        changed = true;
+        const restored = { ...task, is_active: true };
+        delete restored.local_deleted_at;
+        return restored;
+    });
+    if (changed) localStorage.setItem("offline_tasks", JSON.stringify(restoredTasks));
+
+    const updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+    let queueChanged = false;
+    ids.forEach(id => {
+        if (updatesQueue[id]?.is_active === false) {
+            delete updatesQueue[id];
+            queueChanged = true;
+        }
+    });
+    if (queueChanged) localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
+    return changed;
+}
+
+async function pullCassolDashboardTasks(force = false) {
+    if (cassolDashboardPullInProgress || !supabaseClient || !currentUser || !navigator.onLine) return;
+    if (document.visibilityState !== "visible" && !force) return;
+    const now = Date.now();
+    if (!force && now - cassolDashboardLastPullAt < CASSOL_DASHBOARD_RECONCILE_INTERVAL_MS) return;
+    // Dá prioridade à alteração recém-feita no Checklist, para que uma leitura
+    // do dashboard ainda desatualizada nunca sobrescreva a ação do usuário.
+    if (!force && now - cassolDashboardLastPushAt < CASSOL_DASHBOARD_LOCAL_CHANGE_GUARD_MS) return;
+    cassolDashboardPullInProgress = true;
+    cassolDashboardLastPullAt = now;
+    try {
+        const data = await invokeCassolDashboardPullDirectly();
+        const restoredLocally = restoreCassolTasksReassignedByDashboard(data?.active_task_ids);
+        const changes = Number(data?.created || 0) + Number(data?.updated || 0);
+        if (changes > 0 || restoredLocally) {
+            await loadChecklistAndProgress();
+            console.log(`[Cassol dashboard] ${changes || 1} tarefa(s) recebida(s) ou restaurada(s) pelo dashboard.`);
+        }
+    } catch (error) {
+        console.warn("Falha ao importar tarefas da Editora Cassol:", error?.message || error);
+    } finally {
+        cassolDashboardPullInProgress = false;
+    }
+}
+
+async function startCassolDashboardRealtimeListener() {
+    if (cassolFirebaseRealtimeStarted || cassolDashboardRealtimeStartPending) return;
+    cassolDashboardRealtimeStartPending = true;
+    try {
+        const [firebaseApp, firestore] = await Promise.all([
+            import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js"),
+            import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js"),
+        ]);
+        const firebaseConfig = {
+            apiKey: "AIzaSyCuifhZ4I3_doR6N_2xdqMe3zUDMgjeeR0",
+            authDomain: "grupo-cassol-2.firebaseapp.com",
+            projectId: "grupo-cassol-2",
+            storageBucket: "grupo-cassol-2.firebasestorage.app",
+            messagingSenderId: "265678011446",
+            appId: "1:265678011446:web:3e1e7737d1e6fd5fb26c97",
+        };
+        const firebaseInstance = firebaseApp.getApps().find(item => item.options?.projectId === firebaseConfig.projectId)
+            || firebaseApp.initializeApp(firebaseConfig, "checklist-cassol-realtime");
+        // Safari/PWAs e algumas redes móveis podem deixar o WebChannel tentando
+        // conectar por quase um minuto antes do fallback. Long polling mantém o
+        // listener em tempo real, mas usa um transporte HTTP mais compatível.
+        let db;
+        try {
+            db = firestore.initializeFirestore(firebaseInstance, {
+                experimentalForceLongPolling: true,
+                useFetchStreams: false,
+            });
+        } catch (error) {
+            // Se outra parte da página já tiver inicializado essa mesma
+            // instância, reutiliza-a em vez de perder completamente a escuta.
+            db = firestore.getFirestore(firebaseInstance);
+        }
+        const watchedDocuments = ["gc-events", "gc-conteudos", "gc-livros", "gc-projetos"];
+
+        cassolFirebaseRealtimeUnsubscribers = watchedDocuments.map(documentId => firestore.onSnapshot(
+            firestore.doc(db, "dados", documentId),
+            snapshot => {
+                if (!snapshot.exists()) return;
+                const timestamp = Number(snapshot.data()?.ts || 0);
+                if (!cassolFirebaseLastTimestamp.has(documentId)) {
+                    cassolFirebaseLastTimestamp.set(documentId, timestamp);
+                    return;
+                }
+                if (cassolFirebaseLastTimestamp.get(documentId) === timestamp) return;
+                cassolFirebaseLastTimestamp.set(documentId, timestamp);
+                window.requestCassolDashboardRealtimePull?.();
+            },
+            error => console.warn(`[Cassol dashboard] Firebase não permitiu acompanhar ${documentId}:`, error?.message || error),
+        ));
+        cassolFirebaseRealtimeStarted = true;
+        console.log("[Cassol dashboard] Escuta direta do Firebase conectada.");
+    } catch (error) {
+        console.warn("[Cassol dashboard] Escuta direta indisponível; a reconciliação ocorrerá na próxima abertura:", error?.message || error);
+    } finally {
+        cassolDashboardRealtimeStartPending = false;
+    }
+}
+
+window.requestCassolDashboardRealtimePull = function requestCassolDashboardRealtimePull() {
+    if (!currentUser || !supabaseClient || !navigator.onLine) return;
+    clearTimeout(cassolDashboardRealtimePullTimer);
+    cassolDashboardRealtimePullTimer = setTimeout(async () => {
+        cassolDashboardRealtimePullTimer = null;
+        if (cassolDashboardPullInProgress) {
+            window.requestCassolDashboardRealtimePull();
+            return;
+        }
+        await pullCassolDashboardTasks(true);
+    }, 100);
+};
+
+function startCassolDashboardPulling() {
+    if (cassolDashboardLastPullAt) return;
+    setTimeout(() => pullCassolDashboardTasks(true), 900);
+}
+
+function saveCompletionOffline(taskId, date, completed) {
+    let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+    localCompletions = localCompletions.filter(c => !(String(c.task_id) === String(taskId) && c.date === date));
+    
+    if (completed) {
+        localCompletions.push({
+            task_id: taskId,
+            date: date,
+            completed: true
+        });
+    }
+    localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
+
+    let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+    queue[`${taskId}_${date}`] = completed;
+    localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
+}
+
+async function addTask(title, category, recurrenceMode, customDate, repeatDays, assignedTo, shifts, important = false, reminderTime = null, reminderOffsetDays = 0, description = "") {
+    if (!title) return;
+    if (!requireOnlineTaskMutation("criar uma tarefa")) throw new Error("Sem conexão com a internet.");
+    beginOptimisticMutation();
+    if (isTrainingCollaborativeCategory(category)) {
+        assignedTo = null;
+    }
+    const isRecurring = recurrenceMode !== "once";
+    const tempId = Date.now();
+    
+    // Evita problemas de fuso horário definindo a data ao meio-dia
+    const createdAtDate = customDate ? new Date(customDate + "T12:00:00") : new Date();
+    const createdAt = createdAtDate.toISOString();
+
+    const context = analyzeTaskContext(title, category, tasks) || {};
+    // Identificador estável permite recuperar a mesma criação se a internet
+    // cair depois do insert, mas antes de o aparelho receber a resposta.
+    context.sync_token = context.sync_token || `task-${currentUser?.id || "local"}-${tempId}`;
+    if (recurrenceMode === "interval14") {
+        context.recurrence_type = "interval";
+        context.recurrence_interval_days = 14;
+    }
+    if (shifts && shifts.length > 0) {
+        context.turnos = shifts;
+    }
+    if (description && description.trim()) context.description = description.trim();
+    if (important) {
+        context.important = true;
+        context.reminders = normalizeTaskReminders(reminderTime
+            ? [{ time: reminderTime, offset_days: reminderOffsetDays }]
+            : addTaskReminders);
+        if (!context.reminders.length) context.reminders = [{ time: getCurrentReminderTime(), offset_days: 0 }];
+        context.reminder_time = context.reminders[0].time;
+        context.reminder_offset_days = context.reminders[0].offset_days;
+        context.reminder_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
+    }
+    if (currentUser) {
+        context.creator_user_id = currentUser.id;
+        context.creator_label = getIdentityLabel(currentUser.email) || currentUser.email?.split("@")[0] || "Participante";
+        context.creator_avatar_url = getIdentityAvatarByUserId(currentUser.id) || getIdentityAvatar(currentUser.email) || "";
+    }
+    console.log(`%c[Motor de Contexto] Tarefa: "${title}" na guia "${category}"`, "color: #8b5cf6; font-weight: bold;", context);
+
+    const newTask = {
+        title: title,
+        category: category,
+        is_recurring: isRecurring,
+        is_active: true,
+        created_at: createdAt
+    };
+    const selectedCategory = categories.find(cat => cat.name === category);
+    if (selectedCategory && !isTemporaryId(selectedCategory.id)) newTask.category_id = selectedCategory.id;
+    if (repeatDays) newTask.repeat_days = repeatDays;
+    if (context && Object.keys(context).length > 0) newTask.context = context;
+    if (assignedTo) newTask.assigned_to = assignedTo;
+    if (currentUser) newTask.user_id = currentUser.id;
+
+    // A criação aparece imediatamente e usa o sincronizador idempotente. O
+    // sync_token recupera a mesma tarefa caso o Supabase grave, mas a resposta
+    // demore ou se perca — sem toast falso e sem criar duplicata.
+    await addTaskOffline(title, category, isRecurring, tempId, createdAt, repeatDays, context, assignedTo);
+    setSyncStatus("pending", "Salvo localmente", "Confirmando a tarefa na nuvem em segundo plano");
+    scheduleCloudSync("nova-tarefa", 0);
+    return {
+        ...newTask,
+        id: tempId,
+        category_id: selectedCategory && !isTemporaryId(selectedCategory.id) ? selectedCategory.id : undefined
+    };
+}
+
+async function insertTaskWithCategoryFallback(taskPayload) {
+    let result = await supabaseClient.from('tasks').insert(taskPayload).select();
+    if (result.error && taskPayload.category_id && /category_id|schema cache/i.test(result.error.message || "")) {
+        const legacyPayload = { ...taskPayload };
+        delete legacyPayload.category_id;
+        console.warn("A migração de colaboração ainda não foi aplicada; salvando a tarefa no formato antigo.");
+        result = await supabaseClient.from('tasks').insert(legacyPayload).select();
+    }
+    return result;
+}
+
+function cloudRequestWithTimeout(request, timeoutMs = 10000) {
+    return Promise.race([
+        Promise.resolve(request),
+        new Promise((_, reject) => setTimeout(
+            () => reject(new Error("A confirmação está demorando; nova tentativa automática agendada.")),
+            timeoutMs
+        )),
+    ]);
+}
+
+function isCollaborativeCategory(categoryId) {
+    if (!categoryId) return false;
+    const category = categories.find(item =>
+        String(item.id) === String(categoryId)
+        || (item.merged_category_ids || []).some(id => String(id) === String(categoryId))
+    );
+    const relatedIds = new Set((category?.merged_category_ids || [categoryId]).map(String));
+    return (categoryShares || []).some(share => relatedIds.has(String(share.category_id)) && share.accepted === true);
+}
+
+function isTrainingCollaborativeCategory(categoryName) {
+    const category = categories.find(cat => cat.name === categoryName);
+    return Boolean(category && isTrainingCategory(category.name) && isCollaborativeCategory(category.id));
+}
+
+function canManageTrainingCollaborativeCategory(categoryName) {
+    const category = categories.find(cat => cat.name === categoryName);
+    if (!category || !currentUser) return false;
+    if (String(category.user_id || "") === String(currentUser.id)) return true;
+    const myEmail = normalizeAccountEmail(currentUser.email);
+    const participantShare = (categoryShares || []).find(share =>
+        (category.merged_category_ids || [category.id]).some(id => String(share.category_id) === String(id))
+        && normalizeAccountEmail(share.collaborator_email) === myEmail
+        && share.accepted === true
+    );
+    return !participantShare;
+}
+
+async function requestSharedTaskPush(taskId, silent = false, eventType = "training_created", trainingDate = null) {
+    if (!supabaseClient || !taskId) return false;
+    try {
+        const { data, error } = await supabaseClient.functions.invoke("send-task-push", { body: { task_id: taskId, event_type: eventType, training_date: trainingDate } });
+        if (error) throw error;
+        const sent = Number(data && data.sent || 0);
+        const recipients = Number(data && data.recipients || 0);
+        const subscriptions = Number(data && data.subscriptions || 0);
+        if (sent > 0) return true;
+        if (!silent) {
+            if (recipients === 0) {
+                showAppNotice("A tarefa foi criada, mas nenhum colaborador aceito foi encontrado para receber o push.", "warning");
+            } else if (subscriptions === 0) {
+                showAppNotice("A tarefa foi compartilhada, mas o aparelho do destinatário ainda não está registrado para notificações push. Ele precisa ativar Notificações nas Configurações do app.", "warning");
+            } else {
+                showAppNotice("A tarefa foi compartilhada, mas o serviço push não confirmou a entrega ao aparelho.", "warning");
+            }
+        }
+        return false;
+    } catch (error) {
+        console.warn("A tarefa foi salva, mas o push não pôde ser enviado:", error.message);
+        if (!silent) showAppNotice(`Tarefa salva, mas o push falhou: ${error.message}`, "warning");
+        return false;
+    }
+}
+
+async function addTaskOffline(title, category, isRecurring, id, createdAt, repeatDays, context, assignedTo) {
+    beginOptimisticMutation();
+    const now = new Date();
+    let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    const task = {
+        id: id,
+        title: title,
+        category: category,
+        is_recurring: isRecurring,
+        is_active: true,
+        created_at: createdAt
+    };
+    if (repeatDays) {
+        task.repeat_days = repeatDays;
+    }
+    if (context) {
+        task.context = context;
+    }
+    if (assignedTo) {
+        task.assigned_to = assignedTo;
+    }
+    localTasks.push(task);
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+    
+    loadDataOffline();
+    renderChecklist();
+    updateProgress();
+}
+
+async function renameTask(id, newTitle, context) {
+    if (!newTitle) return;
+    if (!requireOnlineTaskMutation("editar uma tarefa") || isTemporaryId(id)) return;
+
+    const existingTask = tasks.find(t => String(t.id) === String(id));
+    const category = existingTask ? existingTask.category : "";
+    const nlpContext = analyzeTaskContext(newTitle, category, tasks);
+    const finalContext = context || nlpContext;
+
+    const updates = { title: newTitle };
+    if (finalContext) updates.context = finalContext;
+    await runConfirmedTaskMutation(
+        supabaseClient.from("tasks").update(updates).eq("id", id),
+        "Edição da tarefa"
+    );
+
+    beginOptimisticMutation();
+    renameTaskOffline(id, newTitle, finalContext);
+    loadDataOffline();
+    renderChecklist();
+
+    const syncedTask = tasks.find(task => String(task.id) === String(id));
+    if (isCassolDashboardTask(syncedTask)) queueCassolDashboardTaskSync(id, { operation: "upsert" });
+}
+
+function renameTaskOffline(id, newTitle, context) {
+    let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    localTasks = localTasks.map(t => {
+        if (String(t.id) === String(id)) {
+            const updated = { ...t, title: newTitle };
+            if (context) updated.context = context;
+            return updated;
+        }
+        return t;
+    });
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+    // Não chama loadDataOffline nem render aqui — renameTask já faz isso
+}
+
+// Full task update (title, date, recurrence, repeat_days)
+async function updateTask(id, updates) {
+    if (!requireOnlineTaskMutation("editar uma tarefa")) return false;
+    const existingTask = tasks.find(t => String(t.id) === String(id));
+    if (existingTask && isTrainingCategory(existingTask.category)) {
+        if (!isTrainingTaskOwnedByCurrentUser(existingTask)) {
+            showAppNotice("Somente o dono pode editar esta tarefa de treino.", "warning");
+            return;
+        }
+        updates.assigned_to = null;
+    }
+    
+    // Analyze new context if title is being updated
+    if (updates.title !== undefined) {
+        const category = existingTask ? existingTask.category : "";
+        const nlpContext = analyzeTaskContext(updates.title, category, tasks) || {};
+        
+        // Get existing context
+        let existingContext = {};
+        if (existingTask && existingTask.context) {
+            if (typeof existingTask.context === 'string') {
+                try {
+                    existingContext = JSON.parse(existingTask.context);
+                } catch (e) {
+                    existingContext = {};
+                }
+            } else {
+                existingContext = { ...existingTask.context };
+            }
+        }
+        
+        // Mescla o contexto existente, o contexto atualizado enviado no updates, e o nlpContext analisado
+        updates.context = { ...existingContext, ...(updates.context || {}), ...nlpContext };
+    }
+
+    const dbUpdates = {};
+    if (updates.title !== undefined) dbUpdates.title = updates.title;
+    if (updates.category !== undefined) {
+        dbUpdates.category = updates.category;
+        const matchingCategory = categories.find(category => category.name === updates.category && !isTemporaryId(category.id));
+        if (matchingCategory) dbUpdates.category_id = matchingCategory.id;
+    }
+    if (updates.is_recurring !== undefined) dbUpdates.is_recurring = updates.is_recurring;
+    if (updates.repeat_days !== undefined) dbUpdates.repeat_days = updates.repeat_days;
+    if (updates.created_at !== undefined) dbUpdates.created_at = updates.created_at;
+    if (updates.context !== undefined) dbUpdates.context = updates.context;
+    if (updates.assigned_to !== undefined) dbUpdates.assigned_to = updates.assigned_to;
+
+    // Atualiza primeiro a interface. Para IDs reais, a fila envia somente os
+    // campos alterados; para IDs temporários, o insert pendente já lerá a
+    // versão mais recente completa do cache.
+    beginOptimisticMutation();
+    let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    localTasks = localTasks.map(t => {
+        if (String(t.id) === String(id)) return { ...t, ...updates };
+        return t;
+    });
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+
+    // Reconstrói a memória através do fluxo central que aplica as regras de data e filtro corretamente
+    loadDataOffline();
+
+    renderChecklist();
+    updateProgress();
+
+    if (!isTemporaryId(id)) enqueueTaskCloudUpdate(id, dbUpdates, "edição-imediata");
+    else scheduleCloudSync("edição-de-tarefa-nova", 0);
+
+    // O espelhamento Cassol será enfileirado após o banco principal confirmar
+    // o update. IDs temporários são convertidos antes dessa etapa.
+    return true;
+}
+
+// Recurrence label helper
+function getRecurrenceLabel(task) {
+    if (!task.is_recurring) return 'Única';
+    const intervalDays = getTaskIntervalDays(task);
+    if (intervalDays === 14) return 'A cada 2 semanas';
+    if (intervalDays) return `A cada ${intervalDays} dias`;
+    if (task.repeat_days && task.repeat_days.length > 0) {
+        const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+        if (task.repeat_days.length === 7) return 'Diária';
+        return task.repeat_days.map(d => dayNames[Number(d)]).join(', ');
+    }
+    return 'Diária';
+}
+
+// Edit Task Modal
+function openEditTaskModal(task) {
+    const modalEditTask = document.getElementById("modal-edit-task");
+    if (isTrainingCategory(task.category) && !isTrainingTaskOwnedByCurrentUser(task)) {
+        showAppNotice("Somente o dono pode editar esta tarefa de treino.", "warning");
+        return;
+    }
+    
+    document.getElementById("edit-task-id").value = task.id;
+    document.getElementById("edit-task-title").value = task.title;
+    const descriptionInput = document.getElementById("edit-task-description");
+    const descriptionGroup = document.getElementById("edit-task-description-group");
+    const descriptionButton = document.getElementById("btn-edit-task-description");
+    const taskDescription = String(task.context?.description || "");
+    if (descriptionInput) {
+        descriptionInput.value = taskDescription;
+    }
+    if (taskDescription) {
+        if (descriptionGroup) descriptionGroup.hidden = false;
+        if (descriptionButton) descriptionButton.hidden = true;
+        if (descriptionInput) {
+            descriptionInput.style.height = "auto";
+            descriptionInput.style.height = Math.max(100, descriptionInput.scrollHeight + 4) + "px";
+        }
+    } else {
+        if (descriptionGroup) descriptionGroup.hidden = true;
+        if (descriptionButton) {
+            descriptionButton.hidden = false;
+            const label = descriptionButton.querySelector("span");
+            if (label) label.textContent = "Adicionar descrição";
+        }
+    }
+    
+    // Determine recurrence mode
+    const editRecurring = document.getElementById("edit-task-recurring");
+    const editRepeatGroup = document.getElementById("edit-repeat-days-group");
+    
+    editRecurring.value = getTaskRecurrenceMode(task);
+    editRepeatGroup.style.display = editRecurring.value === "repeat" ? "block" : "none";
+    
+    // Set day toggles
+    document.querySelectorAll(".edit-day-toggle").forEach(btn => {
+        const day = parseInt(btn.dataset.day);
+        if (task.repeat_days && task.repeat_days.map(Number).includes(day)) {
+            btn.classList.add("active");
+        } else {
+            btn.classList.remove("active");
+        }
+    });
+    
+    // Set date from created_at
+    const editDate = document.getElementById("edit-task-date");
+    const taskDate = (task && task.created_at) ? extractDateFromTimestamp(task.created_at) : selectedDate;
+    editDate.value = taskDate;
+
+    // Configura a categoria
+    if (selectEditTaskCategory) {
+        selectEditTaskCategory.value = task.category || "";
+    }
+
+    // Configura os turnos selecionados
+    document.querySelectorAll("#edit-shift-selector .shift-toggle-btn").forEach(btn => {
+        const shiftVal = btn.dataset.shift;
+        const taskShifts = (task.context && task.context.turnos) ? task.context.turnos : [];
+        if (taskShifts.includes(shiftVal)) {
+            btn.classList.add("active");
+        } else {
+            btn.classList.remove("active");
+        }
+    });
+
+    // Configura e pré-seleciona a atribuição do colaborador
+    updateTaskAssigneeDropdown(task.category, selectEditTaskAssignedTo, editTaskAssigneeGroup);
+    if (selectEditTaskAssignedTo) {
+        selectEditTaskAssignedTo.value = task.assigned_to || "";
+    }
+
+    const chkEditImp = document.getElementById("edit-task-important");
+    if (chkEditImp) {
+        editTaskReminders = normalizeTaskReminders(task);
+        chkEditImp.checked = Boolean(task.context && (task.context.important === true || task.context.important === "true") && editTaskReminders.length);
+        updateTaskReminderSummary("edit", chkEditImp.checked, editTaskReminders);
+    }
+    
+    openModal(modalEditTask);
+    lucide.createIcons();
+}
+
+async function deleteTask(id) {
+    if (!requireOnlineTaskMutation("excluir uma tarefa") || isTemporaryId(id)) return;
+    const existingTask = tasks.find(task => String(task.id) === String(id));
+    if (existingTask && isTrainingCategory(existingTask.category) && !isTrainingTaskOwnedByCurrentUser(existingTask)) {
+        showAppNotice("Somente o dono pode excluir esta tarefa de treino.", "warning");
+        return;
+    }
+    const taskId = String(id);
+    const dashboardTask = isCassolDashboardTask(existingTask);
+    if ([...pendingDeletes].some(pendingId => String(pendingId) === taskId)) return;
+    pendingDeletes.add(taskId);
+    beginOptimisticMutation();
+    tasks = tasks.filter(t => String(t.id) !== String(id));
+    allActiveTasks = allActiveTasks.filter(t => String(t.id) !== String(id));
+    
+    // Salva no LocalStorage
+    deleteTaskOffline(id);
+
+    // A exclusão principal e o espelhamento seguem em paralelo. A fila mantém
+    // is_active=false até o Supabase confirmar, sem recolocar o cartão ou
+    // exibir um erro falso quando a resposta apenas estiver lenta.
+    enqueueTaskCloudUpdate(id, { is_active: false }, "exclusão-imediata");
+
+    if (dashboardTask) queueCassolDashboardTaskSync(id, { operation: "delete" });
+
+    renderChecklist();
+    updateProgress();
+
+    // Fotos e conclusões são limpas em paralelo; nenhuma dessas operações pode
+    // atrasar ou desfazer a remoção visual do cartão.
+    const cleanupPromise = Promise.all([
+        deleteTrainingPhotosForTask(existingTask),
+        deleteTrainingCompletionsForTask(existingTask)
+    ]).then(([photoDeletion, completionDeletion]) => {
+        if (!photoDeletion.ok) showAppNotice(`Tarefa removida deste aparelho, mas a foto ainda aguarda exclusão na nuvem: ${photoDeletion.error}`, "warning");
+        if (!completionDeletion.ok) showAppNotice(`Tarefa removida deste aparelho, mas o histórico de conclusão ainda aguarda exclusão na nuvem: ${completionDeletion.error}`, "warning");
+    }).catch(error => console.warn("Limpeza complementar da tarefa pendente:", error.message));
+
+    cleanupPromise.finally(() => {
+        pendingDeletes.delete(taskId);
+    });
+}
+
+function deleteTaskOffline(id) {
+    let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    localTasks = localTasks.map(t => {
+        if (String(t.id) === String(id)) return { ...t, is_active: false, local_deleted_at: new Date().toISOString() };
+        return t;
+    });
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+    // Não chama loadDataOffline nem render aqui — deleteTask já faz isso
+}
+
+async function excludeTaskForToday(id) {
+    const existingTask = tasks.find(task => String(task.id) === String(id));
+    if (existingTask && isTrainingCategory(existingTask.category) && !isTrainingTaskOwnedByCurrentUser(existingTask)) {
+        showAppNotice("Somente o dono pode alterar esta tarefa de treino.", "warning");
+        return;
+    }
+    beginOptimisticMutation();
+    const taskId = String(id);
+    const actionDate = selectedDate;
+    if ([...pendingDeletes].some(pendingId => String(pendingId) === taskId)) return;
+    pendingDeletes.add(taskId);
+
+    // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
+    tasks = tasks.filter(t => String(t.id) !== String(id));
+    
+    // Salva no LocalStorage
+    excludeTaskForTodayOffline(id);
+
+    renderChecklist();
+    updateProgress();
+
+    // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
+    if (supabaseClient && currentUser) {
+        supabaseClient.from('completions').upsert({
+            task_id: id,
+            date: actionDate,
+            completed: false
+        }, { onConflict: 'task_id,date' })
+            .then(({ error }) => {
+                if (error) {
+                    console.warn("Erro ao excluir do dia no Supabase. Mantido localmente.", error.message);
+                } else {
+                    clearQueuedEntryIfCurrent("offline_completions_queue", `${taskId}_${actionDate}`, "excluded");
+                }
+                pendingDeletes.delete(taskId);
+            })
+            .catch(err => {
+                console.error("Erro assíncrono ao excluir do dia:", err);
+                pendingDeletes.delete(taskId);
+            });
+    } else {
+        pendingDeletes.delete(taskId);
+    }
+}
+
+function excludeTaskForTodayOffline(id) {
+    let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+    localCompletions = localCompletions.filter(c => !(String(c.task_id) === String(id) && c.date === selectedDate));
+    
+    localCompletions.push({
+        task_id: id,
+        date: selectedDate,
+        completed: false
+    });
+    localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
+    let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+    queue[`${id}_${selectedDate}`] = "excluded";
+    localStorage.setItem("offline_completions_queue", JSON.stringify(queue));
+    // Não chama loadDataOffline nem render aqui — excludeTaskForToday já faz isso
+}
+
+function showConfirmDelete(task, onChoice) {
+    if (!modalConfirmDelete) return;
+    
+    confirmDeleteTitle.textContent = "Excluir Tarefa";
+    confirmDeleteBody.textContent = task.is_recurring 
+        ? `"${task.title}" é uma tarefa recorrente. Como deseja excluí-la?`
+        : `Deseja realmente excluir a tarefa "${task.title}"?`;
+        
+    if (task.is_recurring) {
+        confirmDeleteStandardActions.classList.add("hidden");
+        confirmDeleteRecurringActions.classList.remove("hidden");
+    } else {
+        confirmDeleteStandardActions.classList.remove("hidden");
+        confirmDeleteRecurringActions.classList.add("hidden");
+    }
+    
+    confirmDeleteCallback = onChoice;
+    openModal(modalConfirmDelete);
+}
+
+function setupModalSwipeToClose(modal) {
+    const content = modal.querySelector(".modal-content");
+    const overlay = modal.querySelector(".modal-overlay");
+    if (!content) return;
+
+    let startY = 0;
+    let startX = 0;
+    let currentY = 0;
+    let lastY = 0;
+    let lastMoveAt = 0;
+    let velocityY = 0;
+    let isDragging = false;
+    let directionLocked = false;
+    let animationFrame = 0;
+
+    const clearGestureStyles = () => {
+        cancelAnimationFrame(animationFrame);
+        content.classList.remove("is-swipe-dragging");
+        content.style.removeProperty("transform");
+        content.style.removeProperty("transition");
+        overlay?.style.removeProperty("opacity");
+        overlay?.style.removeProperty("transition");
+    };
+
+    const renderDrag = distance => {
+        cancelAnimationFrame(animationFrame);
+        animationFrame = requestAnimationFrame(() => {
+            content.style.transform = `translate3d(0, ${distance}px, 0)`;
+            if (overlay) {
+                const progress = Math.min(distance / Math.max(content.offsetHeight, 1), 0.75);
+                overlay.style.opacity = String(1 - progress * 0.72);
+            }
+        });
+    };
+    
+    content.addEventListener("touchstart", (e) => {
+        // Ignora gestos de deslize iniciados em campos interativos (inputs, selects, botões, etc.)
+        if (e.target.closest("input") || e.target.closest("select") || e.target.closest("button") || e.target.closest("textarea") || e.target.closest(".day-toggle") || e.target.closest(".edit-day-toggle")) {
+            return;
+        }
+        
+        // Se o toque começou dentro de algum elemento interno que está com scroll ativo (ex: listas com max-height)
+        let hasActiveScrollParent = false;
+        let parent = e.target;
+        while (parent && parent !== content) {
+            if (parent.scrollHeight > parent.clientHeight) {
+                const overflowY = window.getComputedStyle(parent).overflowY;
+                if ((overflowY === "auto" || overflowY === "scroll") && parent.scrollTop > 0) {
+                    hasActiveScrollParent = true;
+                    break;
+                }
+            }
+            parent = parent.parentElement;
+        }
+
+        if (hasActiveScrollParent) {
+            return;
+        }
+        
+        // O gesto de fechar começa somente no cabeçalho/alça. Iniciá-lo em
+        // qualquer ponto quando a lista está no topo faz o Safari capturar o
+        // primeiro movimento e, de forma intermitente, perder o scroll nativo.
+        const touchedHeader = e.target.closest(".modal-header") || (e.touches[0].clientY - content.getBoundingClientRect().top < 60);
+        
+        if (touchedHeader) {
+            startY = e.touches[0].clientY;
+            startX = e.touches[0].clientX;
+            currentY = startY;
+            lastY = startY;
+            lastMoveAt = performance.now();
+            velocityY = 0;
+            isDragging = true;
+            directionLocked = false;
+            content.classList.add("is-swipe-dragging");
+            content.style.transition = "none";
+            if (overlay) overlay.style.transition = "none";
+        }
+    }, { passive: true });
+
+    content.addEventListener("touchmove", (e) => {
+        if (!isDragging) return;
+        currentY = e.touches[0].clientY;
+        const currentX = e.touches[0].clientX;
+        const diffY = currentY - startY;
+        const diffX = currentX - startX;
+
+        if (!directionLocked && Math.max(Math.abs(diffY), Math.abs(diffX)) > 8) {
+            if (Math.abs(diffX) > Math.abs(diffY) || diffY < 0) {
+                isDragging = false;
+                clearGestureStyles();
+                return;
+            }
+            directionLocked = true;
+        }
+        if (!directionLocked) return;
+
+        const now = performance.now();
+        const elapsed = Math.max(now - lastMoveAt, 1);
+        velocityY = velocityY * 0.65 + ((currentY - lastY) / elapsed) * 0.35;
+        lastY = currentY;
+        lastMoveAt = now;
+        
+        if (diffY < 0) {
+            isDragging = false;
+            clearGestureStyles();
+            return;
+        }
+        if (e.cancelable) e.preventDefault();
+        renderDrag(diffY);
+    }, { passive: false });
+
+    const finishGesture = cancelled => {
+        if (!isDragging) return;
+        isDragging = false;
+        cancelAnimationFrame(animationFrame);
+        const distance = Math.max(0, currentY - startY);
+        const shouldClose = !cancelled && (distance > Math.min(120, content.offsetHeight * 0.22) || (distance > 34 && velocityY > 0.55));
+        content.classList.remove("is-swipe-dragging");
+
+        if (shouldClose) {
+            const remaining = Math.max(content.offsetHeight - distance, 0);
+            const duration = Math.max(150, Math.min(260, remaining / Math.max(velocityY, 1.2)));
+            content.style.transition = `transform ${duration}ms cubic-bezier(.22,.8,.3,1)`;
+            if (overlay) overlay.style.transition = `opacity ${duration}ms ease-out`;
+            requestAnimationFrame(() => {
+                content.style.transform = "translate3d(0, calc(100dvh + 40px), 0)";
+                if (overlay) overlay.style.opacity = "0";
+            });
+            setTimeout(() => {
+                closeModal(modal);
+                clearGestureStyles();
+            }, duration);
+        } else {
+            content.style.transition = "transform 220ms cubic-bezier(.2,.85,.25,1)";
+            if (overlay) overlay.style.transition = "opacity 180ms ease-out";
+            content.style.transform = "translate3d(0, 0, 0)";
+            if (overlay) overlay.style.opacity = "1";
+            setTimeout(() => {
+                clearGestureStyles();
+            }, 230);
+        }
+    };
+
+    content.addEventListener("touchend", () => finishGesture(false), { passive: true });
+    content.addEventListener("touchcancel", () => finishGesture(true), { passive: true });
+}
+
+function openCollaboratorsModal(cat) {
+    if (!modalCollaborators) return;
+    
+    collabCategoryId.value = cat.id;
+    collabModalSubtitle.textContent = `Compartilhar a guia "${cat.name}"`;
+    inputCollabEmail.value = "";
+    
+    renderCollaborators(cat);
+    openModal(modalCollaborators);
+}
+
+function renderCollaborators(cat) {
+    if (!collaboratorsList) return;
+    
+    const isOwner = currentUser && cat.user_id === currentUser.id;
+    const inviteSection = document.getElementById("collab-invite-section");
+    
+    if (inviteSection) {
+        inviteSection.style.display = isOwner ? "block" : "none";
+    }
+    
+    collaboratorsList.innerHTML = "";
+    
+    // Mostra o Dono (dono da categoria)
+    const ownerItem = document.createElement("div");
+    ownerItem.className = "manage-item";
+    ownerItem.style.cssText = "background:rgba(255,255,255,0.01); border:1px solid var(--border-color); padding:10px 14px; border-radius:var(--radius-sm); display:flex; justify-content:space-between; align-items:center;";
+    ownerItem.innerHTML = `
+        <span style="font-size:0.85rem; font-weight:700; color:var(--text-secondary);">${escapeHTML(isOwner ? `@${currentUsername}` : getIdentityLabel(categoryShares.find(share => String(share.category_id) === String(cat.id))?.owner_email || ''))} (Criador)</span>
+    `;
+    collaboratorsList.appendChild(ownerItem);
+    
+    // Lista os colaboradores da categoria
+    const shares = categoryShares.filter(s => String(s.category_id) === String(cat.id) && s.accepted === true);
+    shares.forEach(share => {
+        const item = document.createElement("div");
+        item.className = "manage-item";
+        item.style.cssText = "background:rgba(255,255,255,0.02); border:1px solid var(--border-color); padding:10px 14px; border-radius:var(--radius-sm); display:flex; justify-content:space-between; align-items:center;";
+        
+        let removeBtn = "";
+        if (isOwner) {
+            removeBtn = `
+                <button class="btn-remove-collab" data-id="${share.id}" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; padding:4px; border-radius:4px; transition:var(--transition-smooth); display:flex; align-items:center; justify-content:center;">
+                    <i data-lucide="x" style="width:14px; height:14px; color: var(--text-muted);"></i>
+                </button>
+            `;
+        }
+        
+        item.innerHTML = `
+            <span style="font-size:0.85rem; font-weight:600; color:var(--text-primary);">${escapeHTML(getIdentityLabel(share.collaborator_email))}</span>
+            ${removeBtn}
+        `;
+        
+        if (isOwner) {
+            const btnRemove = item.querySelector(".btn-remove-collab");
+            if (btnRemove) {
+                btnRemove.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    removeCollaborator(share.id, cat);
+                });
+            }
+        }
+        
+        collaboratorsList.appendChild(item);
+    });
+    
+    lucide.createIcons();
+}
+
+async function inviteCollaborator(catId, email) {
+    const btn = document.getElementById("btn-add-collab");
+    if (btn && btn.disabled) return; // Evita envio duplo em cliques rápidos
+    
+    if (!email || !email.trim()) {
+        alert("Por favor, digite um e-mail válido.");
+        return;
+    }
+    if (!supabaseClient) {
+        alert("Conexão online indisponível.");
+        return;
+    }
+    
+    const cat = categories.find(c => String(c.id) === String(catId));
+    if (!cat) {
+        alert("Erro: Categoria não encontrada nas guias ativas.");
+        return;
+    }
+
+    if (!navigator.onLine) {
+        const queue = JSON.parse(localStorage.getItem("offline_collaboration_invites_queue")) || [];
+        const identifier = normalizeUserIdentifier(email.replace(/^@/, ""));
+        if (!queue.some(item => String(item.category_id) === String(catId) && item.identifier === identifier)) {
+            queue.push({ category_id: catId, category_name: cat.name, identifier, queued_at: new Date().toISOString() });
+        }
+        localStorage.setItem("offline_collaboration_invites_queue", JSON.stringify(queue));
+        if (inputCollabEmail) inputCollabEmail.value = "";
+        showAppNotice("Convite salvo neste celular, mas ainda não enviado. Para a outra pessoa receber, este celular precisa recuperar a internet e sincronizar o app.", "warning");
+        scheduleSyncStatusRefresh();
+        return;
+    }
+    
+    const enteredIdentity = email.includes("@") && !email.trim().startsWith("@")
+        ? normalizeAccountEmail(email)
+        : normalizeUserIdentifier(email.replace(/^@/, ""));
+    let cleanEmail = enteredIdentity;
+    if (!enteredIdentity.includes("@")) {
+        const { data: resolvedEmail, error: resolveError } = await supabaseClient.rpc("resolve_collaboration_email", { identifier: enteredIdentity });
+        if (resolveError || !resolvedEmail) {
+            alert("Nenhuma conta foi encontrada com esse ID.");
+            return;
+        }
+        cleanEmail = resolvedEmail;
+    }
+    
+    // Evita convidar a si mesmo ou convidar duplicado
+    if (normalizeAccountEmail(cleanEmail) === normalizeAccountEmail(currentUser.email)) {
+        alert("Você já é o dono e participa desta guia.");
+        return;
+    }
+    
+    requestCollaborationNotificationPermission();
+    
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Convidando...";
+    }
+    
+    try {
+        // O ID guardado pelo PWA pode ficar obsoleto após uma categoria ser
+        // excluída/recriada. Confirma sempre a categoria real antes do convite.
+        let remoteCategory = null;
+        let remoteCategoryError = null;
+
+        // IDs temporários são timestamps locais. Nunca os envia como filtro de
+        // uma coluna UUID/bigint no banco, pois a consulta falharia antes da
+        // recuperação pelo nome ou da criação da categoria real.
+        if (!isTemporaryId(catId)) {
+            const remoteById = await supabaseClient
+                .from("categories")
+                .select("*")
+                .eq("id", catId)
+                .eq("user_id", currentUser.id)
+                .maybeSingle();
+            remoteCategory = remoteById.data;
+            remoteCategoryError = remoteById.error;
+        }
+
+        if (!remoteCategory && !remoteCategoryError) {
+            const fallbackResult = await supabaseClient
+                .from("categories")
+                .select("*")
+                .eq("user_id", currentUser.id)
+                .ilike("name", cat.name.trim())
+                .order("id", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+            remoteCategory = fallbackResult.data;
+            remoteCategoryError = fallbackResult.error;
+            if (remoteCategory && remoteCategory.is_active === false) {
+                const reactivatedResult = await supabaseClient
+                    .from("categories")
+                    .update({ is_active: true })
+                    .eq("id", remoteCategory.id)
+                    .select()
+                    .single();
+                remoteCategory = reactivatedResult.data;
+                remoteCategoryError = reactivatedResult.error;
+            }
+        }
+        if (remoteCategoryError) throw remoteCategoryError;
+        if (!remoteCategory) {
+            // Se a criação otimista ainda estiver apenas no aparelho, conclui a
+            // sincronização aqui e continua o convite com o ID real retornado.
+            try {
+                remoteCategory = await insertOwnedCategoryInCloud({ name: cat.name, type: cat.type });
+                updateLocalCatId(catId, remoteCategory);
+                refreshSyncStatusFromQueues();
+            } catch (categorySyncError) {
+                throw new Error(`Não foi possível sincronizar a categoria antes do convite: ${categorySyncError.message}`);
+            }
+        }
+
+        const realCategoryId = remoteCategory.id;
+        if (String(realCategoryId) !== String(catId)) {
+            updateLocalCatId(catId, remoteCategory);
+            if (collabCategoryId) collabCategoryId.value = realCategoryId;
+        }
+
+        const exists = categoryShares.some(share =>
+            String(share.category_id) === String(realCategoryId)
+            && normalizeAccountEmail(share.collaborator_email) === normalizeAccountEmail(cleanEmail)
+        );
+        if (exists) throw new Error("Este ID já foi convidado para esta categoria.");
+
+        const newShare = {
+            category_id: realCategoryId,
+            owner_id: currentUser.id,
+            owner_email: currentUser.email,
+            collaborator_email: cleanEmail
+        };
+        const { data: createdShares, error } = await supabaseClient
+            .from('category_shares')
+            .insert(newShare)
+            .select("id");
+        if (error) throw error;
+
+        const createdInvite = createdShares && createdShares[0];
+        if (createdInvite) {
+            supabaseClient.functions.invoke("send-task-push", { body: { invite_id: createdInvite.id } })
+                .then(({ error: pushError }) => {
+                    if (pushError) console.warn("Convite salvo, mas o push não pôde ser enviado:", pushError.message);
+                })
+                .catch(pushError => console.warn("Erro ao solicitar push do convite:", pushError));
+        }
+        
+        alert("Colaborador convidado com sucesso!");
+        if (inputCollabEmail) inputCollabEmail.value = "";
+        
+        await loadChecklistAndProgress();
+        renderCollaborators(cat);
+    } catch (err) {
+        console.error("Erro ao convidar colaborador:", err);
+        alert("Erro ao convidar: " + err.message);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = "Convidar";
+        }
+    }
+}
+
+async function removeCollaborator(shareId, cat) {
+    if (!supabaseClient) {
+        alert("Conexão online indisponível.");
+        return;
+    }
+    
+    if (await showAppConfirm("Deseja realmente remover este colaborador da categoria?", { title: "Remover colaborador", confirmText: "Remover", danger: true })) {
+        try {
+            const { error } = await supabaseClient
+                .from('category_shares')
+                .delete()
+                .eq('id', shareId);
+            if (error) throw error;
+            
+            alert("Colaborador removido com sucesso!");
+            await loadChecklistAndProgress();
+            renderCollaborators(cat);
+        } catch (err) {
+            console.error("Erro ao remover colaborador:", err);
+            alert("Erro ao remover: " + err.message);
+        }
+    }
+}
+
+function renderNotifications() {
+    if (!notificationsListContainer) return;
+
+    notificationsListContainer.innerHTML = "";
+
+    // 1. Renderizar convites pendentes de colaboração
+    if (pendingInvites && pendingInvites.length > 0) {
+        pendingInvites.forEach(invite => {
+            const item = document.createElement("div");
+            item.style.cssText = "display: flex; gap: 12px; padding: 14px; background: rgba(139, 92, 246, 0.05); border: 1.5px solid var(--primary); border-radius: 12px; flex-direction: column;";
+            item.innerHTML = `
+                <div style="display: flex; gap: 12px;">
+                    <div style="background: rgba(139, 92, 246, 0.15); color: var(--primary); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                        <i data-lucide="users" style="width: 18px; height: 18px; color: var(--primary);"></i>
+                    </div>
+                    <div style="flex: 1;">
+                        <h4 style="margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 800; color: var(--text-primary);">Convite de Colaboração</h4>
+                        <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4;">
+                            <strong>${escapeHTML(invite.owner_email ? getIdentityLabel(invite.owner_email) : 'Um usuário')}</strong> convidou você para compartilhar a guia <strong>${escapeHTML(invite.category_name || 'Compartilhada')}</strong>.
+                        </p>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;">
+                    <button class="btn btn-secondary btn-accept-invite" data-id="${invite.id}" style="padding: 6px 12px; font-size: 0.75rem; font-weight: 700; border-radius: var(--radius-sm); border: 1px solid var(--border-color); background: var(--bg-surface-solid); color: var(--text-primary); cursor: pointer;">Aceitar</button>
+                    <button class="btn btn-danger-outline btn-decline-invite" data-id="${invite.id}" style="padding: 6px 12px; font-size: 0.75rem; font-weight: 700; border-radius: var(--radius-sm); cursor: pointer;">Recusar</button>
+                </div>
+            `;
+
+            const btnAccept = item.querySelector(".btn-accept-invite");
+            const btnDecline = item.querySelector(".btn-decline-invite");
+
+            btnAccept.addEventListener("click", async () => {
+                btnAccept.disabled = true;
+                btnAccept.textContent = "...";
+                await acceptInvitation(invite.id, true);
+            });
+
+            btnDecline.addEventListener("click", async () => {
+                btnDecline.disabled = true;
+                btnDecline.textContent = "...";
+                await declineInvitation(invite.id);
+            });
+
+            item.addEventListener("click", async event => {
+                if (event.target.closest("button")) return;
+                const shouldAccept = await showAppConfirm(`Aceitar o convite e abrir a categoria “${invite.category_name || "Compartilhada"}”?`, { title: "Abrir categoria", confirmText: "Aceitar e abrir" });
+                if (shouldAccept) await acceptInvitation(invite.id, true);
+            });
+            item.style.cursor = "pointer";
+
+            notificationsListContainer.appendChild(item);
+        });
+    }
+
+    // 2. Tarefas recebidas em categorias compartilhadas
+    (sharedTaskNotifications || []).forEach(notification => {
+        const item = document.createElement("div");
+        const isUnread = !notification.read_at;
+        const createdAt = notification.created_at ? new Date(notification.created_at) : null;
+        const timeLabel = createdAt && !Number.isNaN(createdAt.getTime())
+            ? createdAt.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
+            : "";
+        item.className = `shared-task-notification-item ${isUnread ? "unread" : ""}`;
+        const trainingNotification = isTrainingCategory(notification.category_name);
+        item.innerHTML = `
+            <div class="shared-task-notification-icon"><i data-lucide="list-checks"></i></div>
+            <div class="shared-task-notification-copy">
+                <strong>${trainingNotification ? `${escapeHTML((getIdentityLabelByUserId(notification.actor_id) || "Participante").replace(/^@/, ""))} adicionou um novo treino` : "Nova tarefa compartilhada"}</strong>
+                <span>“${escapeHTML(notification.task_title || (trainingNotification ? "Treino" : "Nova tarefa"))}” foi adicionad${trainingNotification ? "o" : "a"}${notification.category_name ? ` em <b>${escapeHTML(notification.category_name)}</b>` : ""}.${trainingNotification ? " Somente para visualização." : ""}</span>
+                ${notification.assigned_to ? `<small>Atribuída a ${escapeHTML(getIdentityLabel(notification.assigned_to))}${timeLabel ? ` • ${escapeHTML(timeLabel)}` : ""}</small>` : (timeLabel ? `<small>${escapeHTML(timeLabel)}</small>` : "")}
+            </div>
+        `;
+        item.setAttribute("role", "button");
+        item.setAttribute("tabindex", "0");
+        item.title = "Abrir esta tarefa no checklist";
+        const openTask = () => focusSharedTaskFromNotification(notification);
+        item.addEventListener("click", openTask);
+        item.addEventListener("keydown", event => {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                openTask();
+            }
+        });
+        notificationsListContainer.appendChild(item);
+    });
+
+    const hasClearableNotifications = (sharedTaskNotifications || []).length > 0;
+    if (btnClearNotifications) btnClearNotifications.disabled = !hasClearableNotifications;
+    if (!notificationsListContainer.children.length) {
+        notificationsListContainer.innerHTML = `<div class="notifications-empty-state"><i data-lucide="bell-off"></i><strong>Nenhuma notificação</strong><span>Novos convites e atividades compartilhadas aparecerão aqui.</span></div>`;
+    }
+
+    lucide.createIcons();
+}
+
+async function clearNotificationHistory() {
+    if (!(sharedTaskNotifications || []).length) return;
+    const confirmed = await showAppConfirm("Apagar o histórico de notificações? Convites pendentes continuarão disponíveis.", {
+        title: "Limpar notificações",
+        confirmText: "Limpar",
+        danger: true
+    });
+    if (!confirmed) return;
+    const previousNotifications = [...sharedTaskNotifications];
+    sharedTaskNotifications = [];
+    renderNotifications();
+    updateCollaborationInviteAttention();
+    if (!supabaseClient || !currentUser) {
+        showAppNotice("Notificações limpas.", "success");
+        return;
+    }
+    btnClearNotifications.disabled = true;
+    const { error } = await supabaseClient.from("shared_task_notifications").delete().eq("recipient_id", currentUser.id);
+    if (error) {
+        sharedTaskNotifications = previousNotifications;
+        renderNotifications();
+        updateCollaborationInviteAttention();
+        showAppNotice(`Não foi possível limpar: ${error.message}`, "warning");
+        return;
+    }
+    showAppNotice("Notificações limpas.", "success");
+}
+
+function findRenderedTaskElement(taskId) {
+    return Array.from(tasksListEl.querySelectorAll(".task-item"))
+        .find(item => String(item.dataset.id) === String(taskId)) || null;
+}
+
+function highlightRenderedTask(taskId) {
+    const taskElement = findRenderedTaskElement(taskId);
+    if (!taskElement) return false;
+    taskElement.scrollIntoView({ behavior: "smooth", block: "center" });
+    activePushFocusTaskId = String(taskId);
+    activePushFocusUntil = Date.now() + 2500;
+    taskElement.classList.remove("shared-task-focus");
+    void taskElement.offsetWidth;
+    taskElement.classList.add("shared-task-focus");
+    setTimeout(() => {
+        const currentTaskElement = findRenderedTaskElement(taskId);
+        if (currentTaskElement) currentTaskElement.classList.remove("shared-task-focus");
+        if (String(activePushFocusTaskId) === String(taskId)) {
+            activePushFocusTaskId = null;
+            activePushFocusUntil = 0;
+        }
+    }, 2500);
+    return true;
+}
+
+async function primeTaskFromPush(taskId, { openCategory = false, navigate = true } = {}) {
+    if (!taskId) return null;
+    let targetTask = (allActiveTasks || []).find(task => String(task.id) === String(taskId)) || null;
+    if (supabaseClient && currentUser) {
+        const { data } = await supabaseClient.from("tasks").select("*").eq("id", taskId).maybeSingle();
+        if (data) targetTask = data;
+    }
+    if (!targetTask) return null;
+
+    const cachedTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    const taskIndex = cachedTasks.findIndex(task => String(task.id) === String(targetTask.id));
+    if (taskIndex >= 0) cachedTasks[taskIndex] = targetTask;
+    else cachedTasks.push(targetTask);
+    localStorage.setItem("offline_tasks", JSON.stringify(cachedTasks));
+
+    // O push de atualização pode chegar antes do evento Realtime de
+    // completions. Reconcilia explicitamente o check da data da tarefa para
+    // que concluir e desmarcar no Dashboard tenham o mesmo resultado imediato.
+    const taskDate = extractDateFromTimestamp(targetTask.created_at);
+    if (taskDate && supabaseClient && currentUser) {
+        const { data: completionRows } = await supabaseClient
+            .from("completions")
+            .select("task_id,date,completed")
+            .eq("task_id", targetTask.id)
+            .eq("date", taskDate);
+        let cachedCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+        cachedCompletions = cachedCompletions.filter(item =>
+            !(String(item.task_id) === String(targetTask.id) && item.date === taskDate)
+        );
+        (completionRows || []).forEach(item => cachedCompletions.push(item));
+        localStorage.setItem("offline_completions", JSON.stringify(cachedCompletions));
+    }
+
+    if (targetTask.category_id && supabaseClient && currentUser) {
+        const cachedCategories = JSON.parse(localStorage.getItem("offline_categories")) || [];
+        if (!cachedCategories.some(category => String(category.id) === String(targetTask.category_id))) {
+            const { data: targetCategory } = await supabaseClient.from("categories").select("*").eq("id", targetTask.category_id).maybeSingle();
+            if (targetCategory) {
+                cachedCategories.push(targetCategory);
+                localStorage.setItem("offline_categories", JSON.stringify(cachedCategories));
+            }
+        }
+    }
+
+    if (navigate) {
+        selectedDate = extractDateFromTimestamp(targetTask.created_at);
+        currentFilter = openCategory && targetTask.category ? targetTask.category : "all";
+    }
+    loadDataOffline();
+    if (navigate) updateDateDisplay();
+    renderCategories();
+    renderChecklist();
+    updateProgress();
+    if (navigate) {
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        highlightRenderedTask(taskId);
+    }
+    return targetTask;
+}
+
+async function focusSharedTaskFromNotification(notification) {
+    if (!notification || !notification.task_id) return;
+    closeModal(modalNotifications);
+    if (notification.dashboard_task) {
+        const dashboardTask = await primeTaskFromPush(notification.task_id, { openCategory: true });
+        if (dashboardTask) {
+            setTimeout(() => loadChecklistAndProgress().catch(error => console.warn("Revalidação após push do Dashboard indisponível:", error)), 2200);
+            return;
+        }
+    }
+    currentFilter = "all";
+    renderCategories();
+    renderChecklist();
+
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    if (highlightRenderedTask(notification.task_id)) return;
+
+    let targetTask = await primeTaskFromPush(notification.task_id);
+
+    if (targetTask && targetTask.created_at) {
+        selectedDate = extractDateFromTimestamp(targetTask.created_at);
+        updateDateDisplay();
+        loadDataOffline();
+        renderCategories();
+        renderChecklist();
+        updateProgress();
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        if (highlightRenderedTask(notification.task_id)) {
+            // Revalida o restante somente depois do destaque, sem atrasar nem
+            // substituir o cartão que acabou de aparecer.
+            setTimeout(() => loadChecklistAndProgress().catch(error => console.warn("Revalidação após push indisponível:", error)), 2200);
+            return;
+        }
+    }
+
+    // Tarefas pendentes não recorrentes podem ter rolado para o dia atual.
+    selectedDate = getLocalDateString(new Date());
+    updateDateDisplay();
+    loadChecklistAndProgress().then(() => highlightRenderedTask(notification.task_id));
+}
+
+async function refreshTrainingPushDay(taskId, trainingDate, categoryName = null) {
+    if (!supabaseClient || !currentUser || !navigator.onLine) return false;
+    const visibleCategories = categories.filter(category => isTrainingCategory(category.name) && (!categoryName || normalizeCategoryName(category.name) === normalizeCategoryName(categoryName)));
+    const categoryIds = [...new Set(visibleCategories.flatMap(category => category.merged_category_ids || [category.id]).filter(id => !isTemporaryId(id)))];
+    if (!categoryIds.length) return false;
+    const categoryNameById = new Map(visibleCategories.flatMap(category => (category.merged_category_ids || [category.id]).map(id => [String(id), category.name])));
+    try {
+        const { data, error } = await supabaseClient.functions.invoke("training-photo-feed", {
+            body: { category_ids: categoryIds, task_id: taskId || null, training_date: trainingDate }
+        });
+        if (error || !Array.isArray(data?.photos)) throw new Error(error?.message || "Fotos indisponíveis");
+        const pushedRecords = data.photos.map(item => ({
+            id: item.id, taskId: item.task_id, taskTitle: item.task_title || "Treino",
+            category: categoryNameById.get(String(item.category_id)) || categoryName || "Treino",
+            date: item.training_date, photo: item.signed_url, createdBy: item.created_by,
+            creatorLabel: item.creator_label, creatorAvatar: item.creator_avatar_url, createdAt: item.created_at
+        })).filter(record => record.photo);
+        const merged = new Map([...getTrainingPhotoFeedCache(), ...currentTrainingCalendarRecords].map(record => [String(record.id), record]));
+        pushedRecords.forEach(record => merged.set(String(record.id), record));
+        currentTrainingCalendarRecords = [...merged.values()].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+        saveTrainingPhotoFeedCache(currentTrainingCalendarRecords);
+        paintTrainingReport(categoryName);
+        renderTrainingDayGallery(trainingDate);
+        return true;
+    } catch (error) {
+        console.warn("Não foi possível priorizar a foto aberta pelo push:", error.message);
+        return false;
+    }
+}
+
+async function openTrainingCalendarFromPush(taskId, trainingDate) {
+    const validDate = /^\d{4}-\d{2}-\d{2}$/.test(String(trainingDate || ""))
+        ? String(trainingDate)
+        : getLocalDateString(new Date());
+    let targetTask = taskId ? getTaskById(taskId) : null;
+    const trainingCategory = targetTask && isTrainingCategory(targetTask.category)
+        ? targetTask.category
+        : categories.find(category => isTrainingCategory(category.name))?.name;
+    if (trainingCategory) currentFilter = trainingCategory;
+    selectedDate = validDate;
+    currentTrainingCalendarMonth = new Date(`${validDate}T12:00:00`);
+    currentTrainingCalendarSelectedDate = validDate;
+    updateDateDisplay();
+    loadDataOffline();
+    renderCategories();
+    renderChecklist();
+    updateProgress();
+    currentTrainingCalendarRecords = getTrainingPhotoFeedCache();
+    openModal(modalTrainingReport);
+    paintTrainingReport(trainingCategory || null);
+    renderTrainingDayGallery(validDate);
+    if (appSessionLoader) appSessionLoader.classList.add("hidden");
+    setAppContainerVisible(true);
+
+    // Miniaturas persistentes entram sem bloquear a abertura do modal.
+    applyPersistentTrainingThumbnails(currentTrainingCalendarRecords).then(records => {
+        currentTrainingCalendarRecords = records;
+        if (!modalTrainingReport?.classList.contains("active")) return;
+        paintTrainingReport(trainingCategory || null);
+        renderTrainingDayGallery(validDate);
+    }).catch(() => {});
+
+    const targetedLoaded = await refreshTrainingPushDay(taskId, validDate, trainingCategory || null);
+    if (!targetedLoaded) renderTrainingReport().then(() => renderTrainingDayGallery(validDate));
+    if (!targetTask && taskId) {
+        primeTaskFromPush(taskId).then(task => {
+            if (!task || !isTrainingCategory(task.category) || !modalTrainingReport?.classList.contains("active")) return;
+            currentFilter = task.category;
+            renderCategories();
+            paintTrainingReport(task.category);
+            renderTrainingDayGallery(validDate);
+        }).catch(() => {});
+    }
+}
+
+function getTaskById(taskId) {
+    return (allActiveTasks || []).find(task => String(task.id) === String(taskId))
+        || (tasks || []).find(task => String(task.id) === String(taskId))
+        || null;
+}
+
+async function updateTaskReminderContext(taskId, updater) {
+    if (!requireOnlineTaskMutation("editar o lembrete da tarefa") || isTemporaryId(taskId)) {
+        throw new Error("É necessário estar conectado à internet.");
+    }
+    let task = getTaskById(taskId);
+    if (!task && supabaseClient && currentUser) {
+        const { data } = await supabaseClient.from("tasks").select("*").eq("id", taskId).maybeSingle();
+        task = data || null;
+    }
+    if (!task) throw new Error("Tarefa não encontrada.");
+
+    let context = task.context || {};
+    if (typeof context === "string") {
+        try { context = JSON.parse(context); } catch (_) { context = {}; }
+    }
+    context = updater({ ...context });
+    await runConfirmedTaskMutation(
+        supabaseClient.from("tasks").update({ context }).eq("id", taskId),
+        "Edição do lembrete"
+    );
+    task.context = context;
+    const applyContext = item => String(item.id) === String(taskId) ? { ...item, context } : item;
+    tasks = tasks.map(applyContext);
+    allActiveTasks = allActiveTasks.map(applyContext);
+    const localTasks = (JSON.parse(localStorage.getItem("offline_tasks")) || []).map(applyContext);
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+    renderChecklist();
+}
+
+async function openTaskReminderAction(taskId) {
+    // Um toque rápido no push pode disparar mais de um caminho de abertura
+    // (URL e postMessage). Mantém sempre um único modal de lembrete.
+    document.querySelector(".task-reminder-action-layer")?.remove();
+    focusSharedTaskFromNotification({ task_id: taskId });
+    const task = getTaskById(taskId);
+    const snoozeDefault = new Date(Date.now() + 30 * 60 * 1000).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false });
+    const layer = document.createElement("div");
+    layer.className = "task-reminder-action-layer";
+    layer.innerHTML = `<div class="task-reminder-action-backdrop"></div><div class="task-reminder-action-card" role="dialog" aria-modal="true"><span class="task-reminder-action-icon"><i data-lucide="alarm-clock"></i></span><small>Lembrete de tarefa</small><h3>${escapeHTML(task ? task.title : "Hora da sua tarefa")}</h3><p>Deseja adiar ou não receber mais lembretes?</p><div class="task-reminder-action-buttons"><button type="button" class="btn task-reminder-do-now"><i data-lucide="bell-off"></i><span><strong>Não lembrar mais</strong><small>Desativar lembrete desta tarefa</small></span></button><button type="button" class="btn btn-primary task-reminder-snooze"><i data-lucide="clock-3"></i><span><strong>Adiar lembrete</strong><small>Escolher outro horário</small></span></button></div><div class="task-reminder-snooze-panel" hidden><strong>Adiar por quanto tempo?</strong><div class="task-reminder-snooze-presets"><button type="button" data-minutes="10">+10 min</button><button type="button" data-minutes="30" class="selected">+30 min</button><button type="button" data-minutes="60">+1 hora</button></div><label>Escolher horário<input type="time" class="task-reminder-snooze-time" value="${snoozeDefault}"></label><button type="button" class="btn btn-primary task-reminder-snooze-save">Salvar novo horário</button></div></div>`;
+    document.body.appendChild(layer);
+    requestAnimationFrame(() => layer.classList.add("visible"));
+    if (window.lucide) lucide.createIcons();
+
+    const close = () => { layer.classList.remove("visible"); setTimeout(() => layer.remove(), 220); };
+    layer.querySelector(".task-reminder-do-now").addEventListener("click", async () => {
+        const button = layer.querySelector(".task-reminder-do-now");
+        button.disabled = true;
+        try {
+            await updateTaskReminderContext(taskId, context => {
+                context.important = false;
+                delete context.reminders;
+                delete context.reminder_time;
+                delete context.reminder_offset_days;
+                delete context.reminder_timezone;
+                return context;
+            });
+            close();
+            showAppNotice("Lembrete desativado. Esta tarefa não enviará outro aviso.", "success");
+        } catch (error) {
+            button.disabled = false;
+            showAppNotice(`Não foi possível desativar o lembrete: ${error.message}`, "error");
+        }
+    });
+    const snoozePanel = layer.querySelector(".task-reminder-snooze-panel");
+    const snoozeInput = layer.querySelector(".task-reminder-snooze-time");
+    layer.querySelector(".task-reminder-snooze").addEventListener("click", () => {
+        snoozePanel.hidden = false;
+        layer.querySelector(".task-reminder-action-buttons").hidden = true;
+        snoozeInput.focus();
+    });
+    layer.querySelectorAll(".task-reminder-snooze-presets button").forEach(button => button.addEventListener("click", () => {
+        const date = new Date(Date.now() + Number(button.dataset.minutes) * 60 * 1000);
+        snoozeInput.value = date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false });
+        layer.querySelectorAll(".task-reminder-snooze-presets button").forEach(item => item.classList.toggle("selected", item === button));
+    }));
+    snoozeInput.addEventListener("input", () => layer.querySelectorAll(".task-reminder-snooze-presets button").forEach(item => item.classList.remove("selected")));
+    layer.querySelector(".task-reminder-snooze-save").addEventListener("click", async () => {
+        const reminderTime = snoozeInput.value;
+        const [hours, minutes] = reminderTime.split(":").map(Number);
+        const scheduledAt = new Date();
+        scheduledAt.setHours(hours, minutes, 0, 0);
+        if (!reminderTime || scheduledAt.getTime() <= Date.now()) {
+            showAppNotice("Escolha um horário posterior ao atual para adiar.", "warning");
+            return;
+        }
+        try {
+            await updateTaskReminderContext(taskId, context => {
+                context.important = true;
+                context.reminders = [{ time: reminderTime, offset_days: 0 }];
+                context.reminder_time = reminderTime;
+                context.reminder_offset_days = 0;
+                context.reminder_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
+                return context;
+            });
+            close();
+            showAppNotice(`Novo lembrete programado para ${reminderTime}.`, "success");
+        } catch (error) {
+            showAppNotice(`Não foi possível adiar o lembrete: ${error.message}`, "error");
+        }
+    });
+}
+
+async function acceptInvitation(shareId, openCategory = false) {
+    if (!supabaseClient) return;
+    requestCollaborationNotificationPermission();
+    try {
+        const invite = pendingInvites.find(item => String(item.id) === String(shareId));
+        const { error } = await supabaseClient
+            .from('category_shares')
+            .update({ accepted: true })
+            .eq('id', shareId);
+
+        if (error) throw error;
+
+        alert("Convite aceito! A guia compartilhada agora está disponível.");
+        await loadChecklistAndProgress();
+        if (openCategory && invite) {
+            const category = categories.find(item => String(item.id) === String(invite.category_id));
+            if (category) {
+                closeModal(modalNotifications);
+                currentFilter = category.name;
+                renderCategories();
+                renderChecklist();
+                requestAnimationFrame(() => document.querySelector(`.category-chip[data-category="${CSS.escape(category.name)}"]`)?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" }));
+            }
+        }
+        renderNotifications();
+    } catch (err) {
+        console.error("Erro ao aceitar convite:", err);
+        alert("Erro ao aceitar convite: " + err.message);
+    }
+}
+
+async function promptCollaborationInviteNavigation(inviteId) {
+    await loadChecklistAndProgress();
+    const invite = pendingInvites.find(item => String(item.id) === String(inviteId));
+    if (!invite) {
+        renderNotifications();
+        openModal(modalNotifications);
+        return;
+    }
+    const shouldAccept = await showAppConfirm(`Aceitar o convite e abrir a categoria “${invite.category_name || "Compartilhada"}”?`, { title: "Convite de colaboração", confirmText: "Aceitar e abrir" });
+    if (shouldAccept) await acceptInvitation(invite.id, true);
+}
+
+function requestCollaborationNotificationPermission() {
+    if (areNotificationsEnabled() && "Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission().catch(() => {});
+    }
+}
+
+async function declineInvitation(shareId) {
+    if (!supabaseClient) return;
+    if (await showAppConfirm("Deseja realmente recusar este convite?", { title: "Recusar convite", confirmText: "Recusar", danger: true })) {
+        try {
+            const { error } = await supabaseClient
+                .from('category_shares')
+                .delete()
+                .eq('id', shareId);
+
+            if (error) throw error;
+
+            alert("Convite recusado.");
+            await loadChecklistAndProgress();
+            renderNotifications();
+        } catch (err) {
+            console.error("Erro ao recusar convite:", err);
+            alert("Erro ao recusar convite: " + err.message);
+        }
+    }
+}
+
+function updateTaskAssigneeDropdown(categoryName, selectEl, groupEl) {
+    if (!selectEl || !groupEl) return;
+
+    const cat = categories.find(c => c.name === categoryName);
+    if (!cat || !currentUser) {
+        groupEl.style.display = "none";
+        return;
+    }
+
+    // Categorias colaborativas de treino nunca distribuem responsabilidade:
+    // o criador gerencia as tarefas e os participantes apenas acompanham.
+    if (isTrainingCategory(categoryName) && isCollaborativeCategory(cat.id)) {
+        groupEl.style.display = "none";
+        selectEl.innerHTML = '<option value="">Sem atribuição</option>';
+        selectEl.value = "";
+        return;
+    }
+
+    const shares = categoryShares.filter(s => String(s.category_id) === String(cat.id));
+    if (shares.length === 0) {
+        // Not a shared category
+        groupEl.style.display = "none";
+        selectEl.innerHTML = '<option value="">Ambos</option>';
+        return;
+    }
+
+    // Shared category! Show assignment group
+    groupEl.style.display = "block";
+    
+    // Clear and rebuild options
+    const currentValue = selectEl.value;
+    selectEl.innerHTML = "";
+    
+    // Todos Option
+    const optAll = document.createElement("option");
+    optAll.value = "";
+    optAll.textContent = "Ambos";
+    selectEl.appendChild(optAll);
+    
+    // Owner Option (Creator)
+    const isOwnerMe = cat.user_id === currentUser.id;
+    const ownerEmail = isOwnerMe ? currentUser.email : (shares[0].owner_email || "Dono da Guia");
+    const optOwner = document.createElement("option");
+    optOwner.value = ownerEmail;
+    optOwner.textContent = `${getPlainIdentityLabel(ownerEmail)} (Dono)`;
+    selectEl.appendChild(optOwner);
+    
+    // Collaborator Options
+    const addedEmails = new Set([normalizeAccountEmail(ownerEmail)]);
+    shares.forEach(share => {
+        const normalizedEmail = normalizeAccountEmail(share.collaborator_email);
+        if (!normalizedEmail || addedEmails.has(normalizedEmail)) return;
+        addedEmails.add(normalizedEmail);
+        const optCollab = document.createElement("option");
+        optCollab.value = share.collaborator_email;
+        optCollab.textContent = getPlainIdentityLabel(share.collaborator_email);
+        selectEl.appendChild(optCollab);
+    });
+    
+    // Restore value if still exists
+    selectEl.value = currentValue;
+}
+
+async function addCategory(name, type) {
+    if (!name) return false;
+
+    const normalizedName = name.trim();
+
+    // Valida primeiro a memória/cache para não criar um segundo registro
+    // temporário com um nome que já está visível no aparelho.
+    const localExisting = categories.find(category =>
+        category.is_active !== false
+        && normalizeCategoryName(category.name) === normalizeCategoryName(normalizedName)
+    );
+    if (localExisting) {
+        showAppNotice(`A categoria “${localExisting.name}” já existe.`, "warning");
+        return false;
+    }
+
+    // Quando estiver online, consulta também a nuvem antes da atualização
+    // otimista. Isso evita o erro de chave duplicada por cache desatualizado.
+    if (supabaseClient && currentUser && navigator.onLine) {
+        const existingResult = await supabaseClient
+            .from("categories")
+            .select("*")
+            .eq("user_id", currentUser.id)
+            .ilike("name", normalizedName)
+            .order("id", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+        if (existingResult.error) {
+            showAppNotice(`Não foi possível verificar a categoria: ${existingResult.error.message}`, "error");
+            return false;
+        }
+        if (existingResult.data && existingResult.data.is_active !== false) {
+            showAppNotice(`A categoria “${existingResult.data.name}” já existe.`, "warning");
+            await loadChecklistAndProgress();
+            return false;
+        }
+    }
+
+    // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
+    const tempId = Date.now();
+    const newCat = {
+        id: tempId,
+        name: normalizedName,
+        type: type || null,
+        is_active: true
+    };
+    if (currentUser) {
+        newCat.user_id = currentUser.id;
+    }
+
+    // Adiciona na memória e local storage
+    let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+    categories.push(newCat);
+    localCats.push(newCat);
+    localStorage.setItem("offline_categories", JSON.stringify(localCats));
+
+    renderCategories();
+
+    // A mesma fila atende criações online e offline. Assim não existem dois
+    // inserts concorrentes para a categoria quando a conexão oscila.
+    scheduleCloudSync("nova-categoria", 80);
+    return true;
+}
+
+async function insertOwnedCategoryInCloud({ name, type }) {
+    if (!supabaseClient || !currentUser) throw new Error("Sessão indisponível.");
+    const payload = {
+        name,
+        is_active: true,
+        user_id: currentUser.id
+    };
+    if (CATEGORIES_CLOUD_SUPPORTS_TYPE) payload.type = type || null;
+    let result = await supabaseClient.from("categories").insert(payload).select().single();
+
+    // Compatibilidade apenas para instalações antigas que ainda não tenham a
+    // coluna type. O proprietário continua explícito nas duas tentativas.
+    if (CATEGORIES_CLOUD_SUPPORTS_TYPE && result.error && /type|column/i.test(result.error.message || "")) {
+        const { type: _ignoredType, ...legacyPayload } = payload;
+        result = await supabaseClient.from("categories").insert(legacyPayload).select().single();
+        if (!result.error && result.data) result.data.type = type || null;
+    }
+    if (result.error && (result.error.code === "23505" || /duplicate key|categories_name_user_id_key/i.test(result.error.message || ""))) {
+        const existingResult = await supabaseClient
+            .from("categories")
+            .select("*")
+            .eq("user_id", currentUser.id)
+            .ilike("name", name.trim())
+            .order("id", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+        if (existingResult.error) throw existingResult.error;
+        if (!existingResult.data) throw result.error;
+        if (existingResult.data.is_active !== false) return existingResult.data;
+        const reactivated = await supabaseClient
+            .from("categories")
+            .update({ is_active: true })
+            .eq("id", existingResult.data.id)
+            .select()
+            .single();
+        if (reactivated.error) throw reactivated.error;
+        result = reactivated;
+    }
+    if (result.error) throw result.error;
+    if (!result.data) throw new Error("O servidor não retornou a categoria criada.");
+    if (!CATEGORIES_CLOUD_SUPPORTS_TYPE) result.data.type = type || null;
+    return result.data;
+}
+
+function updateLocalCatId(tempId, realCat) {
+    categories = categories.map(c => String(c.id) === String(tempId) ? realCat : c);
+    let currentLocalCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+    currentLocalCats = currentLocalCats.map(c => String(c.id) === String(tempId) ? realCat : c);
+    localStorage.setItem("offline_categories", JSON.stringify(currentLocalCats));
+    renderCategories();
+}
+
+function addCategoryOffline(name, type) {
+    beginOptimisticMutation();
+    let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+    if (localCats.some(c => c.name.toLowerCase() === name.toLowerCase() && c.is_active)) {
+        alert("Este local/categoria já existe.");
+        return;
+    }
+    localCats.push({
+        id: Date.now(),
+        name: name,
+        type: type || null,
+        is_active: true
+    });
+    localStorage.setItem("offline_categories", JSON.stringify(localCats));
+    
+    loadDataOffline();
+    renderCategories();
+}
+
+async function updateCategoryFields(id, newName, newType, newColor = null) {
+    beginOptimisticMutation();
+    const oldCat = categories.find(c => String(c.id) === String(id));
+    if (!oldCat) return;
+    const oldName = oldCat.name;
+    const normalizedColor = /^#[0-9a-f]{6}$/i.test(String(newColor || "")) ? newColor.toLowerCase() : (oldCat.color || null);
+    
+    // 1. Update category local state
+    categories = categories.map(c => String(c.id) === String(id) ? { ...c, name: newName, type: newType, color: normalizedColor } : c);
+    
+    let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+    localCats = localCats.map(c => String(c.id) === String(id) ? { ...c, name: newName, type: newType, color: normalizedColor } : c);
+    localStorage.setItem("offline_categories", JSON.stringify(localCats));
+
+    // 2. Update tasks associated with this category
+    if (oldName !== newName) {
+        allActiveTasks = allActiveTasks.map(t => t.category === oldName ? { ...t, category: newName } : t);
+        tasks = tasks.map(t => t.category === oldName ? { ...t, category: newName } : t);
+        
+        let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+        localTasks = localTasks.map(t => t.category === oldName ? { ...t, category: newName } : t);
+        localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+        
+        // Update currentFilter if it matched the old name
+        if (currentFilter === oldName) {
+            currentFilter = newName;
+        }
+    }
+
+    renderCategories();
+    renderChecklist();
+    updateProgress();
+
+    enqueueCategoryCloudUpdate(id, {
+        name: newName,
+        type: newType,
+        color: normalizedColor,
+        ...(oldName !== newName ? { previous_name: oldName } : {})
+    }, "editar-categoria");
+}
+
+async function deleteCategory(id) {
+    beginOptimisticMutation();
+    const cat = categories.find(c => String(c.id) === String(id));
+    if (!cat) return;
+    if (!await showAppConfirm(`Deseja excluir a categoria “${cat.name}”? Todas as tarefas e conclusões relacionadas também serão excluídas permanentemente.`, { title: "Excluir categoria", confirmText: "Excluir tudo", danger: true })) return;
+
+    try {
+        if (supabaseClient && currentUser && !isTemporaryId(id)) {
+            // Remove tarefas legadas que ainda não possuem category_id.
+            const { error: legacyTasksError } = await supabaseClient
+                .from("tasks")
+                .delete()
+                .is("category_id", null)
+                .eq("user_id", currentUser.id)
+                .eq("category", cat.name);
+            if (legacyTasksError) throw legacyTasksError;
+
+            // Remove convites/participações antes da categoria para funcionar
+            // também em bancos antigos cuja FK ainda não possua cascade.
+            const { error: sharesError } = await supabaseClient
+                .from("category_shares")
+                .delete()
+                .eq("category_id", id);
+            if (sharesError) throw sharesError;
+
+            // A FK tasks.category_id usa ON DELETE CASCADE: ao remover a
+            // categoria, tarefas vinculadas e seus registros dependentes saem juntos.
+            const { error: categoryError } = await supabaseClient
+                .from("categories")
+                .delete()
+                .eq("id", id);
+            if (categoryError) throw categoryError;
+        }
+
+        removeCategoryAndTasksFromLocalState(cat);
+        renderCategories();
+        renderChecklist();
+        updateProgress();
+    } catch (error) {
+        console.error("Erro ao excluir categoria e tarefas:", error);
+        alert("Não foi possível excluir a categoria: " + error.message);
+        await loadChecklistAndProgress();
+    }
+}
+
+function removeCategoryAndTasksFromLocalState(cat) {
+    const belongsToCategory = task =>
+        String(task.category_id || "") === String(cat.id)
+        || (!task.category_id && task.category === cat.name);
+    const affectedIds = new Set(
+        (JSON.parse(localStorage.getItem("offline_tasks")) || [])
+            .filter(belongsToCategory)
+            .map(task => String(task.id))
+    );
+
+    categories = categories.filter(item => String(item.id) !== String(cat.id));
+    tasks = tasks.filter(task => !belongsToCategory(task));
+    allActiveTasks = allActiveTasks.filter(task => !belongsToCategory(task));
+
+    const localCats = (JSON.parse(localStorage.getItem("offline_categories")) || [])
+        .filter(item => String(item.id) !== String(cat.id));
+    const localTasks = (JSON.parse(localStorage.getItem("offline_tasks")) || [])
+        .filter(task => !belongsToCategory(task));
+    const localCompletions = (JSON.parse(localStorage.getItem("offline_completions")) || [])
+        .filter(completion => !affectedIds.has(String(completion.task_id)));
+    localStorage.setItem("offline_categories", JSON.stringify(localCats));
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+    localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
+
+    const completionQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+    Object.keys(completionQueue).forEach(key => {
+        if ([...affectedIds].some(taskId => key.startsWith(`${taskId}_`))) delete completionQueue[key];
+    });
+    localStorage.setItem("offline_completions_queue", JSON.stringify(completionQueue));
+
+    const updatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+    affectedIds.forEach(taskId => delete updatesQueue[taskId]);
+    localStorage.setItem("offline_task_updates_queue", JSON.stringify(updatesQueue));
+
+    if (currentFilter === cat.name) currentFilter = "all";
+}
+
+async function leaveSharedCategory(cat) {
+    if (!supabaseClient || !currentUser || !cat) return;
+    const myEmail = normalizeAccountEmail(currentUser.email);
+    const share = categoryShares.find(item =>
+        String(item.category_id) === String(cat.id)
+        && normalizeAccountEmail(item.collaborator_email) === myEmail
+    );
+    if (!share) {
+        alert("Não foi possível localizar sua participação nesta categoria.");
+        return;
+    }
+    if (!await showAppConfirm(`Deseja sair da categoria “${cat.name}”? Você poderá ser convidado novamente pelo administrador.`, { title: "Sair da categoria", confirmText: "Sair", danger: true })) return;
+
+    try {
+        const { error } = await supabaseClient
+            .from("category_shares")
+            .delete()
+            .eq("id", share.id);
+        if (error) throw error;
+
+        categoryShares = categoryShares.filter(item => String(item.id) !== String(share.id));
+        categories = categories.filter(item => String(item.id) !== String(cat.id));
+        if (currentFilter === cat.name) currentFilter = "all";
+
+        const localCats = (JSON.parse(localStorage.getItem("offline_categories")) || [])
+            .filter(item => String(item.id) !== String(cat.id));
+        localStorage.setItem("offline_categories", JSON.stringify(localCats));
+        localStorage.setItem("offline_category_shares", JSON.stringify(categoryShares));
+
+        renderCategories();
+        renderChecklist();
+        updateProgress();
+        alert("Você saiu da categoria compartilhada.");
+        await loadChecklistAndProgress();
+    } catch (error) {
+        console.error("Erro ao sair da categoria compartilhada:", error);
+        alert("Não foi possível sair da categoria: " + error.message);
+    }
+}
+
+function deleteCategoryOffline(id) {
+    beginOptimisticMutation();
+    const cat = categories.find(c => String(c.id) === String(id));
+    if (!cat) return;
+    removeCategoryAndTasksFromLocalState(cat);
+    renderCategories();
+    renderChecklist();
+    updateProgress();
+}
+
+async function resetChecklistProgress() {
+    beginOptimisticMutation();
+    // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
+    tasks = tasks.map(t => ({ ...t, completed: false }));
+    resetChecklistProgressOffline();
+
+    // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
+    if (supabaseClient && currentUser) {
+        supabaseClient.from('completions').delete().eq('date', selectedDate)
+            .then(({ error }) => {
+                if (error) console.error("Erro ao resetar progresso no Supabase:", error);
+            })
+            .catch(err => {
+                console.error("Erro assíncrono ao resetar progresso:", err);
+            });
+    }
+}
+
+function resetChecklistProgressOffline() {
+    let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+    localCompletions = localCompletions.filter(c => c.date !== selectedDate);
+    localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
+    
+    loadDataOffline();
+    renderChecklist();
+    updateProgress();
+}
+
+async function restoreDefaultSettings() {
+    if (supabaseClient) {
+        try {
+            // Soft-delete current categories and tasks
+            await supabaseClient.from('tasks').update({ is_active: false }).eq('is_active', true);
+            await supabaseClient.from('categories').update({ is_active: false }).eq('is_active', true);
+            
+            // Insert default categories
+            const seedCats = DEFAULT_CATEGORIES.map(name => ({ 
+                name, 
+                is_active: true,
+                user_id: currentUser ? currentUser.id : null
+            }));
+            const { data: seededCats, error: errSeedCats } = await supabaseClient
+                .from('categories')
+                .upsert(seedCats, { onConflict: 'name,user_id' })
+                .select();
+            if (errSeedCats) throw errSeedCats;
+            
+            // Insert default tasks
+            const seedTasks = DEFAULT_TASKS.map(t => ({
+                title: t.title,
+                category: t.category,
+                is_recurring: t.is_recurring,
+                is_active: true,
+                user_id: currentUser ? currentUser.id : null
+            }));
+            await supabaseClient.from('tasks').insert(seedTasks);
+            
+            await loadChecklistAndProgress();
+        } catch (e) {
+            console.error("Erro ao restaurar padrões online. Restaurando offline.", e);
+            restoreDefaultSettingsOffline();
+        }
+    } else {
+        restoreDefaultSettingsOffline();
+    }
+}
+
+function restoreDefaultSettingsOffline() {
+    // Categories
+    localStorage.removeItem("checklist_categories_seeded");
+    let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+    localCats = localCats.map(c => ({ ...c, is_active: false }));
+    DEFAULT_CATEGORIES.forEach((name, i) => {
+        localCats.push({
+            id: Date.now() + i,
+            name: name,
+            is_active: true
+        });
+    });
+    localStorage.setItem("checklist_categories_seeded", "true");
+    localStorage.setItem("offline_categories", JSON.stringify(localCats));
+
+    // Tasks
+    let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    localTasks = localTasks.map(t => ({ ...t, is_active: false }));
+    const createdAt = new Date().toISOString();
+    DEFAULT_TASKS.forEach((t, i) => {
+        localTasks.push({
+            id: Date.now() + i + 100,
+            title: t.title,
+            category: t.category,
+            is_recurring: t.is_recurring,
+            is_active: true,
+            created_at: createdAt
+        });
+    });
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+
+    loadDataOffline();
+    renderCategories();
+    renderChecklist();
+    updateProgress();
+}
+
+async function clearAllTasks() {
+    // 1. ATUALIZAÇÃO OTIMISTA LOCAL IMEDIATA
+    tasks = [];
+    allActiveTasks = allActiveTasks.map(t => ({ ...t, is_active: false }));
+    clearAllTasksOffline();
+
+    // 2. ENVIAR PARA O SUPABASE EM SEGUNDO PLANO
+    if (supabaseClient && currentUser) {
+        supabaseClient.from('tasks').update({ is_active: false }).eq('is_active', true)
+            .then(({ error }) => {
+                if (error) console.error("Erro ao limpar tarefas no Supabase:", error);
+            })
+            .catch(err => {
+                console.error("Erro assíncrono ao limpar tarefas:", err);
+            });
+    }
+}
+
+function clearAllTasksOffline() {
+    let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+    localTasks = localTasks.map(t => ({ ...t, is_active: false }));
+    localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+    
+    loadDataOffline();
+    renderChecklist();
+    updateProgress();
+}
+
+// ----------------------------------------------------
+// Helper Utilities
+// ----------------------------------------------------
+function getLocalDateString(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+// Extrair a parte da data de um timestamp (suporta formato ISO com 'T' e formato Supabase com espaço)
+function extractDateFromTimestamp(timestamp) {
+    if (!timestamp) return '';
+    // Supabase pode retornar com 'T' ou com espaço. Pegar os primeiros 10 chars (YYYY-MM-DD)
+    return String(timestamp).substring(0, 10);
+}
+
+function capitalize(str) {
+    if (!str) return "";
+    return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+function escapeHTML(str) {
+    return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+async function shareReport() {
+    const visibleTasks = tasks.filter(task => !isTrainingCategory(task.category) || isTrainingTaskOwnedByCurrentUser(task, true));
+    if (visibleTasks.length === 0) {
+        alert("Adicione tarefas antes de exportar um relatório.");
+        return;
+    }
+
+    const dateObj = new Date(selectedDate + "T12:00:00");
+    const formattedDateStr = dateObj.toLocaleDateString('pt-BR');
+    const total = visibleTasks.length;
+    const completed = visibleTasks.filter(t => t.completed).length;
+    const percentage = total === 0 ? 0 : Math.round((completed / total) * 100);
+
+    let reportText = `📋 *RELATÓRIO CHECKLIST DIÁRIO*\n`;
+    reportText += `📅 *Data:* ${formattedDateStr}\n`;
+    reportText += `📊 *Progresso:* ${percentage}% (${completed} de ${total} concluídos)\n\n`;
+
+    // Agrupar tarefas pelas categorias ativas no checklist de hoje
+    const activeCatsInTasks = [...new Set(visibleTasks.map(t => t.category))];
+    
+    activeCatsInTasks.forEach(catName => {
+        const catTasks = tasks.filter(t => t.category === catName);
+        if (catTasks.length > 0) {
+            reportText += `*${catName}:*\n`;
+            catTasks.forEach(task => {
+                const mark = task.completed ? "✅" : "❌";
+                reportText += `${mark} ${task.title}\n`;
+            });
+            reportText += `\n`;
+        }
+    });
+
+    const shareData = {
+        title: `Checklist de ${formattedDateStr}`,
+        text: reportText.trim()
+    };
+
+    if (typeof navigator.share === "function") {
+        try {
+            await navigator.share(shareData);
+            return;
+        } catch (error) {
+            // Fechar o menu nativo não é um erro e não deve disparar o fallback.
+            if (error?.name === "AbortError") return;
+            console.warn("Compartilhamento nativo indisponível; usando cópia como alternativa.", error);
+        }
+    }
+
+    // Alternativa para computadores e navegadores sem suporte ao Web Share.
+    try {
+        if (!navigator.clipboard?.writeText) throw new Error("Clipboard API indisponível");
+        await navigator.clipboard.writeText(shareData.text);
+        alert("Checklist copiado! Agora você pode colar onde desejar.");
+    } catch (error) {
+        console.error("Não foi possível compartilhar ou copiar o checklist:", error);
+        alert("Seu navegador não permite compartilhar diretamente. Tente abrir o app instalado ou usar HTTPS.");
+    }
+}
+
+function createConfettiBurst(x, y) {
+    const particleCount = 10;
+    const colors = ['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ec4899'];
+    
+    for (let i = 0; i < particleCount; i++) {
+        const particle = document.createElement("span");
+        particle.className = "confetti-particle";
+        
+        const color = colors[Math.floor(Math.random() * colors.length)];
+        particle.style.background = color;
+        particle.style.boxShadow = `0 0 6px ${color}`;
+        
+        particle.style.left = `${x}px`;
+        particle.style.top = `${y}px`;
+        
+        const angle = (i / particleCount) * 2 * Math.PI + (Math.random() * 0.4 - 0.2);
+        const distance = 20 + Math.random() * 20;
+        const tx = Math.cos(angle) * distance;
+        const ty = Math.sin(angle) * distance;
+        
+        particle.style.setProperty('--tx', `${tx}px`);
+        particle.style.setProperty('--ty', `${ty}px`);
+        
+        document.body.appendChild(particle);
+        
+        setTimeout(() => {
+            particle.remove();
+        }, 700);
+    }
+}
+
+function setupAiTaskCreator() {
+    const modal = document.getElementById("modal-ai-tasks");
+    const openButton = document.getElementById("btn-open-ai-tasks-fab");
+    const closeButton = document.getElementById("btn-close-ai-tasks");
+    const recordButton = document.getElementById("btn-ai-record");
+    const recordTitle = document.getElementById("ai-record-title");
+    const recordStatus = document.getElementById("ai-record-status");
+    const promptInput = document.getElementById("ai-task-prompt");
+    const generateButton = document.getElementById("btn-ai-generate");
+    const review = document.getElementById("ai-tasks-review");
+    const reviewList = document.getElementById("ai-tasks-review-list");
+    const confirmButton = document.getElementById("btn-ai-confirm");
+    if (!modal || !openButton || !recordButton || !generateButton || !reviewList || !confirmButton) return;
+
+    let recorder = null;
+    let audioChunks = [];
+    let recordedAudio = null;
+    let stopTimer = null;
+    let suggestions = [];
+    let liveSocket = null;
+    let liveAudioContext = null;
+    let liveSource = null;
+    let liveProcessor = null;
+    let liveTranscript = "";
+    let liveAutoSubmitted = false;
+    let deviceRecognition = null;
+    let deviceTranscript = "";
+    let deviceInterimTranscript = "";
+    let pendingVoicePrompt = "";
+    let isRefiningSuggestions = false;
+    let discardRecordingOnStop = false;
+    let aiSessionId = 0;
+
+    const bytesToBase64 = bytes => {
+        let binary = "";
+        const step = 0x8000;
+        for (let index = 0; index < bytes.length; index += step) binary += String.fromCharCode(...bytes.subarray(index, index + step));
+        return btoa(binary);
+    };
+    const downsampleToPcm16 = (samples, inputRate) => {
+        const ratio = inputRate / 16000;
+        const length = Math.max(1, Math.floor(samples.length / ratio));
+        const output = new Int16Array(length);
+        for (let index = 0; index < length; index++) {
+            const start = Math.floor(index * ratio);
+            const end = Math.min(samples.length, Math.floor((index + 1) * ratio));
+            let sum = 0;
+            for (let cursor = start; cursor < end; cursor++) sum += samples[cursor];
+            const value = Math.max(-1, Math.min(1, sum / Math.max(1, end - start)));
+            output[index] = value < 0 ? value * 32768 : value * 32767;
+        }
+        return new Uint8Array(output.buffer);
+    };
+    const stopLiveAudio = () => {
+        try { liveProcessor?.disconnect(); } catch (_) {}
+        try { liveSource?.disconnect(); } catch (_) {}
+        if (liveAudioContext && liveAudioContext.state !== "closed") liveAudioContext.close().catch(() => {});
+        liveProcessor = null;
+        liveSource = null;
+        liveAudioContext = null;
+    };
+    const submitLiveTranscript = () => {
+        const transcript = (liveTranscript || deviceTranscript || deviceInterimTranscript).trim();
+        if (liveAutoSubmitted) return;
+        if (!transcript) {
+            if (recorder?.state !== "recording" && recordedAudio) {
+                liveAutoSubmitted = true;
+                recordTitle.textContent = "Áudio pronto";
+                recordStatus.textContent = "Criando a prévia das tarefas…";
+                setTimeout(() => generateButton.click(), 80);
+            }
+            return;
+        }
+        liveAutoSubmitted = true;
+        pendingVoicePrompt = transcript;
+        recordedAudio = null;
+        recordTitle.textContent = "Fala interpretada";
+        recordStatus.textContent = "Criando a prévia das tarefas…";
+        setTimeout(() => generateButton.click(), 80);
+    };
+    const startDeviceTranscription = () => {
+        const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!Recognition) return;
+        try {
+            deviceTranscript = "";
+            deviceInterimTranscript = "";
+            deviceRecognition = new Recognition();
+            deviceRecognition.lang = "pt-BR";
+            deviceRecognition.continuous = true;
+            deviceRecognition.interimResults = true;
+            deviceRecognition.onresult = event => {
+                let finalText = "";
+                let interimText = "";
+                for (let index = event.resultIndex; index < event.results.length; index++) {
+                    const text = event.results[index][0]?.transcript || "";
+                    if (event.results[index].isFinal) finalText += `${text} `;
+                    else interimText += text;
+                }
+                if (finalText) deviceTranscript += finalText;
+                deviceInterimTranscript = interimText;
+                const preview = (interimText || deviceTranscript).trim();
+                if (preview) recordStatus.textContent = preview.slice(0, 72);
+            };
+            deviceRecognition.onerror = error => console.warn("Transcrição rápida do aparelho indisponível", error.error);
+            deviceRecognition.start();
+        } catch (error) {
+            console.warn("Não foi possível iniciar a transcrição do aparelho", error);
+        }
+    };
+    const startGeminiLive = async stream => {
+        try {
+            recordStatus.textContent = "Conectando ao modo ao vivo…";
+            const { data, error } = await supabaseClient.functions.invoke("create-gemini-live-token", { body: {} });
+            if (error || !data?.token) throw new Error(data?.error || error?.message || "Token ao vivo indisponível");
+            liveTranscript = "";
+            liveAutoSubmitted = false;
+            const endpoint = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(data.token)}`;
+            liveSocket = new WebSocket(endpoint);
+            liveSocket.onopen = () => {
+                liveSocket.send(JSON.stringify({ setup: {
+                    model: `models/${data.model || "gemini-3.1-flash-live-preview"}`,
+                    generationConfig: { responseModalities: ["AUDIO"], temperature: 0 },
+                    inputAudioTranscription: {},
+                    systemInstruction: { parts: [{ text: "Transcreva fielmente a fala do usuário em português do Brasil. Responda somente com a transcrição, sem comentários." }] },
+                } }));
+            };
+            liveSocket.onmessage = async event => {
+                const message = JSON.parse(event.data);
+                if (message.setupComplete && !liveProcessor && stream.active) {
+                    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                    liveAudioContext = new AudioContextClass();
+                    await liveAudioContext.resume();
+                    liveSource = liveAudioContext.createMediaStreamSource(stream);
+                    liveProcessor = liveAudioContext.createScriptProcessor(2048, 1, 1);
+                    liveProcessor.onaudioprocess = audioEvent => {
+                        if (liveSocket?.readyState !== WebSocket.OPEN) return;
+                        const pcm = downsampleToPcm16(audioEvent.inputBuffer.getChannelData(0), liveAudioContext.sampleRate);
+                        liveSocket.send(JSON.stringify({ realtimeInput: { audio: { data: bytesToBase64(pcm), mimeType: "audio/pcm;rate=16000" } } }));
+                    };
+                    liveSource.connect(liveProcessor);
+                    liveProcessor.connect(liveAudioContext.destination);
+                    recordStatus.textContent = "Transcrevendo ao vivo…";
+                }
+                const transcription = message.serverContent?.inputTranscription?.text;
+                if (transcription) liveTranscript += `${transcription} `;
+                if (message.serverContent?.turnComplete && recorder?.state !== "recording") submitLiveTranscript();
+            };
+            liveSocket.onerror = event => {
+                console.warn("WebSocket Gemini Live falhou", event);
+                stopLiveAudio();
+                if (recorder?.state === "recording") recordStatus.textContent = "Gravando no modo compatível…";
+            };
+            liveSocket.onclose = event => {
+                console.warn("WebSocket Gemini Live encerrado", event.code, event.reason);
+                stopLiveAudio();
+                if (recorder?.state === "recording" && !liveTranscript.trim()) recordStatus.textContent = "Gravando no modo compatível…";
+            };
+        } catch (error) {
+            console.warn("Gemini Live indisponível; mantendo gravação normal.", error);
+            if (recorder?.state === "recording") recordStatus.textContent = "Gravando no modo compatível…";
+        }
+    };
+
+    const resetRecorderLabel = () => {
+        recordButton.classList.remove("recording");
+        if (suggestions.length) {
+            recordTitle.textContent = "Complementar com áudio";
+            recordStatus.textContent = "Ajuste as tarefas encontradas";
+        } else {
+            recordTitle.textContent = recordedAudio ? "Áudio pronto" : "Toque para falar";
+            recordStatus.textContent = recordedAudio ? "Toque novamente para regravar" : "Até 60 segundos";
+        }
+    };
+    const resetAiTaskCreator = () => {
+        promptInput.value = "";
+        recordedAudio = null;
+        audioChunks = [];
+        suggestions = [];
+        pendingVoicePrompt = "";
+        isRefiningSuggestions = false;
+        liveTranscript = "";
+        liveAutoSubmitted = false;
+        deviceTranscript = "";
+        deviceInterimTranscript = "";
+        reviewList.innerHTML = "";
+        review.hidden = true;
+        localStorage.removeItem(`ai_task_draft_${currentUser?.id || "local"}`);
+        localStorage.removeItem("ai_task_draft_local");
+        resetRecorderLabel();
+    };
+    const close = () => {
+        aiSessionId += 1;
+        if (recorder && recorder.state === "recording") {
+            discardRecordingOnStop = true;
+            recorder.stop();
+        }
+        try { deviceRecognition?.stop(); } catch (_) {}
+        try { liveSocket?.close(); } catch (_) {}
+        stopLiveAudio();
+        resetAiTaskCreator();
+        closeModal(modal);
+    };
+    openButton.addEventListener("click", () => {
+        document.getElementById("fab-menu")?.classList.remove("open");
+        closeModal(modalAddTask);
+        openModal(modal);
+    });
+    closeButton?.addEventListener("click", close);
+    modal.querySelector(".modal-overlay")?.addEventListener("click", close);
+
+    recordButton.addEventListener("click", async () => {
+        if (recorder && recorder.state === "recording") {
+            stopLiveAudio();
+            if (liveSocket?.readyState === WebSocket.OPEN) liveSocket.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
+            try { deviceRecognition?.stop(); } catch (_) {}
+            recorder.stop();
+            setTimeout(submitLiveTranscript, (deviceTranscript || deviceInterimTranscript).trim() ? 250 : 1200);
+            return;
+        }
+        if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+            showAppNotice("A gravação de voz não está disponível neste navegador. Você ainda pode digitar o pedido.", "warning");
+            return;
+        }
+        try {
+            // Se já há uma prévia, o mesmo botão superior passa automaticamente
+            // a complementar essas tarefas em vez de iniciar uma lista nova.
+            isRefiningSuggestions = suggestions.length > 0;
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const preferredTypes = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"];
+            const mimeType = preferredTypes.find(type => MediaRecorder.isTypeSupported(type)) || "";
+            recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+            audioChunks = [];
+            discardRecordingOnStop = false;
+            recorder.ondataavailable = event => { if (event.data?.size) audioChunks.push(event.data); };
+            recorder.onstop = () => {
+                clearTimeout(stopTimer);
+                recordedAudio = discardRecordingOnStop ? null : new Blob(audioChunks, { type: recorder.mimeType || audioChunks[0]?.type || "audio/webm" });
+                discardRecordingOnStop = false;
+                audioChunks = [];
+                stream.getTracks().forEach(track => track.stop());
+                resetRecorderLabel();
+            };
+            recorder.start();
+            recordedAudio = null;
+            recordButton.classList.add("recording");
+            recordTitle.textContent = "Ouvindo… toque para parar";
+            recordStatus.textContent = isRefiningSuggestions ? "Descreva o que deseja alterar" : "Conectando ao reconhecimento rápido…";
+            startDeviceTranscription();
+            startGeminiLive(stream);
+            stopTimer = setTimeout(() => { if (recorder?.state === "recording") recorder.stop(); }, 60000);
+        } catch (error) {
+            showAppNotice(error.name === "NotAllowedError" ? "Autorize o acesso ao microfone para usar a criação por voz." : `Não foi possível gravar: ${error.message}`, "warning");
+        }
+    });
+
+    const blobToBase64 = blob => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+    });
+    const renderSuggestions = tasksToRender => {
+        suggestions = tasksToRender;
+        reviewList.innerHTML = tasksToRender.map((task, index) => {
+            const today = getLocalDateString(new Date());
+            const reminderDayLabel = task.reminder_date === today ? "Hoje" : task.reminder_date ? task.reminder_date.split("-").reverse().join("/") : (task.reminder_offset_days === 1 ? "1 dia antes" : "No mesmo dia");
+            const reminderLabel = task.reminder_enabled ? `Lembrete: ${reminderDayLabel} às ${task.reminder_time}` : "";
+            const recurrenceLabel = task.recurrence === "daily" ? "Diária" : task.recurrence === "repeat"
+                ? `Repete: ${(task.repeat_days || []).join(", ")}` : task.recurrence === "interval14" ? "A cada 2 semanas" : "Única";
+            const meta = [task.category, task.date?.split("-").reverse().join("/"), recurrenceLabel, ...(task.shifts || []), task.assignee_label, reminderLabel].filter(Boolean).join(" • ");
+            return `<label class="ai-review-item"><input type="checkbox" data-index="${index}" checked><span><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(meta)}</small></span></label>`;
+        }).join("");
+        review.hidden = false;
+    };
+    generateButton.addEventListener("click", async () => {
+        if (!supabaseClient || !currentUser) return showAppNotice("Entre na sua conta para usar a criação com IA.", "warning");
+        const prompt = pendingVoicePrompt || promptInput.value.trim();
+        pendingVoicePrompt = "";
+        if (!recordedAudio && !prompt) return showAppNotice("Grave um áudio ou escreva o que deseja criar.", "warning");
+        const original = generateButton.innerHTML;
+        const requestSessionId = aiSessionId;
+        generateButton.disabled = true;
+        generateButton.innerHTML = '<span class="loading-spinner"></span> Entendendo seu pedido…';
+        if (!isRefiningSuggestions) review.hidden = true;
+        try {
+            const reminderFallback = new Date(Date.now() + 5 * 60000);
+            const body = { prompt, today: getLocalDateString(new Date()), default_reminder_time: `${String(reminderFallback.getHours()).padStart(2, "0")}:${String(reminderFallback.getMinutes()).padStart(2, "0")}`, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo" };
+            if (isRefiningSuggestions && suggestions.length) body.existing_tasks = suggestions;
+            if (recordedAudio) {
+                body.audio_base64 = await blobToBase64(recordedAudio);
+                body.audio_mime_type = recordedAudio.type.split(";")[0] || "audio/webm";
+            }
+            const { data, error } = await supabaseClient.functions.invoke("create-tasks-with-ai", { body });
+            if (error) {
+                let detail = "";
+                try {
+                    const errorBody = error.context && typeof error.context.json === "function" ? await error.context.json() : null;
+                    detail = errorBody?.error || "";
+                } catch (_) {}
+                throw new Error(detail || error.message);
+            }
+            if (data?.error) throw new Error(data.error);
+            if (!data?.tasks?.length) throw new Error("Não encontrei nenhuma tarefa clara nesse pedido.");
+            if (requestSessionId !== aiSessionId) return;
+            renderSuggestions(data.tasks);
+            recordedAudio = null;
+            liveTranscript = "";
+            deviceTranscript = "";
+            deviceInterimTranscript = "";
+            isRefiningSuggestions = false;
+            resetRecorderLabel();
+        } catch (error) {
+            if (requestSessionId !== aiSessionId) return;
+            showAppNotice(`A IA não conseguiu interpretar o pedido: ${error.message}`, "error");
+        } finally {
+            generateButton.disabled = false;
+            generateButton.innerHTML = original;
+            if (window.lucide) window.lucide.createIcons();
+        }
+    });
+    confirmButton.addEventListener("click", async () => {
+        const selected = [...reviewList.querySelectorAll('input[type="checkbox"]:checked')].map(input => suggestions[Number(input.dataset.index)]).filter(Boolean);
+        if (!selected.length) return showAppNotice("Selecione pelo menos uma tarefa.", "warning");
+        const original = confirmButton.textContent;
+        confirmButton.disabled = true;
+        confirmButton.textContent = "Criando…";
+        let created = 0;
+        try {
+            for (const task of selected) {
+                const validCategory = categories.find(category => category.is_active !== false && String(category.name).toLowerCase() === String(task.category).toLowerCase());
+                if (!validCategory) continue;
+                await addTask(task.title, validCategory.name, ["once", "daily", "repeat", "interval14"].includes(task.recurrence) ? task.recurrence : "once", task.date || getLocalDateString(new Date()), task.recurrence === "repeat" ? task.repeat_days || [] : null, task.assigned_to || null, task.shifts || [], Boolean(task.important), task.reminder_enabled ? task.reminder_time : null, task.reminder_offset_days || 0);
+                created += 1;
+            }
+            if (!created) throw new Error("Nenhuma categoria sugerida existe mais no checklist.");
+            showAppNotice(`${created} ${created === 1 ? "tarefa criada" : "tarefas criadas"} com sucesso.`, "success");
+            resetAiTaskCreator();
+            closeModal(modal);
+        } catch (error) {
+            showAppNotice(`Não foi possível concluir: ${error.message}`, "error");
+        } finally {
+            confirmButton.disabled = false;
+            confirmButton.textContent = original;
+        }
+    });
+}
+
+function getCategoryColorStyle(categoryName) {
+    const name = categoryName || "Outros";
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) {
+        hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const hue = Math.abs(hash) % 360;
+    const automaticColor = hslToHex(hue, 80, 65);
+    const category = (categories || []).find(item => normalizeCategoryName(item.name) === normalizeCategoryName(name));
+    const color = /^#[0-9a-f]{6}$/i.test(String(category?.color || "")) ? category.color : automaticColor;
+    const bg = `${color}1f`;
+    return { color, bg };
+}
+
+function hslToHex(hue, saturation, lightness) {
+    const s = saturation / 100;
+    const l = lightness / 100;
+    const chroma = (1 - Math.abs(2 * l - 1)) * s;
+    const segment = hue / 60;
+    const x = chroma * (1 - Math.abs(segment % 2 - 1));
+    const [red, green, blue] = segment < 1 ? [chroma, x, 0] : segment < 2 ? [x, chroma, 0] : segment < 3 ? [0, chroma, x] : segment < 4 ? [0, x, chroma] : segment < 5 ? [x, 0, chroma] : [chroma, 0, x];
+    const match = l - chroma / 2;
+    return `#${[red, green, blue].map(channel => Math.round((channel + match) * 255).toString(16).padStart(2, "0")).join("")}`;
+}
+
+// Modal Helpers
+function openModal(modalEl) {
+    if (!modalEl) return;
+    
+    // Se não há nenhum modal ativo ainda, salva a posição do scroll e trava o body
+    const activeModals = document.querySelectorAll(".modal.active");
+    if (activeModals.length === 0) {
+        scrollPosition = window.pageYOffset || document.documentElement.scrollTop;
+        document.body.style.overflow = "hidden";
+        document.body.style.position = "fixed";
+        document.body.style.top = `-${scrollPosition}px`;
+        document.body.style.width = "100%";
+    }
+    
+    modalEl.classList.add("active");
+}
+
+function closeModal(modalEl) {
+    if (!modalEl) return;
+
+    // Fechar a captura de foto significa cancelar o check. A conclusão só é
+    // confirmada pelos botões de foto/sem foto, que limpam o pendente antes.
+    if (modalEl === modalTrainingPhoto && pendingTrainingCompletionId !== null) {
+        pendingTrainingCompletionId = null;
+        pendingTrainingPastNightException = false;
+        if (inputTrainingPhoto) inputTrainingPhoto.value = "";
+    }
+
+    modalEl.classList.remove("active");
+
+    if ((modalEl === modalAddTask || modalEl === modalEditTask) && deferredTaskEditorBackgroundRender) {
+        deferredTaskEditorBackgroundRender = false;
+        renderCategories();
+        renderChecklist();
+        updateProgress();
+    }
+    
+    // Se não restou nenhum modal ativo, restaura o scroll
+    const activeModals = document.querySelectorAll(".modal.active");
+    if (activeModals.length === 0) {
+        document.body.style.removeProperty("position");
+        document.body.style.removeProperty("top");
+        document.body.style.removeProperty("width");
+        document.body.style.overflow = "";
+        window.scrollTo(0, scrollPosition);
+    }
+}
+
+// Theme Helper
+function applyTheme(themeName) {
+    currentTheme = themeName;
+    localStorage.setItem("checklist_theme", themeName);
+
+    // Remove active classes
+    document.body.classList.remove("theme-light", "theme-girly");
+
+    // Add selected theme class
+    if (themeName === "light") {
+        document.body.classList.add("theme-light");
+    } else if (themeName === "girly") {
+        document.body.classList.add("theme-girly");
+    }
+
+    // Update active state on buttons inside Settings modal
+    document.querySelectorAll(".theme-selector-btn").forEach(btn => {
+        if (btn.dataset.theme === themeName) {
+            btn.classList.add("active");
+            btn.style.borderColor = "var(--primary)";
+        } else {
+            btn.classList.remove("active");
+            btn.style.borderColor = "var(--border-color)";
+        }
+    });
+
+    // Salva o tema na nuvem se o usuário estiver logado
+    saveUserThemeCloud(themeName);
+    
+    // Sincroniza a cor da bolinha de status do cabeçalho
+    updateDateState();
+}
+
+// Helper para gerenciar o estado global de edição das categorias
+function toggleEditMode(forceState) {
+    isEditMode = forceState !== undefined ? forceState : !isEditMode;
+    
+    const btnToggleEdit = document.getElementById("btn-toggle-edit");
+    if (isEditMode) {
+        appContainer.classList.add("edit-mode-active");
+        if (btnToggleEdit) {
+            btnToggleEdit.classList.add("active");
+            btnToggleEdit.innerHTML = '<i data-lucide="check"></i>';
+            btnToggleEdit.title = "Finalizar Edição";
+        }
+    } else {
+        appContainer.classList.remove("edit-mode-active");
+        if (btnToggleEdit) {
+            btnToggleEdit.classList.remove("active");
+            btnToggleEdit.innerHTML = '<i data-lucide="edit-3"></i>';
+            btnToggleEdit.title = "Editar Checklist";
+        }
+    }
+    
+    renderCategories();
+    renderChecklist();
+    lucide.createIcons();
+}
+
+async function saveUserThemeCloud(themeName) {
+    if (!supabaseClient || !currentUser) return;
+    try {
+        await supabaseClient
+            .from('profiles')
+            .upsert({ 
+                id: currentUser.id, 
+                theme: themeName, 
+                updated_at: new Date().toISOString() 
+            });
+    } catch (e) {
+        console.error("Erro ao salvar tema no Supabase:", e);
+    }
+}
+
+async function loadUserProfile() {
+    if (!supabaseClient || !currentUser) return;
+    try {
+        const { data, error } = await supabaseClient
+            .from('profiles')
+            .select('theme')
+            .eq('id', currentUser.id)
+            .maybeSingle();
+            
+        if (!error && data && data.theme && data.theme !== currentTheme) {
+            // Aplica o tema sem chamar o saveUserThemeCloud para evitar requisição em loop
+            currentTheme = data.theme;
+            localStorage.setItem("checklist_theme", data.theme);
+            
+            document.body.classList.remove("theme-light", "theme-girly");
+            if (data.theme === "light") {
+                document.body.classList.add("theme-light");
+            } else if (data.theme === "girly") {
+                document.body.classList.add("theme-girly");
+            }
+
+            document.querySelectorAll(".theme-selector-btn").forEach(btn => {
+                if (btn.dataset.theme === data.theme) {
+                    btn.classList.add("active");
+                    btn.style.borderColor = "var(--primary)";
+                } else {
+                    btn.classList.remove("active");
+                    btn.style.borderColor = "var(--border-color)";
+                }
+            });
+        }
+    } catch (e) {
+        console.error("Erro ao carregar perfil do Supabase:", e);
+    }
+}
+
+// Supabase Auth and Sync helpers
+function setAppContainerVisible(visible) {
+    const appContainerElement = document.querySelector(".app-container");
+    if (!appContainerElement) return;
+    if (visible) appContainerElement.style.removeProperty("display");
+    else appContainerElement.style.display = "none";
+}
+
+function setupSupabaseAuth() {
+    if (!supabaseClient) {
+        document.getElementById("auth-container").style.display = "none";
+        setAppContainerVisible(true);
+        document.body.dataset.awaitingCloud = "false";
+        loadChecklistAndProgress();
+        requestAnimationFrame(() => {
+            document.documentElement.classList.add("checklist-ui-ready");
+            if (appSessionLoader) appSessionLoader.classList.add("hidden");
+        });
+        return;
+    }
+
+    supabaseClient.auth.onAuthStateChange(async (event, session) => {
+        console.log("Supabase Auth Change:", event, session);
+
+        // Ignora renovações de token e eventos secundários para evitar re-renderizações desnecessárias
+        if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+            if (session) {
+                currentUser = session.user;
+                learningCloudState = "idle";
+                reportsCloudState = "idle";
+                if (hasPendingSyncData()) scheduleCloudSync("token-restaurado", 0);
+            }
+            return;
+        }
+
+        if (session) {
+            clearTimeout(pendingInitialSessionTimer);
+            pendingInitialSessionTimer = null;
+            let restoredFromCache = document.body.dataset.hasChecklistCache === "true";
+            const cachedOwnerId = localPrefs.getItem("checklist_last_user_id");
+            if (cachedOwnerId && String(cachedOwnerId) !== String(session.user.id)) {
+                clearLocalUserCache();
+                restoredFromCache = false;
+                document.body.dataset.hasChecklistCache = "false";
+                document.body.dataset.awaitingCloud = "true";
+            }
+            currentUser = session.user;
+            cassolDashboardLastPullAt = 0;
+            localPrefs.setItem("checklist_last_user_id", currentUser.id);
+            localPrefs.setItem("checklist_last_user_email", currentUser.email || "");
+            learningCloudState = "idle";
+            reportsCloudState = "idle";
+            updatePendingTrainingPhotoFlag(await idb.get("training_photo_records") || []);
+            document.getElementById("auth-container").style.display = "none";
+            setAppContainerVisible(true);
+
+            const startupParams = new URLSearchParams(window.location.search);
+            const earlyNotificationTaskId = startupParams.get("notification_task");
+            const earlyReminderTaskId = startupParams.get("reminder_task");
+            const earlyDashboardPush = startupParams.get("dashboard_task") === "1";
+            const earlyTrainingDate = startupParams.get("training_date");
+            const earlyTrainingPush = startupParams.get("training_calendar") === "1";
+            let earlyTrainingPromise = null;
+            if (earlyTrainingPush) {
+                // O destino do push aparece antes de sincronizações, perfil e
+                // realtime. O cache pinta o modal; a foto nova entra em seguida.
+                history.replaceState({}, "", window.location.pathname);
+                earlyTrainingPromise = openTrainingCalendarFromPush(earlyNotificationTaskId, earlyTrainingDate);
+            }
+
+            // O lembrete abre antes da sincronização completa, perfil e fotos.
+            // Assim, tocar no push mostra imediatamente as opções de adiar ou
+            // desativar, mesmo se o app estava fechado.
+            let earlyReminderOpened = false;
+            if (earlyReminderTaskId) {
+                history.replaceState({}, "", window.location.pathname);
+                earlyReminderOpened = true;
+                openTaskReminderAction(earlyReminderTaskId);
+            }
+
+            // Um push de tarefa tem prioridade sobre a sincronização completa:
+            // mostra o cartão imediatamente e continua o carregamento depois.
+            let earlyNotificationTaskHandled = false;
+            if (earlyNotificationTaskId && !earlyTrainingPush) {
+                const primedTask = await primeTaskFromPush(earlyNotificationTaskId, { openCategory: earlyDashboardPush });
+                if (primedTask) {
+                    earlyNotificationTaskHandled = true;
+                    if (appSessionLoader) appSessionLoader.classList.add("hidden");
+                    setAppContainerVisible(true);
+                }
+            }
+
+            // Com cache visível, não substitui os cartões enquanto o usuário
+            // inicia um swipe, toque ou edição logo após abrir o PWA.
+            await waitForStartupInteractionToSettle();
+            
+            // A migração remove filas antigas de tarefas antes que o
+            // sincronizador geral tente processá-las junto das ações online.
+            migrateToOnlineOnlyTaskMutations();
+
+            // Sync local data to cloud
+            await syncOfflineDataToCloud();
+            
+            // Carrega as configurações de perfil (como o tema do usuário)
+            await loadUserProfile();
+            
+            if (restoredFromCache) {
+                await loadChecklistAndProgress(true, true);
+                await loadCollaborationIdentityLabels();
+            } else {
+                // No primeiro acesso, espera os dados reais e pinta a lista uma
+                // única vez. A estrutura do app continua visível durante a rede.
+                await loadData();
+                await loadCollaborationIdentityLabels();
+                document.body.dataset.awaitingCloud = "false";
+                renderCategories();
+                renderChecklist();
+                updateProgress();
+                updateSmartReportButtonVisibility();
+            }
+            renderNotifications();
+            localPrefs.setItem("checklist_device_cache_ready", "true");
+            document.documentElement.classList.add("checklist-device-ready");
+
+            // Toda conta precisa definir um ID público antes de continuar.
+            await ensureUserIdentifier();
+            subscribeToCollaborationUpdates();
+            startCassolDashboardPulling();
+            // Retoma fotos pendentes sem bloquear o carregamento do Checklist.
+            scheduleTrainingPhotoUpload("abertura-do-app", 2500);
+            if ("requestIdleCallback" in window) window.requestIdleCallback(warmTrainingPhotoCache, { timeout: 3000 });
+            else setTimeout(warmTrainingPhotoCache, 1800);
+            updateNotificationsSettingUI();
+            if (areNotificationsEnabled() && "Notification" in window && Notification.permission === "granted") {
+                // Nunca cancela uma assinatura válida automaticamente ao abrir
+                // o app. Apenas recupera e sincroniza o endpoint existente.
+                ensurePushSubscription({ forceRefresh: false })
+                    .catch(error => console.warn("Não foi possível restaurar a inscrição Web Push:", error.message));
+            }
+            const notificationTaskId = earlyNotificationTaskId;
+            const shouldOpenTrainingCalendar = earlyTrainingPush;
+            const notificationTrainingDate = earlyTrainingDate;
+            const reminderTaskId = earlyReminderTaskId;
+            const shouldOpenNotifications = new URLSearchParams(window.location.search).get("open_notifications") === "1";
+            const collaborationInviteId = new URLSearchParams(window.location.search).get("collaboration_invite");
+            if (shouldOpenTrainingCalendar) {
+                // Revalida o modal que já foi aberto pelo caminho rápido, sem
+                // fechá-lo nem reiniciar suas fotos.
+                earlyTrainingPromise?.catch(error => console.warn("Abertura rápida do treino indisponível:", error));
+                setTimeout(() => {
+                    if (!modalTrainingReport?.classList.contains("active")) return;
+                    renderTrainingReport().then(() => renderTrainingDayGallery(notificationTrainingDate || getLocalDateString(new Date())));
+                }, 50);
+            } else if (reminderTaskId && !earlyReminderOpened) {
+                history.replaceState({}, "", window.location.pathname);
+                setTimeout(() => openTaskReminderAction(reminderTaskId), 250);
+            } else if (notificationTaskId) {
+                history.replaceState({}, "", window.location.pathname);
+                if (!earlyNotificationTaskHandled) {
+                    setTimeout(() => focusSharedTaskFromNotification({ task_id: notificationTaskId, dashboard_task: earlyDashboardPush }), 250);
+                }
+            } else if (collaborationInviteId) {
+                history.replaceState({}, "", window.location.pathname);
+                setTimeout(() => promptCollaborationInviteNavigation(collaborationInviteId), 250);
+            } else if (shouldOpenNotifications) {
+                history.replaceState({}, "", window.location.pathname);
+                setTimeout(() => {
+                    renderNotifications();
+                    openModal(modalNotifications);
+                    markCurrentInvitesAsSeen();
+                }, 250);
+            }
+            lucide.createIcons();
+            if (restoredFromCache && appSessionLoader) appSessionLoader.classList.add("hidden");
+    } else {
+            // INITIAL_SESSION pode chegar vazio enquanto o armazenamento seguro
+            // da sessão ainda está sendo restaurado no PWA. Isso não é logout e
+            // nunca deve apagar o checklist que já existe no aparelho.
+            if (event !== "SIGNED_OUT") {
+                clearTimeout(pendingInitialSessionTimer);
+                pendingInitialSessionTimer = setTimeout(async () => {
+                    if (currentUser) return;
+                    // Tentativa explícita de recuperação de sessão antes de
+                    // mostrar o login. Em Android, a restauração do storage pode
+                    // demorar mais que o evento INITIAL_SESSION.
+                    try {
+                        const { data } = await supabaseClient.auth.getSession();
+                        if (data?.session) {
+                            // A sessão existe — dispara o fluxo normal de login.
+                            currentUser = data.session.user;
+                            localPrefs.setItem("checklist_last_user_id", currentUser.id);
+                            localPrefs.setItem("checklist_last_user_email", currentUser.email || "");
+                            if (hasPendingSyncData()) scheduleCloudSync("sessão-restaurada-no-android", 0);
+                            return;
+                        }
+                    } catch (_) { /* sem rede ou falha silenciosa */ }
+                    if (currentUser) return;
+                    // Limpa o estado interno do Supabase Client para evitar
+                    // race condition entre um refresh de token antigo e o novo
+                    // login que o usuário vai fazer. scope:'local' não faz
+                    // request de rede, apenas limpa a memória.
+                    try { await supabaseClient.auth.signOut({ scope: 'local' }); } catch (_) {}
+                    document.getElementById("auth-container").style.display = "flex";
+                    setAppContainerVisible(false);
+                }, 2500);
+                return;
+            }
+            clearTimeout(pendingInitialSessionTimer);
+            pendingInitialSessionTimer = null;
+            if (collaborationRealtimeChannel && supabaseClient) {
+                supabaseClient.removeChannel(collaborationRealtimeChannel);
+                collaborationRealtimeChannel = null;
+            }
+            clearTimeout(cassolDashboardRealtimePullTimer);
+            cassolDashboardRealtimePullTimer = null;
+            window.stopCassolDashboardRealtime?.();
+            if (currentUser) await removePushSubscription().catch(() => {});
+            currentUser = null;
+            currentUsername = "";
+            collaborationIdentityByEmail.clear();
+            learningCloudState = "idle";
+            reportsCloudState = "idle";
+            document.getElementById("auth-container").style.display = "flex";
+            setAppContainerVisible(false);
+            if (appSessionLoader) appSessionLoader.classList.add("hidden");
+            
+            // O cache só é apagado pelo botão Sair, que representa uma intenção
+            // explícita. Eventos automáticos de sessão nunca destroem tarefas.
+            document.documentElement.classList.remove("checklist-device-ready");
+            document.documentElement.classList.remove("checklist-ui-ready");
+            
+            tasks = [];
+            categories = [];
+            renderCategories();
+            renderChecklist();
+        }
+    });
+}
+
+let isSyncing = false;
+
+async function syncOfflineDataToCloud(reason = "manual", lockAcquired = false) {
+    if (!supabaseClient || !currentUser) {
+        refreshSyncStatusFromQueues();
+        return;
+    }
+    if (!navigator.onLine) {
+        refreshSyncStatusFromQueues();
+        return;
+    }
+    // Abrir o aplicativo não é uma alteração. Sem fila local, a leitura da
+    // nuvem feita por loadChecklistAndProgress é suficiente e não deve exibir
+    // um falso estado de sincronização nem reconstruir toda a lista.
+    if (!hasPendingSyncData()) {
+        refreshSyncStatusFromQueues();
+        return true;
+    }
+    if (!lockAcquired && navigator.locks?.request) {
+        const lockName = `checklist-cloud-sync-${currentUser.id}`;
+        return navigator.locks.request(lockName, { ifAvailable: true }, lock => {
+            if (!lock) {
+                scheduleCloudSync("aguardando-outra-aba", 900);
+                return;
+            }
+            return syncOfflineDataToCloud(reason, true);
+        });
+    }
+    if (isSyncing) {
+        cloudSyncRerunRequested = true;
+        return;
+    }
+    clearTimeout(cloudSyncTimer);
+    cloudSyncTimer = null;
+    isSyncing = true;
+    cloudSyncRerunRequested = false;
+    let syncSucceeded = false;
+    setSyncStatus("pending", "Salvo · sincronizando", "A alteração já está neste aparelho e está sendo confirmada na nuvem");
+
+    try {
+        console.log(`[Sync] Iniciando sincronização sequencial (${reason})...`);
+
+        let madeChanges = false;
+
+        // 1. Sincronizar novas categorias criadas offline
+        let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+        const pendingInsertCats = localCats.filter(c => isTemporaryId(c.id) && c.is_active !== false);
+        for (const pending of pendingInsertCats) {
+            madeChanges = true;
+            const realCat = await insertOwnedCategoryInCloud({ name: pending.name, type: pending.type });
+            const tempId = pending.id;
+            categories = categories.map(c => String(c.id) === String(tempId) ? realCat : c);
+            localCats = (JSON.parse(localStorage.getItem("offline_categories")) || [])
+                .map(c => String(c.id) === String(tempId) ? realCat : c);
+            localStorage.setItem("offline_categories", JSON.stringify(localCats));
+        }
+
+        // 1b. Sincronizar edições e ordem de categorias pelo mesmo coordenador.
+        // Antes essas alterações eram enviadas diretamente e podiam chegar ao
+        // servidor fora da ordem em que a pessoa as realizou.
+        const categoryUpdatesQueue = JSON.parse(localStorage.getItem("offline_category_updates_queue")) || {};
+        for (const [id, queuedUpdates] of Object.entries(categoryUpdatesQueue)) {
+            if (isTemporaryId(id)) continue;
+            madeChanges = true;
+            const { previous_name: previousName, ...categoryFields } = queuedUpdates;
+            let categoryResult = await supabaseClient.from("categories").update(categoryFields).eq("id", id);
+            if (categoryResult.error && Object.prototype.hasOwnProperty.call(categoryFields, "type") && /type|column/i.test(categoryResult.error.message || "")) {
+                const { type: _ignoredType, ...legacyFields } = categoryFields;
+                categoryResult = await supabaseClient.from("categories").update(legacyFields).eq("id", id);
+            }
+            if (categoryResult.error) throw categoryResult.error;
+
+            if (previousName && categoryFields.name && previousName !== categoryFields.name) {
+                const linkedUpdate = await supabaseClient.from("tasks")
+                    .update({ category: categoryFields.name })
+                    .eq("category_id", id);
+                if (linkedUpdate.error) throw linkedUpdate.error;
+                const legacyUpdate = await supabaseClient.from("tasks")
+                    .update({ category: categoryFields.name })
+                    .is("category_id", null)
+                    .eq("user_id", currentUser.id)
+                    .eq("category", previousName);
+                if (legacyUpdate.error) throw legacyUpdate.error;
+            }
+            clearQueuedEntryIfCurrent("offline_category_updates_queue", id, queuedUpdates);
+        }
+
+        // 2. Sincronizar novas tarefas criadas offline
+        let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+        const pendingInsertTasks = localTasks.filter(t => isTemporaryId(t.id) && t.is_active !== false);
+        for (const pending of pendingInsertTasks) {
+            madeChanges = true;
+            let pendingContext = typeof pending.context === "string" ? (() => { try { return JSON.parse(pending.context); } catch (_) { return {}; } })() : { ...(pending.context || {}) };
+            pendingContext.sync_token = pendingContext.sync_token || `task-${currentUser.id}-${pending.id}`;
+            if (JSON.stringify(pending.context || {}) !== JSON.stringify(pendingContext)) {
+                pending.context = pendingContext;
+                localTasks = (JSON.parse(localStorage.getItem("offline_tasks")) || [])
+                    .map(task => String(task.id) === String(pending.id) ? { ...task, context: pendingContext } : task);
+                localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+            }
+            const newTaskPayload = {
+                title: pending.title,
+                category: pending.category,
+                is_recurring: pending.is_recurring,
+                is_active: true,
+                created_at: pending.created_at || new Date().toISOString(),
+                context: pendingContext
+            };
+            if (pending.repeat_days) newTaskPayload.repeat_days = pending.repeat_days;
+            if (pending.assigned_to) newTaskPayload.assigned_to = pending.assigned_to;
+            if (pending.category_id) newTaskPayload.category_id = pending.category_id;
+            const matchingCategory = categories.find(cat => cat.name === pending.category && !isTemporaryId(cat.id));
+            // O cache pode apontar para uma categoria já excluída. O nome é a
+            // referência segura para reparar o vínculo antes do insert.
+            if (matchingCategory) newTaskPayload.category_id = matchingCategory.id;
+            else delete newTaskPayload.category_id;
+            newTaskPayload.user_id = currentUser.id;
+
+            // Recupera um insert cuja resposta possa ter se perdido. O token
+            // torna a criação idempotente sem depender do título da tarefa.
+            // Na primeira tentativa fazemos somente o INSERT. A consulta de
+            // recuperação é necessária apenas depois de uma tentativa cuja
+            // resposta possa ter se perdido, reduzindo a criação normal de
+            // duas viagens ao servidor para uma.
+            const shouldRecoverPreviousInsert = pendingContext.sync_insert_attempted === true;
+            if (!shouldRecoverPreviousInsert) {
+                pendingContext.sync_insert_attempted = true;
+                pending.context = pendingContext;
+                localTasks = (JSON.parse(localStorage.getItem("offline_tasks")) || [])
+                    .map(task => String(task.id) === String(pending.id) ? { ...task, context: pendingContext } : task);
+                localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+            }
+            let realTask = null;
+            if (shouldRecoverPreviousInsert) {
+                const recovered = await cloudRequestWithTimeout(supabaseClient.from("tasks")
+                    .select("*")
+                    .eq("user_id", currentUser.id)
+                    .contains("context", { sync_token: pendingContext.sync_token })
+                    .limit(1)
+                    .maybeSingle());
+                if (recovered.error) throw recovered.error;
+                realTask = recovered.data || null;
+            }
+            let createdNow = false;
+            if (!realTask) {
+                const { data, error } = await cloudRequestWithTimeout(insertTaskWithCategoryFallback(newTaskPayload));
+                if (error) throw error;
+                realTask = data?.[0] || null;
+                createdNow = Boolean(realTask);
+            }
+            if (realTask) {
+                const tempId = pending.id;
+                
+                tasks = tasks.map(t => String(t.id) === String(tempId) ? { ...t, id: realTask.id } : t);
+                allActiveTasks = allActiveTasks.map(t => String(t.id) === String(tempId) ? realTask : t);
+                localTasks = (JSON.parse(localStorage.getItem("offline_tasks")) || [])
+                    .map(t => String(t.id) === String(tempId) ? realTask : t);
+                localStorage.setItem("offline_tasks", JSON.stringify(localTasks));
+                document.querySelectorAll(".task-item[data-id]").forEach(taskElement => {
+                    if (String(taskElement.dataset.id) === String(tempId)) taskElement.dataset.id = realTask.id;
+                });
+                if (createdNow && isCollaborativeCategory(realTask.category_id)) await requestSharedTaskPush(realTask.id);
+                // Também reenvia criações recuperadas após uma queda de rede;
+                // a função é idempotente e não duplica o item no dashboard.
+                if (isCassolDashboardTask(realTask)) {
+                    queueCassolDashboardTaskSync(realTask.id, { operation: "upsert" });
+                }
+                
+                let compQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+                let updatedCompQueue = {};
+                Object.keys(compQueue).forEach(key => {
+                    const [tid, date] = key.split('_');
+                    if (String(tid) === String(tempId)) {
+                        updatedCompQueue[`${realTask.id}_${date}`] = compQueue[key];
+                    } else {
+                        updatedCompQueue[key] = compQueue[key];
+                    }
+                });
+                localStorage.setItem("offline_completions_queue", JSON.stringify(updatedCompQueue));
+            }
+        }
+
+        // 3. Enviar convites criados enquanto o aparelho estava offline.
+        let inviteQueue = JSON.parse(localStorage.getItem("offline_collaboration_invites_queue")) || [];
+        for (const pendingInvite of [...inviteQueue]) {
+            madeChanges = true;
+            const category = categories.find(cat =>
+                String(cat.id) === String(pendingInvite.category_id)
+                || cat.name === pendingInvite.category_name
+            );
+            if (!category || isTemporaryId(category.id)) continue;
+
+            let collaboratorEmail = pendingInvite.identifier;
+            if (!collaboratorEmail.includes("@")) {
+                const { data: resolvedEmail, error: resolveError } = await supabaseClient.rpc("resolve_collaboration_email", { identifier: collaboratorEmail });
+                if (resolveError) throw resolveError;
+                if (!resolvedEmail) {
+                    showAppNotice(`O convite para “${pendingInvite.identifier}” não foi enviado porque esse ID não foi encontrado.`, "error");
+                    inviteQueue = inviteQueue.filter(item => item !== pendingInvite);
+                    localStorage.setItem("offline_collaboration_invites_queue", JSON.stringify(inviteQueue));
+                    continue;
+                }
+                collaboratorEmail = resolvedEmail;
+            }
+
+            const { data: createdShares, error: inviteError } = await supabaseClient.from("category_shares").insert({
+                category_id: category.id,
+                owner_id: currentUser.id,
+                owner_email: currentUser.email,
+                collaborator_email: collaboratorEmail
+            }).select("id");
+            if (inviteError && !/duplicate|unique/i.test(inviteError.message || "")) throw inviteError;
+            const createdInvite = createdShares && createdShares[0];
+            if (createdInvite) {
+                const { error: pushError } = await supabaseClient.functions.invoke("send-task-push", { body: { invite_id: createdInvite.id } });
+                if (pushError) console.warn("Convite sincronizado, mas o push ficou indisponível:", pushError.message);
+            }
+            inviteQueue = inviteQueue.filter(item => item !== pendingInvite);
+            localStorage.setItem("offline_collaboration_invites_queue", JSON.stringify(inviteQueue));
+            showAppNotice(`Convite para ${pendingInvite.identifier} enviado após a conexão ser restaurada.`, "success");
+        }
+
+        // 4. Sincronizar conclusões (completions)
+        let queue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+        
+        // Otimização: Filtra chaves que já estão sendo processadas ativamente pelo commitTaskToggle
+        let queueKeys = Object.keys(queue).filter(key => {
+            const taskId = key.split('_')[0];
+            return !(typeof pendingToggles !== "undefined" && (pendingToggles.has(String(taskId)) || pendingToggles.has(Number(taskId))));
+        });
+
+        // Otimização: verifica a existência de todas as tarefas de uma vez
+        const uniqueTaskIds = [...new Set(queueKeys.map(k => k.split('_')[0]).filter(id => !isTemporaryId(id)))];
+        let existingTaskIds = new Set();
+        if (uniqueTaskIds.length > 0) {
+            const { data: existingTasks, error: checkTasksError } = await supabaseClient
+                .from("tasks")
+                .select("id")
+                .in("id", uniqueTaskIds);
+            if (checkTasksError) throw checkTasksError;
+            existingTaskIds = new Set((existingTasks || []).map(t => String(t.id)));
+        }
+
+        // Agrupa as conclusões por data e ação. Assim, vários checks no mesmo
+        // dia viram um único upsert/delete no Supabase.
+        const completionGroups = new Map();
+        for (const key of queueKeys) {
+            const [taskId, date] = key.split('_');
+            if (isTemporaryId(taskId)) continue;
+            
+            // Otimização: Se a alteração acabou de ser feita na tela e a requisição
+            // original do commitTaskToggle ainda está rodando, não duplicamos o envio.
+            if (typeof pendingToggles !== "undefined" && (pendingToggles.has(String(taskId)) || pendingToggles.has(Number(taskId)))) continue;
+
+            madeChanges = true;
+            const queuedValue = queue[key];
+
+            // Descarta conclusões órfãs deixadas no cache quando uma categoria
+            // e todas as suas tarefas foram removidas em cascata.
+            if (!existingTaskIds.has(String(taskId))) {
+                clearQueuedEntryIfCurrent("offline_completions_queue", key, queuedValue);
+                let cachedCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+                cachedCompletions = cachedCompletions.filter(item => String(item.task_id) !== String(taskId));
+                localStorage.setItem("offline_completions", JSON.stringify(cachedCompletions));
+                continue;
+            }
+
+            const action = queuedValue === "excluded" ? "excluded" : queuedValue ? "complete" : "remove";
+            const groupKey = `${date}::${action}`;
+            if (!completionGroups.has(groupKey)) completionGroups.set(groupKey, { date, action, entries: [] });
+            completionGroups.get(groupKey).entries.push({ key, taskId, queuedValue });
+        }
+
+        const completionSyncJobs = [...completionGroups.values()].map(async group => {
+            const taskIds = group.entries.map(entry => entry.taskId);
+            const query = group.action === "remove"
+                ? supabaseClient.from('completions').delete().eq('date', group.date).in('task_id', taskIds)
+                : supabaseClient.from('completions').upsert(
+                    group.entries.map(entry => ({ task_id: entry.taskId, date: group.date, completed: group.action === "complete" })),
+                    { onConflict: 'task_id,date' }
+                );
+            try {
+                const { error } = await query;
+                if (error) {
+                    // Não retire a alteração da fila quando o servidor a
+                    // recusou. Antes, esse caminho apenas registrava o erro e
+                    // apagava a fila logo abaixo; uma revalidação posterior
+                    // trazia o estado antigo de volta para a tela.
+                    throw new Error(`O Supabase recusou ${group.entries.length} conclusão(ões): ${error.message}`);
+                }
+            } catch (compEx) {
+                console.warn("[Sync] Falha ao sincronizar conclusões; a fila será mantida para nova tentativa:", compEx);
+                throw compEx;
+            }
+            group.entries.forEach(entry => {
+                clearQueuedEntryIfCurrent("offline_completions_queue", entry.key, entry.queuedValue);
+                const syncedTask = localTasks.find(task => String(task.id) === String(entry.taskId))
+                    || allActiveTasks.find(task => String(task.id) === String(entry.taskId));
+                if (isCassolDashboardTask(syncedTask) && group.action !== "excluded") {
+                    queueCassolDashboardTaskSync(entry.taskId, {
+                        operation: "completion",
+                        date: group.date,
+                        completed: group.action === "complete"
+                    });
+                }
+            });
+        });
+        await Promise.all(completionSyncJobs);
+
+        // 4. Sincronizar atualizações e exclusões de tarefas
+        let taskUpdatesQueue = JSON.parse(localStorage.getItem("offline_task_updates_queue")) || {};
+        let updateKeys = Object.keys(taskUpdatesQueue);
+        for (const id of updateKeys) {
+            madeChanges = true;
+            if (isTemporaryId(id)) continue;
+            const queuedUpdates = taskUpdatesQueue[id];
+            const dbUpdates = { ...queuedUpdates };
+            if (dbUpdates.category_id) {
+                const queuedTask = localTasks.find(task => String(task.id) === String(id));
+                const matchingCategory = queuedTask && categories.find(cat => cat.name === queuedTask.category && !isTemporaryId(cat.id));
+                if (matchingCategory) dbUpdates.category_id = matchingCategory.id;
+                else delete dbUpdates.category_id;
+            }
+            
+            try {
+                const { error } = await supabaseClient.from('tasks').update(dbUpdates).eq('id', id);
+                if (error) {
+                    // Uma resposta de erro não é confirmação. Mantemos a
+                    // edição pendente para ela não desaparecer ao recarregar.
+                    throw new Error(`O Supabase recusou a atualização da tarefa ${id}: ${error.message}`);
+                }
+            } catch (updateEx) {
+                console.warn(`[Sync] Falha ao atualizar tarefa ${id}; a fila será mantida para nova tentativa:`, updateEx);
+                throw updateEx;
+            }
+
+            clearQueuedEntryIfCurrent("offline_task_updates_queue", id, queuedUpdates);
+            const syncedTask = localTasks.find(task => String(task.id) === String(id));
+            if (isCassolDashboardTask(syncedTask)) {
+                queueCassolDashboardTaskSync(id, { operation: dbUpdates.is_active === false ? "delete" : "upsert" });
+            }
+        }
+
+        // A integração externa nunca bloqueia a confirmação do banco principal.
+        // A fila é idempotente e continuará tentando em segundo plano.
+        syncCassolDashboardTaskQueue().catch(error => {
+            console.warn("Integração com o Dashboard pendente:", error?.message || error);
+        });
+
+        if (madeChanges) {
+            // O cache otimista e o Realtime já contêm a versão confirmada.
+            // Recarregar categorias, tarefas, compartilhamentos e histórico
+            // após cada ação multiplicava o egress sem acrescentar dados.
+            console.log("[Sync] Alterações confirmadas; cache local mantido pelo Realtime.");
+        } else {
+            console.log("[Sync] Nenhuma alteração pendente de sincronização primária.");
+        }
+        
+        syncSucceeded = true;
+        cloudSyncRetryCount = 0;
+        cloudSyncLastError = "";
+        cloudSyncLastSuccessAt = Date.now();
+        
+    } catch (e) {
+        console.warn("[Sync] Falha durante a sincronização. Alterações pendentes mantidas no IndexedDB:", e);
+        if (navigator.onLine) {
+            const errorDetail = e && e.message ? e.message : "Falha desconhecida";
+            cloudSyncLastError = errorDetail;
+            if (/nova tentativa automática|confirmação está demorando/i.test(errorDetail)) {
+                setSyncStatus("pending", "Salvo", errorDetail);
+            } else {
+                setSyncStatus("error", "Erro ao sincronizar", `Não foi possível sincronizar: ${errorDetail}`);
+            }
+        } else {
+            refreshSyncStatusFromQueues();
+        }
+    } finally {
+        isSyncing = false;
+        if (syncSucceeded) {
+            refreshSyncStatusFromQueues();
+            if (cloudSyncRerunRequested && navigator.onLine) scheduleCloudSync("alterações-durante-sync", 180);
+        } else if (navigator.onLine) {
+            scheduleCloudSyncRetry();
+        }
+        // A foto usa uma fila própria. Assim a conclusão não espera o upload
+        // do arquivo e o status do Checklist é liberado imediatamente.
+        scheduleTrainingPhotoUpload("após-sincronização", 600);
+    }
+}
+
+// Functions for Manual Checklist & Notepad
+function loadManualNotes() {
+    if (textareaManualNotes) {
+        textareaManualNotes.value = localStorage.getItem("checklist_manual_notes") || "";
+    }
+}
+
+function loadManualChecklist() {
+    const items = JSON.parse(localStorage.getItem("checklist_manual_items")) || [];
+    renderManualChecklist(items);
+}
+
+function renderManualChecklist(items) {
+    if (!manualItemsList) return;
+    manualItemsList.innerHTML = "";
+
+    if (items.length === 0) {
+        manualItemsList.innerHTML = `
+            <div style="text-align: center; color: var(--text-muted); font-size: 0.8rem; padding: 20px 0;">
+                Nenhum item criado. Digite um item acima!
+            </div>
+        `;
+        return;
+    }
+
+    items.forEach(item => {
+        const itemEl = document.createElement("div");
+        itemEl.className = "manual-task-item";
+        if (item.completed) {
+            itemEl.classList.add("completed");
+        }
+
+        const checkboxWrapper = document.createElement("div");
+        checkboxWrapper.style.cssText = "display: flex; align-items: center; gap: 12px; flex: 1;";
+        
+        const customCheckbox = document.createElement("div");
+        customCheckbox.className = "task-checkbox";
+        if (item.completed) {
+            customCheckbox.innerHTML = '<i data-lucide="check" style="width: 12px; height: 12px; color: white;"></i>';
+        }
+
+        const textSpan = document.createElement("span");
+        textSpan.className = "task-text";
+        textSpan.textContent = item.text;
+
+        checkboxWrapper.appendChild(customCheckbox);
+        checkboxWrapper.appendChild(textSpan);
+        
+        itemEl.addEventListener("click", () => {
+            toggleManualItem(item.id);
+        });
+
+        const btnDelete = document.createElement("button");
+        btnDelete.className = "icon-button";
+        btnDelete.style.cssText = "padding: 6px; color: var(--text-muted); opacity: 0.7; z-index: 5;";
+        btnDelete.innerHTML = '<i data-lucide="trash-2" style="width: 14px; height: 14px;"></i>';
+        btnDelete.addEventListener("click", (e) => {
+            e.stopPropagation();
+            deleteManualItem(item.id);
+        });
+
+        itemEl.appendChild(checkboxWrapper);
+        itemEl.appendChild(btnDelete);
+        manualItemsList.appendChild(itemEl);
+    });
+
+    lucide.createIcons();
+}
+
+function addManualItem(text) {
+    const items = JSON.parse(localStorage.getItem("checklist_manual_items")) || [];
+    items.push({
+        id: Date.now(),
+        text: text,
+        completed: false
+    });
+    localStorage.setItem("checklist_manual_items", JSON.stringify(items));
+    renderManualChecklist(items);
+}
+
+function toggleManualItem(id) {
+    let items = JSON.parse(localStorage.getItem("checklist_manual_items")) || [];
+    items = items.map(item => {
+        if (item.id === id) {
+            return { ...item, completed: !item.completed };
+        }
+        return item;
+    });
+    localStorage.setItem("checklist_manual_items", JSON.stringify(items));
+    renderManualChecklist(items);
+}
+
+function deleteManualItem(id) {
+    let items = JSON.parse(localStorage.getItem("checklist_manual_items")) || [];
+    items = items.filter(item => item.id !== id);
+    localStorage.setItem("checklist_manual_items", JSON.stringify(items));
+    renderManualChecklist(items);
+}
+
+function clearCompletedManualItems() {
+    let items = JSON.parse(localStorage.getItem("checklist_manual_items")) || [];
+    items = items.filter(item => !item.completed);
+    localStorage.setItem("checklist_manual_items", JSON.stringify(items));
+    renderManualChecklist(items);
+}
+
+async function renderCalendarGrid() {
+    calendarDaysGrid.innerHTML = "";
+
+    const year = currentCalendarMonth.getFullYear();
+    const month = currentCalendarMonth.getMonth();
+
+    // Set month and year title
+    const monthNames = [
+        "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+        "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+    ];
+    calendarMonthYear.textContent = `${monthNames[month]} ${year}`;
+
+    // First day of the month
+    const firstDayIndex = new Date(year, month, 1).getDay();
+
+    // Last day of the current month
+    const lastDay = new Date(year, month + 1, 0).getDate();
+
+    // Last day of the previous month
+    const prevLastDay = new Date(year, month, 0).getDate();
+
+    // Days from previous month (to fill the start grid gap)
+    for (let i = firstDayIndex; i > 0; i--) {
+        const dayNum = prevLastDay - i + 1;
+        const btn = document.createElement("button");
+        btn.className = "calendar-day other-month";
+        btn.disabled = true;
+        btn.textContent = dayNum;
+        calendarDaysGrid.appendChild(btn);
+    }
+
+    // Days of the current month
+    const todayStr = getLocalDateString(new Date());
+    const calendarBody = calendarDaysGrid.closest(".calendar-body");
+    calendarBody?.querySelector(".calendar-streak-summary")?.remove();
+    for (let i = 1; i <= lastDay; i++) {
+        const btn = document.createElement("button");
+        btn.className = "calendar-day";
+        
+        // Format this date
+        const dayStr = String(i).padStart(2, '0');
+        const monthStr = String(month + 1).padStart(2, '0');
+        const dateStr = `${year}-${monthStr}-${dayStr}`;
+
+        // Highlights
+        if (dateStr === selectedDate) {
+            btn.classList.add("selected");
+        }
+        if (dateStr === todayStr) {
+            btn.classList.add("today");
+        }
+
+        const dayNumber = document.createElement("span");
+        dayNumber.className = "calendar-day-number";
+        dayNumber.textContent = i;
+        btn.appendChild(dayNumber);
+
+        const categoryTasks = (allActiveTasks || []).filter(task =>
+            task.is_active !== false
+            && (!isTrainingCategory(task.category) || isTrainingTaskOwnedByCurrentUser(task, true))
+            && getTaskRecurrenceMode(task) !== "daily"
+            && taskWasPlannedOnDate(task, new Date(`${dateStr}T12:00:00`), dateStr)
+        );
+        if (categoryTasks.length) {
+            btn.classList.add("has-category-tasks");
+            const markers = document.createElement("span");
+            markers.className = "calendar-task-markers";
+            const categoryGroups = [...categoryTasks.reduce((groups, task) => {
+                const key = normalizeCategoryName(task.category);
+                const group = groups.get(key) || { category: task.category, tasks: [] };
+                group.tasks.push(task);
+                groups.set(key, group);
+                return groups;
+            }, new Map()).values()];
+            const visibleCategories = categoryGroups.slice(0, 3);
+            visibleCategories.forEach(group => {
+                const marker = document.createElement("i");
+                const categoryStyle = getCategoryColorStyle(group.category);
+                marker.className = "calendar-task-marker";
+                marker.style.setProperty("--calendar-task-color", categoryStyle.color);
+                marker.title = `${group.category}: ${group.tasks.map(task => task.title).join(", ")}`;
+                marker.setAttribute("aria-label", `${group.category}, ${group.tasks.length} ${group.tasks.length === 1 ? "tarefa" : "tarefas"}`);
+                markers.appendChild(marker);
+            });
+            if (categoryGroups.length > visibleCategories.length) {
+                const remainder = document.createElement("small");
+                remainder.className = "calendar-task-more";
+                remainder.textContent = `+${categoryGroups.length - visibleCategories.length}`;
+                remainder.title = `${categoryGroups.length - visibleCategories.length} categorias adicionais`;
+                markers.appendChild(remainder);
+            }
+            btn.title = categoryTasks.map(task => `${task.title} (${task.category})`).join("\n");
+            btn.appendChild(markers);
+        }
+
+        btn.addEventListener("click", async () => {
+            selectedDate = dateStr;
+            updateDateDisplay();
+            await loadChecklistAndProgress();
+            closeModal(modalCalendar);
+            lucide.createIcons();
+        });
+
+        calendarDaysGrid.appendChild(btn);
+    }
+
+    // Fill remaining grid space (days of next month to make a nice grid)
+    const totalCells = firstDayIndex + lastDay;
+    const nextMonthCells = totalCells % 7 === 0 ? 0 : 7 - (totalCells % 7);
+    for (let i = 1; i <= nextMonthCells; i++) {
+        const btn = document.createElement("button");
+        btn.className = "calendar-day other-month";
+        btn.disabled = true;
+        btn.textContent = i;
+        calendarDaysGrid.appendChild(btn);
+    }
+}
+
+// Drag & Drop Category Reordering logic
+let draggedElement = null;
+let isDraggingTask = false; // Lock global: bloqueia re-renders durante drag de tarefa
+window.wasCategoryDragged = false; // Bloqueia clique indesejado após arrastar
+
+function setupDragAndDrop(chip, cat) {
+    let pressTimer = null;
+    let isDragging = false;
+
+    // Mouse dragging (HTML5 native)
+    chip.addEventListener("dragstart", (e) => {
+        draggedElement = chip;
+        chip.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "move";
+    });
+
+    chip.addEventListener("dragover", (e) => {
+        if (!draggedElement) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        
+        const rect = chip.getBoundingClientRect();
+        const midpoint = rect.left + rect.width / 2;
+        
+        if (e.clientX < midpoint) {
+            chip.parentNode.insertBefore(draggedElement, chip);
+        } else {
+            chip.parentNode.insertBefore(draggedElement, chip.nextSibling);
+        }
+    });
+
+    chip.addEventListener("dragend", () => {
+        chip.classList.remove("dragging");
+        draggedElement = null;
+        saveCategoryOrder();
+    });
+
+    // Touch support para mobile - long-press de 350ms para iniciar drag
+    let touchStartX = 0;
+    let touchStartY = 0;
+
+    chip.addEventListener("touchstart", (e) => {
+        const touch = e.touches[0];
+        touchStartX = touch.clientX;
+        touchStartY = touch.clientY;
+
+        pressTimer = setTimeout(() => {
+            isDragging = true;
+            draggedElement = chip;
+            chip.classList.add("dragging");
+            if (navigator.vibrate) navigator.vibrate(20);
+
+            // Agora que o drag começou, escuta movimentos na window toda
+            window.addEventListener("touchmove", onWindowTouchMove, { passive: false });
+            window.addEventListener("touchend", onWindowTouchEnd, { passive: true });
+            window.addEventListener("touchcancel", onWindowTouchEnd, { passive: true });
+        }, 500);
+    }, { passive: true });
+
+    chip.addEventListener("touchmove", (e) => {
+        if (isDragging) return; // Já está gerenciado pelo listener da window
+        
+        // Cancela o timer apenas se o dedo se mover mais de 18px (distância euclidiana)
+        // 8px era muito sensível — o iOS deriva naturalmente ao segurar quieto
+        const touch = e.touches[0];
+        const dx = touch.clientX - touchStartX;
+        const dy = touch.clientY - touchStartY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 18) {
+            cancelPress();
+        }
+    }, { passive: true });
+
+    // Cancela o timer num tap rápido (sem iniciar drag)
+    // Se o drag já começou (isDragging=true), não faz nada — onWindowTouchEnd cuida disso
+    chip.addEventListener("touchend", () => {
+        if (!isDragging) cancelPress();
+    });
+    chip.addEventListener("touchcancel", () => {
+        if (!isDragging) cancelPress();
+    });
+
+    function onWindowTouchMove(e) {
+        if (!isDragging || !draggedElement) return;
+        e.preventDefault();
+
+        const touch = e.touches[0];
+        
+        // Esconde temporariamente o chip arrastado para achar o elemento por baixo
+        draggedElement.style.pointerEvents = 'none';
+        const elementUnderTouch = document.elementFromPoint(touch.clientX, touch.clientY);
+        draggedElement.style.pointerEvents = '';
+
+        if (!elementUnderTouch) return;
+
+        const targetChip = elementUnderTouch.closest(".category-chip");
+        if (targetChip && targetChip !== draggedElement && targetChip.dataset.category !== "all") {
+            const rect = targetChip.getBoundingClientRect();
+            const midpoint = rect.left + rect.width / 2;
+            
+            if (touch.clientX < midpoint) {
+                targetChip.parentNode.insertBefore(draggedElement, targetChip);
+            } else {
+                targetChip.parentNode.insertBefore(draggedElement, targetChip.nextSibling);
+            }
+        }
+    }
+
+    function onWindowTouchEnd() {
+        window.removeEventListener("touchmove", onWindowTouchMove);
+        window.removeEventListener("touchend", onWindowTouchEnd);
+        window.removeEventListener("touchcancel", onWindowTouchEnd);
+
+        // Cancela timer se ainda não disparou
+        cancelPress();
+
+        if (isDragging && draggedElement) {
+            draggedElement.classList.remove("dragging");
+            // Remove foco/borda residual do iOS
+            if (draggedElement.blur) draggedElement.blur();
+            draggedElement = null;
+            saveCategoryOrder();
+            
+            // Bloqueia clique indesejado logo após arrastar
+            window.wasCategoryDragged = true;
+            setTimeout(() => {
+                window.wasCategoryDragged = false;
+            }, 200);
+        }
+        isDragging = false;
+    }
+
+    const cancelPress = () => {
+        if (pressTimer) {
+            clearTimeout(pressTimer);
+            pressTimer = null;
+        }
+    };
+}
+
+async function saveCategoryOrder() {
+    beginOptimisticMutation();
+    const bar = document.getElementById("categories-bar");
+    const chips = Array.from(bar.querySelectorAll(".category-chip"));
+    
+    // Extract names in order
+    const orderedNames = chips
+        .map(c => c.dataset.category)
+        .filter(name => name !== "all");
+
+    // Reorder state array
+    const reorderedCategories = [];
+    orderedNames.forEach(name => {
+        const cat = categories.find(c => c.name === name);
+        if (cat) {
+            reorderedCategories.push(cat);
+        }
+    });
+
+    categories.forEach(cat => {
+        if (!reorderedCategories.some(c => c.id === cat.id)) {
+            reorderedCategories.push(cat);
+        }
+    });
+
+    categories = reorderedCategories;
+
+    // Save offline
+    let localCats = JSON.parse(localStorage.getItem("offline_categories")) || [];
+    const orderedLocalCats = [];
+    categories.forEach(cat => {
+        const localCat = localCats.find(c => String(c.id) === String(cat.id));
+        if (localCat) orderedLocalCats.push(localCat);
+    });
+    localCats.forEach(localCat => {
+        if (!orderedLocalCats.some(c => String(c.id) === String(localCat.id))) {
+            orderedLocalCats.push(localCat);
+        }
+    });
+    localStorage.setItem("offline_categories", JSON.stringify(orderedLocalCats));
+
+    categories.forEach((cat, index) => enqueueCategoryCloudUpdate(cat.id, { sort_order: index }, "reordenar-categorias"));
+}
+
+// Swipe to Reveal actions (WhatsApp iOS style gesture handler)
+function setupSwipeToReveal(taskEl) {
+    const foreground = taskEl.querySelector(".task-item-foreground");
+    if (!foreground) return;
+
+    let startX = 0;
+    let startY = 0;
+    let currentX = 0;
+    let currentY = 0;
+    let isDragging = false;
+    let isSwipeConfirmed = false;
+    let isScrollConfirmed = false;
+    const maxSwipe = 136; // Width of revealed action buttons (rename + delete) + offsets
+
+    function setTranslate(x, animate = false) {
+        if (animate) {
+            foreground.style.transition = "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)";
+        } else {
+            foreground.style.transition = "none";
+        }
+        foreground.style.transform = `translateX(${x}px)`;
+    }
+
+    function closeAllOtherSwipes() {
+        document.querySelectorAll(".task-item").forEach(item => {
+            if (item !== taskEl && item.classList.contains("swiped")) {
+                item.classList.remove("swiped");
+                const fg = item.querySelector(".task-item-foreground");
+                if (fg) {
+                    fg.style.transition = "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)";
+                    fg.style.transform = "translateX(0px)";
+                }
+            }
+        });
+    }
+
+    // Touch events (Mobile)
+    foreground.addEventListener("touchstart", (e) => {
+        if (isEditMode) return;
+        isSwipeRevealInteracting = true;
+        closeAllOtherSwipes();
+        startX = e.touches[0].clientX;
+        startY = e.touches[0].clientY;
+        isDragging = true;
+        isSwipeConfirmed = false;
+        isScrollConfirmed = false;
+        if (taskEl.classList.contains("swiped")) {
+            startX += maxSwipe;
+        }
+    }, { passive: true });
+
+    foreground.addEventListener("touchmove", (e) => {
+        if (!isDragging) return;
+        currentX = e.touches[0].clientX;
+        currentY = e.touches[0].clientY;
+        let diffX = currentX - startX;
+        let diffY = currentY - startY;
+
+        // Detectar se o usuário quer rolar verticalmente a página
+        if (!isSwipeConfirmed && !isScrollConfirmed) {
+            if (Math.abs(diffY) > Math.abs(diffX) && Math.abs(diffY) > 8) {
+                isScrollConfirmed = true;
+                isDragging = false; // Cancela o gesto de deslizar, liberando a rolagem vertical
+                return;
+            } else if (Math.abs(diffX) > 8) {
+                isSwipeConfirmed = true;
+            }
+        }
+
+        // Se a rolagem foi confirmada ou o deslize lateral ainda não atingiu o limite de confirmação, não traduz o elemento
+        if (isScrollConfirmed || !isSwipeConfirmed) return;
+
+        // Swiping only to the left
+        if (diffX > 0) diffX = 0;
+        if (diffX < -maxSwipe - 20) {
+            // Elastic resistance effect
+            diffX = -maxSwipe - 20 + (diffX + maxSwipe + 20) * 0.25;
+        }
+
+        setTranslate(diffX, false);
+    }, { passive: true });
+
+    foreground.addEventListener("touchend", () => {
+        if (!isDragging) {
+            isSwipeRevealInteracting = false;
+            return;
+        }
+        isDragging = false;
+        isSwipeRevealInteracting = false;
+        
+        if (isScrollConfirmed) return;
+        
+        // Extract matrix value
+        const style = window.getComputedStyle(foreground);
+        const matrix = new WebKitCSSMatrix(style.transform);
+        const currentTransform = matrix.m41;
+
+        if (currentTransform < -maxSwipe / 2) {
+            setTranslate(-maxSwipe, true);
+            taskEl.classList.add("swiped");
+        } else {
+            setTranslate(0, true);
+            taskEl.classList.remove("swiped");
+        }
+    });
+
+    // Mouse events (Desktop testing support)
+    foreground.addEventListener("mousedown", (e) => {
+        if (isEditMode) return;
+        isSwipeRevealInteracting = true;
+        closeAllOtherSwipes();
+        startX = e.clientX;
+        isDragging = true;
+        if (taskEl.classList.contains("swiped")) {
+            startX += maxSwipe;
+        }
+        document.body.style.userSelect = "none";
+    });
+
+    window.addEventListener("mousemove", (e) => {
+        if (!isDragging) return;
+        currentX = e.clientX;
+        let diffX = currentX - startX;
+
+        if (diffX > 0) diffX = 0;
+        if (diffX < -maxSwipe - 20) {
+            diffX = -maxSwipe - 20 + (diffX + maxSwipe + 20) * 0.25;
+        }
+
+        setTranslate(diffX, false);
+    });
+
+    window.addEventListener("mouseup", () => {
+        if (!isDragging) return;
+        isDragging = false;
+        isSwipeRevealInteracting = false;
+        document.body.style.userSelect = "";
+
+        const style = window.getComputedStyle(foreground);
+        const matrix = new WebKitCSSMatrix(style.transform);
+        const currentTransform = matrix.m41;
+
+        if (currentTransform < -maxSwipe / 2) {
+            setTranslate(-maxSwipe, true);
+            taskEl.classList.add("swiped");
+        } else {
+            setTranslate(0, true);
+            taskEl.classList.remove("swiped");
+        }
+    });
+
+    foreground.addEventListener("touchcancel", () => {
+        isDragging = false;
+        isSwipeRevealInteracting = false;
+    }, { passive: true });
+}
+
+// ----------------------------------------------------
+// Task Context Engine (Semantic Analysis)
+// ----------------------------------------------------
+function analyzeTaskContext(title, category, existingTasks = []) {
+    if (!title) return null;
+    
+    const lowerTitle = title.toLowerCase().trim();
+    const cleanCategory = (category || "").toLowerCase().trim();
+    
+    // Normalization helper
+    const removeAccents = str => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const normalizedTitle = removeAccents(lowerTitle);
+    
+    let activityType = null;
+    let semanticCategory = null;
+    let confidence = 0;
+    
+    const entities = {
+        people: [],
+        clients: [],
+        projects: []
+    };
+
+    // 1. Identify Activity Type and Semantic Category based on patterns and category context
+    const rules = [
+        // Marketing
+        {
+            type: "marketing",
+            category: "marketing_divulgacao",
+            match: /(public|stori|post|feed|insta|whats|rede.*social|divulg|anunci|campanh)/i,
+            weight: 0.6
+        },
+        // Estudo
+        {
+            type: "estudo",
+            category: "educacao_desenvolvimento",
+            match: /(estud|ler|revis|aula|videoaula|livro|capitul|artig)/i,
+            weight: 0.6
+        },
+        // Trabalho Acadêmico
+        {
+            type: "trabalho_academico",
+            category: "educacao_desenvolvimento",
+            match: /(entreg.*trabalh|fazer.*tcc|tcc|apresent|seminari|prova|trabalh)/i,
+            weight: 0.7
+        },
+        // Entrega
+        {
+            type: "entrega",
+            category: "logistica_operacoes",
+            match: /(entreg|envi|despach|motoboy|delivery)/i,
+            weight: 0.6
+        },
+        // Atendimento
+        {
+            type: "atendimento",
+            category: "atendimento_suporte",
+            match: /(atend|respond|ligar|mensag|falar|whats.*com|telefon|cham)/i,
+            weight: 0.6
+        },
+        // Financeiro
+        {
+            type: "financeiro",
+            category: "financeiro_adm",
+            match: /(pagar|cobrar|orcament|financeir|transfer|pix|bolet|nota.*fiscal|nf|caix|vend)/i,
+            weight: 0.6
+        },
+        // Compras
+        {
+            type: "compras",
+            category: "suprimentos",
+            match: /(compr|adquir|supermercad|mercado)/i,
+            weight: 0.6
+        },
+        // Limpeza/Organização
+        {
+            type: "limpeza",
+            category: "manutencao_casa",
+            match: /(limp|organiz|arrum|lavar|passar|faxin)/i,
+            weight: 0.6
+        },
+        // Reunião
+        {
+            type: "reuniao",
+            category: "reunioes_comunicacao",
+            match: /(reuniao|meeting|call|encontr|alinhament|brainstorm)/i,
+            weight: 0.7
+        },
+        // Compromisso Pessoal / Treino / Saúde
+        {
+            type: "compromisso_pessoal",
+            category: "pessoal_social",
+            match: /(present|aniversari|namora|mae|pai|filh|amig|medic|consult|academi|trein|musculac|gym|exercic)/i,
+            weight: 0.6
+        },
+        // Administrativo
+        {
+            type: "administrativo",
+            category: "financeiro_adm",
+            match: /(agend|cadastr|planilh|document|contrat)/i,
+            weight: 0.6
+        },
+        // Produção
+        {
+            type: "producao",
+            category: "producao_operacoes",
+            match: /(prepar|mont|fabric|produz|embal|etiquet)/i,
+            weight: 0.6
+        }
+    ];
+
+    let maxWeight = 0;
+    let matchedRule = null;
+    for (const rule of rules) {
+        if (rule.match.test(normalizedTitle)) {
+            let weight = rule.weight;
+            
+            // Adjust based on category context
+            if (rule.type === "entrega" && cleanCategory.includes("tio nan")) {
+                weight += 0.2;
+            }
+            if (rule.type === "trabalho_academico" && (cleanCategory.includes("faculdade") || cleanCategory.includes("pucrs"))) {
+                weight += 0.25;
+            }
+            if (rule.type === "estudo" && (cleanCategory.includes("faculdade") || cleanCategory.includes("pucrs"))) {
+                weight += 0.2;
+            }
+            if (rule.type === "compromisso_pessoal" && cleanCategory.includes("pessoal")) {
+                weight += 0.25;
+            }
+            if (rule.type === "marketing" && cleanCategory.includes("tio nan")) {
+                weight += 0.25;
+            }
+
+            if (weight > maxWeight) {
+                maxWeight = weight;
+                matchedRule = rule;
+            }
+        }
+    }
+
+    if (matchedRule) {
+        activityType = matchedRule.type;
+        semanticCategory = matchedRule.category;
+        confidence = Math.min(maxWeight, 1.0);
+    }
+
+    // Context resolution fallback or refinement by category if no regex matches perfectly but category is strongly suggestive
+    if (!matchedRule) {
+        if (cleanCategory.includes("tio nan")) {
+            if (normalizedTitle.includes("entregar")) {
+                activityType = "entrega";
+                semanticCategory = "logistica_operacoes";
+                confidence = 0.55;
+            }
+        } else if (cleanCategory.includes("pucrs") || cleanCategory.includes("faculdade")) {
+            if (normalizedTitle.includes("entregar")) {
+                activityType = "trabalho_academico";
+                semanticCategory = "educacao_desenvolvimento";
+                confidence = 0.65;
+            }
+        } else if (cleanCategory.includes("pessoal")) {
+            if (normalizedTitle.includes("entregar")) {
+                activityType = "compromisso_pessoal";
+                semanticCategory = "pessoal_social";
+                confidence = 0.55;
+            }
+        }
+    }
+
+    // 2. Entity Extraction (People, Clients, Projects)
+    const words = title.split(/\s+/);
+    const ignoreStartWords = new Set([
+        "Entregar", "Enviar", "Despachar", "Publicar", "Estudar", "Ler", "Revisar", 
+        "Assistir", "Fazer", "Apresentar", "Atender", "Responder", "Ligar", "Falar", 
+        "Pagar", "Cobrar", "Comprar", "Limpar", "Organizar", "Arrumar", "Lavar", 
+        "Passar", "Agendar", "Cadastrar", "Atualizar", "Alimentar", "Preparar", 
+        "Montar", "Fabricar", "Produzir", "Embalar", "Etiquetar", "O", "A", "Os", 
+        "As", "Um", "Uma", "Estes", "Esta", "E", "De", "Para", "Com", "Em", "No", "Na"
+    ]);
+
+    words.forEach((word, idx) => {
+        const cleanWord = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g, "");
+        if (!cleanWord) return;
+        
+        if (cleanWord[0] === cleanWord[0].toUpperCase() && cleanWord[0] !== cleanWord[0].toLowerCase()) {
+            if (idx === 0 && ignoreStartWords.has(cleanWord)) {
+                return;
+            }
+            if (ignoreStartWords.has(cleanWord)) {
+                return;
+            }
+
+            if (cleanWord === cleanWord.toUpperCase() && cleanWord.length > 2 && isNaN(cleanWord)) {
+                entities.projects.push(cleanWord);
+            } else {
+                entities.people.push(cleanWord);
+            }
+        }
+    });
+
+    if (cleanCategory.includes("tio nan") || cleanCategory.includes("trabalho") || cleanCategory.includes("cassol")) {
+        entities.clients = [...entities.people];
+    }
+
+    // 3. Similar Tasks Context Matching
+    if (existingTasks && existingTasks.length > 0) {
+        let bestMatch = null;
+        let bestSim = 0;
+        
+        const getWords = str => new Set(removeAccents(str.toLowerCase()).split(/\W+/).filter(w => w.length > 2));
+        const currentWords = getWords(title);
+        
+        for (const t of existingTasks) {
+            if (t.id === title) continue;
+            if (!t.context || !t.context.activity_type) continue;
+            
+            const otherWords = getWords(t.title);
+            let intersection = 0;
+            for (const w of currentWords) {
+                if (otherWords.has(w)) intersection++;
+            }
+            const union = currentWords.size + otherWords.size - intersection;
+            const sim = union > 0 ? intersection / union : 0;
+            
+            if (sim > bestSim) {
+                bestSim = sim;
+                bestMatch = t;
+            }
+        }
+        
+        if (bestSim > 0.4 && bestMatch) {
+            if (!activityType) {
+                activityType = bestMatch.context.activity_type;
+                semanticCategory = bestMatch.context.semantic_category;
+                confidence = Math.max(0.4, bestSim * bestMatch.context.confidence);
+            } else if (activityType === bestMatch.context.activity_type) {
+                confidence = Math.min(1.0, confidence + 0.1);
+            }
+        }
+    }
+
+    const finalActivityType = confidence >= 0.4 ? activityType : null;
+    const finalSemanticCategory = confidence >= 0.4 ? semanticCategory : null;
+
+    return {
+        activity_type: finalActivityType,
+        semantic_category: finalSemanticCategory,
+        entities: entities,
+        confidence: Number(confidence.toFixed(2)),
+        analyzed_at: new Date().toISOString()
+    };
+}
+
+function classifyWordContext(word, associations) {
+    const w = word.toLowerCase();
+    
+    // 1. Check user associations first (takes priority)
+    if (associations && associations[w]) {
+        return associations[w];
+    }
+    
+    // 2. Classify by radicals
+    if (w.match(/estud|faculd|aula|curs|prov|leit|livr|unisinos|pucrs|escola|faculdade/)) return "Estudos/Aprendizado";
+    if (w.match(/trabalh|reunia|meet|post|client|entreg|relator|venda|comercial/)) return "Trabalho/Profissional";
+    if (w.match(/trein|academ|exercic|corr|saud|medic|gym|futebol|correr/)) return "Saúde/Bem-estar";
+    if (w.match(/pag|receb|financ|dinheir|compr|limp|organiz|mercado|casa/)) return "Rotina/Organização";
+    
+    return null;
+}
+
+function getSmartReportPeriods(days, referenceDate = new Date()) {
+    const atNoon = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0, 0);
+    const addDays = (date, amount) => {
+        const result = atNoon(date);
+        result.setDate(result.getDate() + amount);
+        return result;
+    };
+
+    const now = atNoon(referenceDate);
+    let currentStart;
+    let currentEnd;
+    let previousStart;
+    let previousEnd;
+
+    if (days === 7) {
+        // O ciclo semanal fecha na sexta-feira e fica disponível no sábado/domingo.
+        const daysSinceFriday = (now.getDay() + 2) % 7;
+        currentEnd = addDays(now, -daysSinceFriday);
+        currentStart = addDays(currentEnd, -6);
+        previousEnd = addDays(currentStart, -1);
+        previousStart = addDays(previousEnd, -6);
+    } else if (days === 30) {
+        // Mês civil anterior e o mês imediatamente anterior a ele.
+        currentStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 12);
+        currentEnd = new Date(now.getFullYear(), now.getMonth(), 0, 12);
+        previousStart = new Date(now.getFullYear(), now.getMonth() - 2, 1, 12);
+        previousEnd = new Date(now.getFullYear(), now.getMonth() - 1, 0, 12);
+    } else {
+        // Ano civil anterior e o ano imediatamente anterior a ele.
+        currentStart = new Date(now.getFullYear() - 1, 0, 1, 12);
+        currentEnd = new Date(now.getFullYear() - 1, 11, 31, 12);
+        previousStart = new Date(now.getFullYear() - 2, 0, 1, 12);
+        previousEnd = new Date(now.getFullYear() - 2, 11, 31, 12);
+    }
+
+    return {
+        currentStart,
+        currentEnd,
+        previousStart,
+        previousEnd,
+        currentStartStr: getLocalDateString(currentStart),
+        currentEndStr: getLocalDateString(currentEnd),
+        previousStartStr: getLocalDateString(previousStart),
+        previousEndStr: getLocalDateString(previousEnd)
+    };
+}
+
+function getSmartReportPreviewPeriods(days, referenceDate = new Date()) {
+    const atNoon = date => new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0, 0);
+    const addDays = (date, amount) => {
+        const result = atNoon(date);
+        result.setDate(result.getDate() + amount);
+        return result;
+    };
+    const now = atNoon(referenceDate);
+    let currentStart;
+
+    if (days === 7) {
+        const daysSinceSaturday = (now.getDay() + 1) % 7;
+        currentStart = addDays(now, -daysSinceSaturday);
+    } else if (days === 30) {
+        currentStart = new Date(now.getFullYear(), now.getMonth(), 1, 12);
+    } else {
+        currentStart = new Date(now.getFullYear(), 0, 1, 12);
+    }
+
+    const currentEnd = now;
+    const elapsedDays = Math.round((currentEnd - currentStart) / 86400000) + 1;
+    const previousEnd = addDays(currentStart, -1);
+    const previousStart = addDays(previousEnd, -(elapsedDays - 1));
+
+    return {
+        currentStart,
+        currentEnd,
+        previousStart,
+        previousEnd,
+        currentStartStr: getLocalDateString(currentStart),
+        currentEndStr: getLocalDateString(currentEnd),
+        previousStartStr: getLocalDateString(previousStart),
+        previousEndStr: getLocalDateString(previousEnd)
+    };
+}
+
+function taskWasPlannedOnDate(task, dateObj, dateStr) {
+    if (!task || task.is_active === false) return false;
+    const createdDate = task.created_at ? extractDateFromTimestamp(task.created_at) : null;
+    if (createdDate && createdDate > dateStr) return false;
+
+    if (!task.is_recurring) {
+        return createdDate === dateStr;
+    }
+
+    return recurringTaskOccursOnDate(task, dateStr);
+}
+
+function buildPlannedOccurrences(tasksList, startDate, endDate) {
+    const occurrences = [];
+    const cursor = new Date(startDate);
+    cursor.setHours(12, 0, 0, 0);
+
+    while (cursor <= endDate) {
+        const dateStr = getLocalDateString(cursor);
+        tasksList.forEach(task => {
+            if (taskWasPlannedOnDate(task, cursor, dateStr)) {
+                occurrences.push({ task, date: dateStr, key: `${task.id}_${dateStr}` });
+            }
+        });
+        cursor.setDate(cursor.getDate() + 1);
+    }
+
+    return occurrences;
+}
+
+function classifyTaskContext(title, categoryName, associations) {
+    // 1. Get category type from the registered category object (highest priority)
+    const catObj = categories.find(c => c.name === categoryName);
+    if (catObj && catObj.type) {
+        return normalizeCategoryType(catObj.type);
+    }
+    
+    // 2. Check user term associations for categoryName
+    if (categoryName) {
+        const catClass = classifyWordContext(categoryName, associations);
+        if (catClass) return catClass;
+    }
+    
+    // 3. Check words in task title
+    const words = title.split(/\s+/);
+    for (const word of words) {
+        const cleaned = word.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+        if (cleaned.length > 3) {
+            let wordClass = classifyWordContext(cleaned, associations);
+            if (wordClass) return wordClass;
+        }
+    }
+    
+    return "Pessoal/Outros";
+}
+
+function normalizeCategoryType(type) {
+    const t = type.toLowerCase();
+    if (t.match(/estud|faculd|aula|curs|prov|leit|livr|unisinos|pucrs|escola|faculdade/)) return "Estudos/Aprendizado";
+    if (t.match(/trabalh|reunia|meet|post|client|entreg|relator|venda|comercial|empresa/)) return "Trabalho/Profissional";
+    if (t.match(/trein|academ|exercic|corr|saud|medic|gym|futebol|correr/)) return "Saúde/Bem-estar";
+    if (t.match(/pag|receb|financ|dinheir|compr|limp|organiz|mercado|casa/)) return "Rotina/Organização";
+    return type; // Retorna tipo customizado
+}
+
+function normalizeReportText(value) {
+    return String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+}
+
+function matchesReportFunction(text, patterns) {
+    return patterns.some(pattern => pattern.test(text));
+}
+
+const REPORT_FUNCTION_CATALOG = {
+    delivery: { singular: "Entrega", plural: "Entregas" },
+    billing: { singular: "Cobrança e financeiro", plural: "Cobranças e financeiro" },
+    production: { singular: "Produção e operação", plural: "Produção e operação" },
+    marketing: { singular: "Divulgação", plural: "Ações de divulgação" },
+    sales: { singular: "Venda e comercial", plural: "Vendas e ações comerciais" },
+    service: { singular: "Atendimento", plural: "Atendimentos" },
+    supply: { singular: "Compra e abastecimento", plural: "Compras e abastecimento" },
+    assessment: { singular: "Avaliação", plural: "Avaliações" },
+    academic_work: { singular: "Trabalho acadêmico", plural: "Trabalhos acadêmicos" },
+    study: { singular: "Estudo e revisão", plural: "Estudos e revisões" },
+    exercise: { singular: "Atividade física", plural: "Atividades físicas" },
+    self_care: { singular: "Saúde e autocuidado", plural: "Saúde e autocuidado" },
+    home: { singular: "Casa e organização", plural: "Casa e organização" },
+    personal_learning: { singular: "Aprendizado", plural: "Aprendizados" },
+    planning: { singular: "Rotina e planejamento", plural: "Rotina e planejamento" },
+    other: { singular: "Outra atividade", plural: "Outras atividades" }
+};
+
+function saveLearnedFunctionAssociation(term, functionId) {
+    if (!REPORT_FUNCTION_CATALOG[functionId]) return false;
+    const normalizedTerm = normalizeReportText(term).trim();
+    if (!normalizedTerm) return false;
+    const learned = JSON.parse(localStorage.getItem("user_function_associations")) || {};
+    learned[normalizedTerm] = functionId;
+    localStorage.setItem("user_function_associations", JSON.stringify(learned));
+    syncFunctionAssociationsToCloud(learned);
+    return true;
+}
+
+async function loadFunctionAssociationsFromCloud() {
+    if (!supabaseClient || !currentUser || learningCloudState !== "idle") return;
+    learningCloudState = "loading";
+    try {
+        const { data, error } = await supabaseClient
+            .from("user_preferences")
+            .select("function_associations")
+            .eq("user_id", currentUser.id)
+            .maybeSingle();
+        if (error) throw error;
+        const local = JSON.parse(localStorage.getItem("user_function_associations")) || {};
+        const cloud = data?.function_associations || {};
+        const merged = { ...cloud, ...local };
+        localStorage.setItem("user_function_associations", JSON.stringify(merged));
+        learningCloudState = "ready";
+        if (Object.keys(local).length > 0) syncFunctionAssociationsToCloud(merged);
+    } catch (error) {
+        learningCloudState = "unavailable";
+        console.warn("Sincronização de aprendizados indisponível; usando armazenamento local.", error.message);
+    }
+}
+
+async function syncFunctionAssociationsToCloud(associations) {
+    if (!supabaseClient || !currentUser || learningCloudState === "unavailable") return;
+    try {
+        const { error } = await supabaseClient.from("user_preferences").upsert({
+            user_id: currentUser.id,
+            function_associations: associations,
+            updated_at: new Date().toISOString()
+        }, { onConflict: "user_id" });
+        if (error) throw error;
+        learningCloudState = "ready";
+    } catch (error) {
+        learningCloudState = "unavailable";
+        console.warn("Não foi possível enviar os aprendizados para a nuvem.", error.message);
+    }
+}
+
+function getLearnedTaskFunction(normalizedTitle) {
+    const learned = JSON.parse(localStorage.getItem("user_function_associations")) || {};
+    const learnedTerms = Object.keys(learned).sort((a, b) => b.length - a.length);
+    for (const term of learnedTerms) {
+        const normalizedTerm = normalizeReportText(term);
+        if (!normalizedTerm || !normalizedTitle.includes(normalizedTerm)) continue;
+        const functionInfo = REPORT_FUNCTION_CATALOG[learned[term]];
+        if (functionInfo) return functionInfo;
+    }
+    return null;
+}
+
+function classifyTaskFunction(task) {
+    const title = normalizeReportText(task.title);
+    const learnedFunction = getLearnedTaskFunction(title);
+    if (learnedFunction) return learnedFunction;
+    const category = categories.find(cat => cat.name === task.category);
+    const rawCategoryType = category?.type || "";
+    const categoryType = normalizeReportText(normalizeCategoryType(rawCategoryType));
+    const isStudy = /estud|aprend|faculd|escola|curso/.test(categoryType);
+    const isHealth = /saud|bem-estar|academ|esport/.test(categoryType);
+    const isWork = /trabalh|profission|empresa|comercial|projeto/.test(categoryType);
+    const isPersonal = /pessoal|rotina|organiz|casa|financ|lazer/.test(categoryType);
+
+    if (isStudy) {
+        if (matchesReportFunction(title, [/\bprova\b/, /\bteste\b/, /avaliacao/, /simulado/, /\bg[12]\b/])) return { singular: "Avaliação", plural: "Avaliações" };
+        if (matchesReportFunction(title, [/trabalho/, /projeto/, /atividade/, /exercicio/, /entregar/])) return { singular: "Trabalho acadêmico", plural: "Trabalhos acadêmicos" };
+        if (matchesReportFunction(title, [/estud/, /revis/, /resum/, /pesquis/, /pratic/])) return { singular: "Estudo e revisão", plural: "Estudos e revisões" };
+        if (matchesReportFunction(title, [/\baula\b/, /assistir/, /palestra/, /laboratorio/])) return { singular: "Aula", plural: "Aulas" };
+        if (matchesReportFunction(title, [/\bler\b/, /leitur/, /livro/, /artigo/, /capitulo/])) return { singular: "Leitura", plural: "Leituras" };
+    }
+
+    if (isWork) {
+        if (matchesReportFunction(title, [/entreg/, /despach/, /enviar produto/, /levar produto/, /distribu/])) return { singular: "Entrega", plural: "Entregas" };
+        if (matchesReportFunction(title, [/cobrar/, /cobranca/, /pagamento/, /receber/, /boleto/, /nota fiscal/])) return { singular: "Cobrança e financeiro", plural: "Cobranças e financeiro" };
+        if (matchesReportFunction(title, [/envas/, /produz/, /fabric/, /embal/, /separar pedido/, /estoque/])) return { singular: "Produção e operação", plural: "Produção e operação" };
+        if (matchesReportFunction(title, [/storie/, /story/, /post/, /instagram/, /whatsapp/, /divulg/, /anuncio/, /conteudo/])) return { singular: "Divulgação", plural: "Ações de divulgação" };
+        if (matchesReportFunction(title, [/vender/, /venda/, /oferta/, /orcamento/, /proposta/, /comercial/])) return { singular: "Venda e comercial", plural: "Vendas e ações comerciais" };
+        if (matchesReportFunction(title, [/atender/, /atendimento/, /reuniao/, /cliente/, /visita/])) return { singular: "Atendimento", plural: "Atendimentos" };
+        if (matchesReportFunction(title, [/comprar/, /buscar/, /retirar/, /fornecedor/, /abastec/])) return { singular: "Compra e abastecimento", plural: "Compras e abastecimento" };
+    }
+
+    if (isHealth || isPersonal) {
+        if (matchesReportFunction(title, [/treino/, /academ/, /corrida/, /correr/, /caminh/, /exercicio/, /futebol/, /bike/, /pedalar/])) return { singular: "Atividade física", plural: "Atividades físicas" };
+        if (matchesReportFunction(title, [/tratamento/, /medic/, /terapia/, /consulta/, /cabelo/, /capilar/, /saude/])) return { singular: "Saúde e autocuidado", plural: "Saúde e autocuidado" };
+        if (matchesReportFunction(title, [/limpar/, /lavar/, /arrumar/, /organizar/, /mercado/, /cozinhar/, /roupa/, /casa/])) return { singular: "Casa e organização", plural: "Casa e organização" };
+        if (matchesReportFunction(title, [/pagar/, /conta/, /banco/, /dinheiro/, /orcamento/, /economizar/])) return { singular: "Finanças pessoais", plural: "Finanças pessoais" };
+        if (matchesReportFunction(title, [/duolingo/, /estud/, /curso/, /ler/, /leitur/, /aprender/])) return { singular: "Aprendizado pessoal", plural: "Aprendizados pessoais" };
+        if (matchesReportFunction(title, [/habito/, /rotina/, /planejar/, /checklist/, /agenda/])) return { singular: "Rotina e planejamento", plural: "Rotina e planejamento" };
+    }
+
+    // Ações suficientemente claras continuam reconhecíveis mesmo em categorias
+    // customizadas ou ainda não classificadas.
+    if (matchesReportFunction(title, [/entreg/, /despach/, /distribu/])) return { singular: "Entrega", plural: "Entregas" };
+    if (matchesReportFunction(title, [/cobrar/, /cobranca/, /pagamento/, /receber/, /boleto/])) return { singular: "Cobrança e financeiro", plural: "Cobranças e financeiro" };
+    if (matchesReportFunction(title, [/envas/, /produz/, /fabric/, /embal/, /separar pedido/, /estoque/])) return { singular: "Produção e operação", plural: "Produção e operação" };
+    if (matchesReportFunction(title, [/storie/, /story/, /post/, /instagram/, /divulg/, /anuncio/, /conteudo/])) return { singular: "Divulgação", plural: "Ações de divulgação" };
+    if (matchesReportFunction(title, [/vender/, /venda/, /oferta/, /orcamento/, /proposta/])) return { singular: "Venda e comercial", plural: "Vendas e ações comerciais" };
+    if (matchesReportFunction(title, [/reuniao/, /atender/, /atendimento/])) return { singular: "Atendimento", plural: "Atendimentos" };
+    if (matchesReportFunction(title, [/comprar/, /buscar/, /retirar/])) return { singular: "Compra ou retirada", plural: "Compras ou retiradas" };
+    if (matchesReportFunction(title, [/\bprova\b/, /\bteste\b/, /avaliacao/, /simulado/, /\bg[12]\b/])) return { singular: "Avaliação", plural: "Avaliações" };
+    if (matchesReportFunction(title, [/treino/, /academ/, /corrida/, /correr/, /caminh/, /exercicio/, /futebol/])) return { singular: "Atividade física", plural: "Atividades físicas" };
+    if (matchesReportFunction(title, [/tratamento/, /medic/, /terapia/, /consulta/, /capilar/, /saude/])) return { singular: "Saúde e autocuidado", plural: "Saúde e autocuidado" };
+    if (matchesReportFunction(title, [/duolingo/, /estud/, /curso/, /leitur/, /aprender/])) return { singular: "Aprendizado", plural: "Aprendizados" };
+    if (matchesReportFunction(title, [/limpar/, /lavar/, /arrumar/, /organizar/, /mercado/, /roupa/])) return { singular: "Casa e organização", plural: "Casa e organização" };
+    return { singular: "Outra atividade", plural: "Outras atividades" };
+}
+
+function formatReportFunctionCount(functionInfo, count) {
+    return `**${count} ${count === 1 ? functionInfo.singular : functionInfo.plural}**`;
+}
+
+function getReportPeriodType(days) {
+    return days === 365 ? "yearly" : (days === 30 ? "monthly" : "weekly");
+}
+
+function getReportPeriodLabel(days) {
+    return days === 365 ? "Anual" : (days === 30 ? "Mensal" : "Semanal");
+}
+
+function getLocalReportHistory() {
+    const history = JSON.parse(localStorage.getItem("smart_report_history")) || [];
+    return Array.isArray(history) ? history : [];
+}
+
+async function saveSmartReportSnapshot({ days, periods, html, rate, completed, planned }) {
+    const periodType = getReportPeriodType(days);
+    const key = `${periodType}_${periods.currentStartStr}_${periods.currentEndStr}`;
+    const snapshot = {
+        key,
+        days,
+        periodType,
+        periodLabel: getReportPeriodLabel(days),
+        periodStart: periods.currentStartStr,
+        periodEnd: periods.currentEndStr,
+        generatedAt: new Date().toISOString(),
+        rate,
+        completed,
+        planned,
+        html
+    };
+    const history = getLocalReportHistory().filter(report => report.key !== key);
+    history.unshift(snapshot);
+    localStorage.setItem("smart_report_history", JSON.stringify(history.slice(0, 30)));
+
+    if (!supabaseClient || !currentUser || reportsCloudState === "unavailable") return;
+    try {
+        const { error } = await supabaseClient.from("smart_reports").upsert({
+            user_id: currentUser.id,
+            period_type: periodType,
+            period_start: periods.currentStartStr,
+            period_end: periods.currentEndStr,
+            report_html: html,
+            report_data: { days, rate, completed, planned, periodLabel: snapshot.periodLabel },
+            generated_at: snapshot.generatedAt
+        }, { onConflict: "user_id,period_type,period_start,period_end" });
+        if (error) throw error;
+        reportsCloudState = "ready";
+    } catch (error) {
+        reportsCloudState = "unavailable";
+        console.warn("Histórico de relatórios indisponível na nuvem; mantendo cópia local.", error.message);
+    }
+}
+
+async function loadReportHistoryFromCloud() {
+    let history = getLocalReportHistory();
+    if (supabaseClient && currentUser && reportsCloudState !== "unavailable") {
+        try {
+            const { data, error } = await supabaseClient
+                .from("smart_reports")
+                .select("period_type,period_start,period_end,report_html,report_data,generated_at")
+                .order("generated_at", { ascending: false })
+                .limit(30);
+            if (error) throw error;
+            const cloudHistory = (data || []).map(report => ({
+                key: `${report.period_type}_${report.period_start}_${report.period_end}`,
+                days: report.report_data?.days || (report.period_type === "yearly" ? 365 : report.period_type === "monthly" ? 30 : 7),
+                periodType: report.period_type,
+                periodLabel: report.report_data?.periodLabel || report.period_type,
+                periodStart: report.period_start,
+                periodEnd: report.period_end,
+                generatedAt: report.generated_at,
+                rate: report.report_data?.rate || 0,
+                completed: report.report_data?.completed || 0,
+                planned: report.report_data?.planned || 0,
+                html: report.report_html
+            }));
+            const merged = new Map();
+            [...cloudHistory, ...history].forEach(report => {
+                if (!merged.has(report.key)) merged.set(report.key, report);
+            });
+            history = Array.from(merged.values()).sort((a, b) => new Date(b.generatedAt) - new Date(a.generatedAt)).slice(0, 30);
+            localStorage.setItem("smart_report_history", JSON.stringify(history));
+            reportsCloudState = "ready";
+        } catch (error) {
+            reportsCloudState = "unavailable";
+            console.warn("Carregamento do histórico na nuvem indisponível; usando cópias locais.", error.message);
+        }
+    }
+    return history;
+}
+
+async function loadAndRenderReportHistory(containerEl, titleEl) {
+    containerEl.innerHTML = '<span style="color:var(--text-secondary);font-size:.8rem;">Carregando histórico…</span>';
+    const history = await loadReportHistoryFromCloud();
+    if (history.length === 0) {
+        containerEl.innerHTML = '<div class="report-history-empty"><i data-lucide="archive"></i><strong>Nenhum relatório arquivado</strong><span>Os próximos relatórios oficiais serão salvos automaticamente aqui.</span></div>';
+        if (window.lucide) window.lucide.createIcons();
+        return;
+    }
+    containerEl.innerHTML = `<div class="report-history-list">${history.map((report, index) => `
+        <button type="button" class="report-history-item" data-index="${index}">
+            <span><strong>${escapeHTML(report.periodLabel)}</strong><small>${escapeHTML(report.periodStart.split('-').reverse().join('/'))} a ${escapeHTML(report.periodEnd.split('-').reverse().join('/'))}</small></span>
+            <span class="report-history-rate">${report.rate}%<i data-lucide="chevron-right"></i></span>
+        </button>`).join("")}</div>`;
+    containerEl.querySelectorAll(".report-history-item").forEach(button => {
+        button.addEventListener("click", () => {
+            const report = history[Number(button.dataset.index)];
+            if (!report) return;
+            activeSmartReportDays = report.days;
+            if (btnSaveSmartReport) btnSaveSmartReport.style.display = "inline-flex";
+            currentReportCorrectionTasks = {};
+            if (titleEl) titleEl.innerHTML = `<i data-lucide="archive" style="width:16px;height:16px;"></i> Relatório ${escapeHTML(report.periodLabel)} Arquivado`;
+            containerEl.innerHTML = report.html;
+            if (window.lucide) window.lucide.createIcons();
+        });
+    });
+    if (window.lucide) window.lucide.createIcons();
+}
+
+function getReportTaskContext(task) {
+    const category = categories.find(item => item.name === task.category || String(item.id) === String(task.category_id));
+    return category?.type || "Não classificada";
+}
+
+function getReportTaskDescription(task) {
+    let context = task.context || {};
+    if (typeof context === "string") {
+        try { context = JSON.parse(context); } catch (_) { context = {}; }
+    }
+    return String(task.description || context.description || "").trim();
+}
+
+async function generateHumanSmartReport(facts, cacheKey) {
+    const storageKey = `human_smart_report_v2_${currentUser?.id || "local"}_${cacheKey}`;
+    try {
+        const cached = JSON.parse(localStorage.getItem(storageKey) || "null");
+        if (cached?.analysis && cached?.fingerprint === JSON.stringify(facts)) return cached.analysis;
+    } catch (_) {}
+    if (!supabaseClient || !currentUser || facts.completed === 0) return null;
+    try {
+        const { data, error } = await supabaseClient.functions.invoke("generate-smart-report", { body: { facts } });
+        if (error || data?.error || !data?.analysis) throw new Error(data?.error || error?.message || "Análise indisponível");
+        localStorage.setItem(storageKey, JSON.stringify({ fingerprint: JSON.stringify(facts), analysis: data.analysis, savedAt: Date.now() }));
+        return data.analysis;
+    } catch (error) {
+        console.warn("Análise humana do relatório indisponível; exibindo fatos calculados pelo app.", error.message);
+        return null;
+    }
+}
+
+function renderHumanSmartReport(analysis) {
+    if (!analysis) return "";
+    const achievements = Array.isArray(analysis.achievements) ? analysis.achievements.slice(0, 3) : [];
+    return `
+        <section class="human-report-story">
+            <header><span><i data-lucide="sparkles"></i></span><div><small>RETROSPECTIVA COM IA</small><h6>O que marcou este período</h6></div></header>
+            <p class="human-report-overview">${escapeHTML(analysis.overview || "")}</p>
+            ${achievements.length ? `<div class="human-report-achievements">${achievements.map(item => `<article><strong>${escapeHTML(item.title || "Realização")}</strong><p>${escapeHTML(item.detail || "")}</p></article>`).join("")}</div>` : ""}
+            ${analysis.rhythm ? `<div class="human-report-note"><i data-lucide="calendar-days"></i><div><strong>Seu ritmo</strong><p>${escapeHTML(analysis.rhythm)}</p></div></div>` : ""}
+            ${analysis.pending ? `<div class="human-report-note attention"><i data-lucide="circle-dashed"></i><div><strong>O que ficou aberto</strong><p>${escapeHTML(analysis.pending)}</p></div></div>` : ""}
+            ${analysis.closing ? `<p class="human-report-closing">${escapeHTML(analysis.closing)}</p>` : ""}
+            <small class="human-report-source"><i data-lucide="shield-check"></i> Texto criado somente a partir das tarefas e conclusões registradas.</small>
+        </section>`;
+}
+
+async function loadAndRenderReport(days, containerEl) {
+    const now = new Date();
+    let isExpired = false;
+    let daysRemaining = 0;
+
+    // Calcula expiração (limite de 3 dias incluindo o dia de conclusão)
+    if (days === 7) {
+        const daysSinceSat = (now.getDay() === 6) ? 0 : (now.getDay() + 1);
+        if (daysSinceSat >= 2) {
+            isExpired = true;
+        } else {
+            daysRemaining = 2 - daysSinceSat;
+        }
+    } else if (days === 30) {
+        const date = now.getDate();
+        if (date > 3) {
+            isExpired = true;
+        } else {
+            daysRemaining = 4 - date;
+        }
+    } else if (days === 365) {
+        const isJanuary = now.getMonth() === 0;
+        const date = now.getDate();
+        if (!isJanuary || date > 3) {
+            isExpired = true;
+        } else {
+            daysRemaining = 4 - date;
+        }
+    }
+
+    // Bypass expirations if debug parameter is present in URL
+    const isDebugMode = new URLSearchParams(window.location.search).has("debug");
+    if (isDebugMode) {
+        isExpired = false;
+        daysRemaining = 999;
+    }
+
+    if (isExpired) {
+        const periodLabel = days === 7 ? "semanal" : days === 30 ? "mensal" : "anual";
+        containerEl.innerHTML = `
+            <div style="text-align: center; padding: 32px 16px; color: var(--text-secondary);">
+                <div style="background: rgba(239, 68, 68, 0.05); color: #ef4444; width: 52px; height: 52px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; border: 1px solid rgba(239, 68, 68, 0.15);">
+                    <i data-lucide="clock" style="width: 22px; height: 22px;"></i>
+                </div>
+                <h5 style="margin: 0 0 6px 0; font-size: 1rem; font-weight: 800; color: var(--text-primary);">Relatório Expirado</h5>
+                <p style="margin: 0; font-size: 0.82rem; line-height: 1.5; max-width: 260px; margin: 0 auto;">Este relatório ${periodLabel} já expirou. Os resumos ficam disponíveis por apenas 3 dias após o encerramento do período.</p>
+            </div>
+        `;
+        lucide.createIcons();
+        return;
+    }
+
+    containerEl.innerHTML = `<span style="font-size: 0.8rem; color: var(--text-secondary);"><span class="loading-spinner" style="display:inline-block; vertical-align:middle; margin-right:6px; width:12px; height:12px; border:2px solid var(--primary); border-top-color:transparent; border-radius:50%; animation:spin 1s linear infinite;"></span> Analisando histórico...</span>`;
+
+    // 1. Calcular dois períodos civis fechados e comparáveis.
+    const periods = isDebugMode
+        ? getSmartReportPreviewPeriods(days, now)
+        : getSmartReportPeriods(days, now);
+
+    // 2. Carregar conclusões do Supabase ou Local
+    let completionsList = [];
+    let cloudHistoryLoaded = false;
+    if (supabaseClient && currentUser) {
+        try {
+            const { data, error } = await supabaseClient
+                .from('completions')
+                .select('*')
+                .gte('date', periods.previousStartStr)
+                .lte('date', periods.currentEndStr);
+            if (!error && data) {
+                completionsList = data;
+                cloudHistoryLoaded = true;
+            }
+        } catch (e) {
+            console.error("Erro ao carregar conclusões do Supabase", e);
+        }
+    }
+    
+    // Fallback local somente quando a consulta à nuvem não foi concluída.
+    if (!cloudHistoryLoaded) {
+        let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+        completionsList = localCompletions.filter(c =>
+            c.date >= periods.previousStartStr && c.date <= periods.currentEndStr
+        );
+    }
+
+    // 3. Separar e deduplicar conclusões por tarefa + data.
+    const uniqueCompletedRecords = (startStr, endStr) => {
+        const recordsByKey = new Map();
+        completionsList.forEach(completion => {
+            if (completion.completed !== true || completion.date < startStr || completion.date > endStr) return;
+            recordsByKey.set(`${completion.task_id}_${completion.date}`, completion);
+        });
+        return Array.from(recordsByKey.values());
+    };
+
+    const currentCompletions = uniqueCompletedRecords(periods.currentStartStr, periods.currentEndStr);
+    const prevCompletions = uniqueCompletedRecords(periods.previousStartStr, periods.previousEndStr);
+    const currentCompletionKeys = new Set(currentCompletions.map(c => `${c.task_id}_${c.date}`));
+    const previousCompletionKeys = new Set(prevCompletions.map(c => `${c.task_id}_${c.date}`));
+
+    // 4. Gerar as ocorrências realmente planejadas conforme data e recorrência.
+    const reportTasks = allActiveTasks.filter(task => task.is_active !== false && (!isTrainingCategory(task.category) || isTrainingTaskOwnedByCurrentUser(task, true)));
+    const currentPlannedOccurrences = buildPlannedOccurrences(reportTasks, periods.currentStart, periods.currentEnd);
+    const previousPlannedOccurrences = buildPlannedOccurrences(reportTasks, periods.previousStart, periods.previousEnd);
+    const currentPlannedCount = currentPlannedOccurrences.length;
+    const previousPlannedCount = previousPlannedOccurrences.length;
+    const currentCount = currentCompletions.length;
+    const prevCount = prevCompletions.length;
+    const currentCompletedPlannedCount = currentPlannedOccurrences.filter(o => currentCompletionKeys.has(o.key)).length;
+    const previousCompletedPlannedCount = previousPlannedOccurrences.filter(o => previousCompletionKeys.has(o.key)).length;
+    const currentRate = currentPlannedCount > 0 ? Math.round((currentCompletedPlannedCount / currentPlannedCount) * 100) : 0;
+    const previousRate = previousPlannedCount > 0 ? Math.round((previousCompletedPlannedCount / previousPlannedCount) * 100) : 0;
+
+    // 5. Agrupar por Categorias e calcular planejadas vs concluídas
+    const catCompletions = {};
+    const catPlanned = {};
+    
+    currentPlannedOccurrences.forEach(occurrence => {
+        const categoryName = occurrence.task.category || "Sem categoria";
+        catPlanned[categoryName] = (catPlanned[categoryName] || 0) + 1;
+        if (currentCompletionKeys.has(occurrence.key)) {
+            catCompletions[categoryName] = (catCompletions[categoryName] || 0) + 1;
+        }
+    });
+
+    const categoryNames = Object.keys(catPlanned);
+    const activeCats = categoryNames
+        .filter(name => catPlanned[name] > 0)
+        .map(name => categories.find(cat => cat.name === name) || { id: name, name, type: "Não classificada" });
+
+    // 5.1. Ler a função executada dentro de cada categoria/setor.
+    const functionStatsByCategory = {};
+    currentReportCorrectionTasks = {};
+    currentPlannedOccurrences.forEach(occurrence => {
+        if (!currentCompletionKeys.has(occurrence.key)) return;
+        const categoryName = occurrence.task.category || "Sem categoria";
+        if (!currentReportCorrectionTasks[categoryName]) currentReportCorrectionTasks[categoryName] = [];
+        if (!currentReportCorrectionTasks[categoryName].some(task => String(task.id) === String(occurrence.task.id))) {
+            currentReportCorrectionTasks[categoryName].push(occurrence.task);
+        }
+        const functionInfo = classifyTaskFunction(occurrence.task);
+        if (!functionStatsByCategory[categoryName]) functionStatsByCategory[categoryName] = {};
+        if (!functionStatsByCategory[categoryName][functionInfo.singular]) {
+            functionStatsByCategory[categoryName][functionInfo.singular] = { ...functionInfo, count: 0 };
+        }
+        functionStatsByCategory[categoryName][functionInfo.singular].count += 1;
+    });
+
+    const functionSummaries = Object.entries(functionStatsByCategory)
+        .sort((a, b) => (catCompletions[b[0]] || 0) - (catCompletions[a[0]] || 0))
+        .map(([categoryName, stats]) => {
+            const category = categories.find(cat => cat.name === categoryName);
+            const categoryType = category?.type ? ` — ${category.type}` : "";
+            const functions = Object.values(stats)
+                .sort((a, b) => b.count - a.count)
+                .map(item => formatReportFunctionCount(item, item.count));
+            return `**${categoryName}**${categoryType}: ${functions.join(", ")}.
+                <button type="button" class="btn-correct-report-function" data-category="${encodeURIComponent(categoryName)}"><i data-lucide="pencil"></i> Corrigir</button>`;
+        });
+
+    // 6. Principais destaques (Máximo 3)
+    const highlights = [];
+    
+    // Destaque 1: Conclusão perfeita
+    const perfectCat = activeCats.find(cat => catCompletions[cat.name] === catPlanned[cat.name]);
+    if (perfectCat) {
+        highlights.push(`Conclusão de 100% na guia **${perfectCat.name}** (${perfectCat.type || 'Não classificada'}), realizando todas as ${catPlanned[perfectCat.name]} tarefas.`);
+    }
+
+    // Destaque 2: Maior volume de conclusões
+    const maxVolumeCat = activeCats
+        .filter(cat => !perfectCat || cat.id !== perfectCat.id)
+        .sort((a, b) => catCompletions[b.name] - catCompletions[a.name])[0];
+    if (maxVolumeCat && catCompletions[maxVolumeCat.name] > 0) {
+        highlights.push(`Maior volume de atividades na guia **${maxVolumeCat.name}** (${maxVolumeCat.type || 'Não classificada'}), com ${catCompletions[maxVolumeCat.name]} conclusões.`);
+    }
+
+    // Destaque 3: Comparação com período anterior
+    if (previousPlannedCount > 0 && highlights.length < 3) {
+        const rateDiff = currentRate - previousRate;
+        if (rateDiff > 0) {
+            highlights.push(`Aumento de **+${rateDiff} pontos percentuais** no aproveitamento em relação ao período anterior (${previousRate}% para ${currentRate}%).`);
+        }
+    }
+    
+    if (currentPlannedCount === 0) {
+        highlights.push("Não houve ocorrências planejadas neste período para gerar destaques de produtividade.");
+    } else if (highlights.length === 0) {
+        highlights.push("Consistência geral mantida nas tarefas planejadas.");
+    }
+    const finalHighlights = highlights.slice(0, 3);
+
+    // 7. Pontos de atenção (Máximo 2)
+    const attentions = [];
+    
+    // Ponto 1: Baixo aproveitamento
+    const lowCompletionCat = activeCats
+        .filter(cat => catCompletions[cat.name] < catPlanned[cat.name])
+        .sort((a, b) => {
+            const rateA = catCompletions[a.name] / catPlanned[a.name];
+            const rateB = catCompletions[b.name] / catPlanned[b.name];
+            return rateA - rateB;
+        })[0];
+    if (lowCompletionCat) {
+        const rate = Math.round((catCompletions[lowCompletionCat.name] / catPlanned[lowCompletionCat.name]) * 100);
+        attentions.push(`Menor aproveitamento em **${lowCompletionCat.name}** (${lowCompletionCat.type || 'Não classificada'}): apenas **${rate}%** concluídas (${catCompletions[lowCompletionCat.name]} de ${catPlanned[lowCompletionCat.name]}).`);
+    }
+
+    // Ponto 2: Pendência importante
+    const importantPendingOccurrences = currentPlannedOccurrences.filter(occurrence => {
+        const context = occurrence.task.context || {};
+        const isImportant = context.important === true || context.important === "true";
+        return isImportant && !currentCompletionKeys.has(occurrence.key);
+    });
+    const importantPending = importantPendingOccurrences.length > 0 ? importantPendingOccurrences[0].task : null;
+    if (importantPending) {
+        attentions.push(`Pendência importante: a tarefa **"${importantPending.title}"** (guia ${importantPending.category}) teve ocorrência planejada não concluída.`);
+    }
+
+    // Ponto 3: Tarefas puladas
+    if (attentions.length < 2) {
+        const skippedTaskCounts = {};
+        currentPlannedOccurrences.forEach(occurrence => {
+            if (!currentCompletionKeys.has(occurrence.key)) {
+                skippedTaskCounts[occurrence.task.id] = (skippedTaskCounts[occurrence.task.id] || 0) + 1;
+            }
+        });
+        const worstSkipped = Object.entries(skippedTaskCounts).sort((a, b) => b[1] - a[1])[0];
+        if (worstSkipped) {
+            const task = reportTasks.find(t => String(t.id) === String(worstSkipped[0]));
+            if (task) {
+                attentions.push(`Tarefa adiada: **"${task.title}"** foi ignorada/pulada ${worstSkipped[1]}x.`);
+            }
+        }
+    }
+    
+    if (currentPlannedCount === 0) {
+        attentions.push("Sem dados suficientes: nenhuma tarefa estava programada no período analisado.");
+    } else if (attentions.length === 0) {
+        attentions.push("Nenhum desvio detectado. Todas as metas planejadas foram atendidas.");
+    }
+    const finalAttentions = attentions.slice(0, 2);
+
+    // 8. Recomendação Prática (Exatamente 1)
+    let recommendation = "";
+    if (currentPlannedCount === 0) {
+        recommendation = "Planeje tarefas para o próximo ciclo para que o app consiga calcular evolução, destaques e pontos de atenção.";
+    } else if (lowCompletionCat) {
+        recommendation = `Dedique atenção prioritária à guia **${lowCompletionCat.name}** no início do seu dia para equilibrar o progresso das atividades.`;
+    } else if (importantPending) {
+        recommendation = `Priorize e conclua a pendência importante **"${importantPending.title}"** como a primeira ação do próximo ciclo.`;
+    } else {
+        recommendation = "Mantenha a consistência atual distribuindo uniformemente a conclusão das tarefas ao longo do dia.";
+    }
+
+    // A IA recebe apenas fatos já calculados. Ela redige a retrospectiva, mas não calcula métricas.
+    const completedOccurrences = currentPlannedOccurrences.filter(occurrence => currentCompletionKeys.has(occurrence.key));
+    const pendingOccurrences = currentPlannedOccurrences.filter(occurrence => !currentCompletionKeys.has(occurrence.key));
+    const completionCountByDate = {};
+    completedOccurrences.forEach(occurrence => {
+        completionCountByDate[occurrence.date] = (completionCountByDate[occurrence.date] || 0) + 1;
+    });
+    const busiestDateEntry = Object.entries(completionCountByDate).sort((a, b) => b[1] - a[1])[0];
+    const formatFactDate = dateStr => new Date(`${dateStr}T12:00:00`).toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "2-digit" });
+    const taskContextObject = task => {
+        if (typeof task.context !== "string") return task.context || {};
+        try { return JSON.parse(task.context); } catch (_) { return {}; }
+    };
+    const reportFacts = {
+        period: `${periods.currentStartStr} a ${periods.currentEndStr}`,
+        periodType: days === 365 ? "anual" : days === 30 ? "mensal" : "semanal",
+        planned: currentPlannedCount,
+        completed: currentCompletedPlannedCount,
+        rate: currentRate,
+        previousRate: previousPlannedCount > 0 ? previousRate : null,
+        activeDays: Object.keys(completionCountByDate).length,
+        busiestDay: busiestDateEntry ? `${formatFactDate(busiestDateEntry[0])}, com ${busiestDateEntry[1]} conclusões` : "",
+        categories: activeCats.map(category => {
+            const categoryCompleted = completedOccurrences.filter(item => (item.task.category || "Sem categoria") === category.name);
+            const categoryPending = pendingOccurrences.filter(item => (item.task.category || "Sem categoria") === category.name);
+            return {
+                name: category.name,
+                context: category.type || getReportTaskContext(categoryCompleted[0]?.task || categoryPending[0]?.task || {}),
+                planned: catPlanned[category.name] || 0,
+                completed: catCompletions[category.name] || 0,
+                completedTasks: categoryCompleted.slice(0, days === 365 ? 30 : 18).map(item => {
+                    const context = taskContextObject(item.task);
+                    return { title: item.task.title, date: item.date, shift: (context.turnos || []).join(", "), description: getReportTaskDescription(item.task) };
+                }),
+                pendingTasks: categoryPending.slice(0, 10).map(item => {
+                    const context = taskContextObject(item.task);
+                    return { title: item.task.title, date: item.date, important: context.important === true || context.important === "true" };
+                })
+            };
+        })
+    };
+    const reportCacheKey = `${getReportPeriodType(days)}_${periods.currentStartStr}_${periods.currentEndStr}`;
+    const humanAnalysis = await generateHumanSmartReport(reportFacts, reportCacheKey);
+    const humanAnalysisHtml = renderHumanSmartReport(humanAnalysis);
+    const completedWorkHtml = reportFacts.categories.filter(category => category.completedTasks.length).map(category => `
+        <article class="human-report-category">
+            <header><strong>${escapeHTML(category.name)}</strong><small>${category.completed} ${category.completed === 1 ? "conclusão" : "conclusões"}</small></header>
+            <ul>${category.completedTasks.map(task => `<li><span>${escapeHTML(task.title)}</span><small>${escapeHTML(formatFactDate(task.date))}${task.shift ? ` · ${escapeHTML(task.shift)}` : ""}</small>${task.description ? `<p>${escapeHTML(task.description)}</p>` : ""}</li>`).join("")}</ul>
+        </article>`).join("");
+
+    // Calcular prazo real de expiração
+    let expirationMessage = "";
+    if (isDebugMode) {
+        expirationMessage = "Prévia parcial do período em andamento; os resultados ainda podem mudar até o fechamento.";
+    } else if (days === 7) {
+        if (now.getDay() === 6) {
+            expirationMessage = "Este relatório expira no fim de domingo (amanhã).";
+        } else {
+            expirationMessage = "Este relatório expira no fim de hoje.";
+        }
+    } else if (days === 30) {
+        expirationMessage = "Este relatório fica disponível até o fim do dia 3 deste mês.";
+    } else {
+        expirationMessage = "Este relatório fica disponível até o fim do dia 3 de janeiro.";
+    }
+
+    const formatReportDate = date => date.toLocaleDateString("pt-BR");
+    const periodRangeLabel = `${formatReportDate(periods.currentStart)} a ${formatReportDate(periods.currentEnd)}`;
+
+    const warningHtml = `
+        <div style="background: rgba(245, 158, 11, 0.07); border: 1px solid rgba(245, 158, 11, 0.2); color: #eab308; padding: 12px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 0.82rem; font-weight: 600; display: flex; align-items: center; gap: 8px; line-height: 1.4;">
+            <i data-lucide="clock" style="width: 18px; height: 18px; flex-shrink: 0; color: #eab308;"></i>
+            <span>⏱️ ${expirationMessage}</span>
+        </div>
+    `;
+
+    // A leitura humana já reúne realizações, ritmo e pontos de atenção. Mantemos
+    // apenas os números essenciais para evitar repetir a análise em cinco blocos.
+    let contentHtml = `
+        ${warningHtml}
+        ${humanAnalysisHtml}
+        <div class="report-essential-stats" aria-label="Números do período">
+            <span><strong>${currentCompletedPlannedCount}/${currentPlannedCount}</strong><small>realizadas</small></span>
+            <span><strong>${currentRate}%</strong><small>conclusão</small></span>
+            <span><strong>${periodRangeLabel}</strong><small>período</small></span>
+        </div>
+    `;
+
+    const renderedReportHtml = contentHtml.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+    containerEl.innerHTML = renderedReportHtml;
+    lucide.createIcons();
+    if (!isDebugMode) {
+        const archiveContainer = document.createElement("div");
+        archiveContainer.innerHTML = renderedReportHtml;
+        archiveContainer.querySelectorAll(".btn-correct-report-function").forEach(button => button.remove());
+        saveSmartReportSnapshot({
+            days,
+            periods,
+            html: archiveContainer.innerHTML,
+            rate: currentRate,
+            completed: currentCompletedPlannedCount,
+            planned: currentPlannedCount
+        });
+    }
+}
+
+window.saveCategoryType = function(catId, type, days) {
+    const cat = categories.find(c => String(c.id) === String(catId));
+    if (cat) {
+        updateCategoryFields(cat.id, cat.name, type);
+        console.log(`[Learn] Categoria "${cat.name}" associada ao tipo "${type}".`);
+    }
+    
+    // Re-renderiza a aba atual
+    if (typeof switchReportTab === "function") {
+        setTimeout(() => switchReportTab(days), 100);
+    }
+};
+
+window.saveTermAssociation = function(term, category, days) {
+    const associations = JSON.parse(localStorage.getItem("user_term_associations")) || {};
+    associations[term] = category;
+    localStorage.setItem("user_term_associations", JSON.stringify(associations));
+    console.log(`[Learn] Termo "${term}" associado a "${category}".`);
+    
+    // Re-renderiza a aba atual
+    if (typeof switchReportTab === "function") {
+        switchReportTab(days);
+    }
+};
+
+function checkSaturdayAnimation() {
+    const now = new Date();
+    // 6 = Sábado
+    if (now.getDay() === 6) {
+        const todayStr = getLocalDateString(now);
+        const animKey = "saturday_anim_shown_" + todayStr;
+        if (localStorage.getItem(animKey) !== "true") {
+            localStorage.setItem(animKey, "true");
+            
+            // Exibir a notificação flutuante discreta após 2 segundos
+            setTimeout(() => {
+                const btnReport = document.getElementById("btn-smart-report");
+                if (btnReport) {
+                    const rect = btnReport.getBoundingClientRect();
+                    const tooltip = document.createElement("div");
+                    tooltip.className = "report-tooltip-bubble";
+                    tooltip.innerHTML = "Chegou sábado! Veja tudo o que você realizou nesta semana.";
+                    tooltip.style.position = "absolute";
+                    tooltip.style.top = (rect.bottom + window.scrollY + 10) + "px";
+                    tooltip.style.left = (rect.left + rect.width / 2 + window.scrollX - 220) + "px";
+                    document.body.appendChild(tooltip);
+                    
+                    setTimeout(() => tooltip.classList.add("active"), 100);
+                    
+                    // Sumir após 6 segundos
+                    setTimeout(() => {
+                        tooltip.classList.remove("active");
+                        setTimeout(() => tooltip.remove(), 300);
+                    }, 6000);
+                }
+            }, 2000);
+        }
+    }
+}
+
+function checkAutomaticReports() {
+    const now = new Date();
+    const todayStr = getLocalDateString(now);
+    const currentMonthYearStr = `${now.getFullYear()}-${now.getMonth() + 1}`;
+    const currentYearStr = `${now.getFullYear()}`;
+
+    // 1. Relatório Anual (Disponível de 1 a 3 de Janeiro)
+    if (now.getMonth() === 0 && now.getDate() <= 3) {
+        const lastYearlyShown = localStorage.getItem("last_yearly_summary_shown");
+        if (lastYearlyShown !== currentYearStr) {
+            localStorage.setItem("last_yearly_summary_shown", currentYearStr);
+            setTimeout(() => {
+                if (typeof switchReportTab === "function") {
+                    switchReportTab(365);
+                }
+                openModal(modalSmartReport);
+            }, 1200);
+            return;
+        }
+    }
+
+    // 2. Relatório Mensal (Disponível de 1 a 3 de qualquer mês)
+    if (now.getDate() <= 3) {
+        const lastMonthlyShown = localStorage.getItem("last_monthly_summary_shown");
+        if (lastMonthlyShown !== currentMonthYearStr) {
+            localStorage.setItem("last_monthly_summary_shown", currentMonthYearStr);
+            setTimeout(() => {
+                if (typeof switchReportTab === "function") {
+                    switchReportTab(30);
+                }
+                openModal(modalSmartReport);
+            }, 1200);
+            return;
+        }
+    }
+
+    // 3. Relatório Semanal (Sábado, Domingo)
+    const day = now.getDay();
+    if (day === 6 || day === 0) { // 6 = Sábado, 0 = Domingo
+        const lastWeeklyShown = localStorage.getItem("last_weekly_summary_shown");
+        
+        // Calcula a data do sábado de referência para este ciclo de 2 dias
+        const saturday = new Date(now);
+        const diffToSaturday = (day === 6) ? 0 : -1;
+        saturday.setDate(saturday.getDate() + diffToSaturday);
+        const satStr = getLocalDateString(saturday);
+
+        if (lastWeeklyShown !== satStr) {
+            localStorage.setItem("last_weekly_summary_shown", satStr);
+            setTimeout(() => {
+                if (typeof switchReportTab === "function") {
+                    switchReportTab(7);
+                }
+                openModal(modalSmartReport);
+            }, 1200);
+        }
+    }
+}
+
+// ----------------------------------------------------
+// Sistema de Notificações de Tarefas Importantes ("Estilo iFood")
+// ----------------------------------------------------
+let importantNotificationCheckRunning = false;
+async function checkImportantTaskNotifications() {
+    if (!("Notification" in window) || Notification.permission !== "granted" || importantNotificationCheckRunning) return;
+    importantNotificationCheckRunning = true;
+    try {
+
+    const now = new Date();
+    const todayStr = getLocalDateString(now);
+
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = getLocalDateString(tomorrow);
+
+    let shownAlerts = JSON.parse(localStorage.getItem("shown_notifications")) || {};
+    if (localStorage.getItem("local_reminder_receipt_repaired_v9_26") !== "true") {
+        shownAlerts = Object.fromEntries(Object.entries(shownAlerts).filter(([key]) => !key.startsWith("reminder-")));
+        localStorage.setItem("shown_notifications", JSON.stringify(shownAlerts));
+        localStorage.setItem("local_reminder_receipt_repaired_v9_26", "true");
+    }
+    let updated = false;
+
+    // Helper para buscar tarefas ativas de uma data específica
+    const getActiveTasksForDate = (dateStr) => {
+        let localTasks = JSON.parse(localStorage.getItem("offline_tasks")) || [];
+        let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+        
+        const completedIds = new Set(
+            localCompletions.filter(c => c.date === dateStr && c.completed === true).map(c => String(c.task_id))
+        );
+        const excludedIds = new Set(
+            localCompletions.filter(c => c.date === dateStr && c.completed === false).map(c => String(c.task_id))
+        );
+
+        return localTasks.filter(task => {
+            if (!task.is_active) return false;
+            if (excludedIds.has(String(task.id))) return false;
+            if (completedIds.has(String(task.id))) return false; // Se já concluiu, ignora
+            
+            const taskCreatedDate = extractDateFromTimestamp(task.created_at);
+            
+            if (task.is_recurring) {
+                return recurringTaskOccursOnDate(task, dateStr);
+            } else {
+                return taskCreatedDate === dateStr;
+            }
+        });
+    };
+
+    const todayTasks = getActiveTasksForDate(todayStr);
+    const tomorrowTasks = getActiveTasksForDate(tomorrowStr);
+
+    const notifyOnce = async (key, title, body, taskId, notificationType = null) => {
+        if (shownAlerts[key]) return false;
+        const displayed = await showWebNotification(title, body, taskId, key, notificationType);
+        if (!displayed) return false;
+        shownAlerts[key] = true;
+        updated = true;
+        return true;
+    };
+
+    const checkTask = async (task, targetDateStr) => {
+        const isImportant = task.context && (task.context.important === true || task.context.important === "true");
+        if (!isImportant) return;
+
+        const configuredReminders = normalizeTaskReminders(task);
+        if (configuredReminders.length) {
+            for (const reminder of configuredReminders) {
+                const reminderDateTime = new Date(`${targetDateStr}T${reminder.time}:00`);
+                reminderDateTime.setDate(reminderDateTime.getDate() - reminder.offset_days);
+                const reminderKey = `reminder-${task.id}-${targetDateStr}-${reminder.offset_days}-${reminder.time}`;
+                if (now >= reminderDateTime && now.getTime() - reminderDateTime.getTime() < 60 * 60 * 1000 && !shownAlerts[reminderKey]) {
+                    const body = reminder.offset_days === 7
+                        ? `Daqui a uma semana: “${task.title}”.`
+                        : reminder.offset_days === 1 ? `Amanhã: “${task.title}”.` : `Está na hora de “${task.title}”.`;
+                    await notifyOnce(reminderKey, "⏰ Lembrete de tarefa", body, task.id, "task-reminder");
+                }
+            }
+            return;
+        }
+
+        const turnos = task.context.turnos || [];
+        
+        // Horas de início dos turnos: Manhã (05h), Tarde (12h), Noite (18h), Geral (08h)
+        let earliestHour = 8;
+        if (turnos.includes("Manhã")) earliestHour = 5;
+        else if (turnos.includes("Tarde")) earliestHour = 12;
+        else if (turnos.includes("Noite")) earliestHour = 18;
+
+        const targetDateTime = new Date(`${targetDateStr}T${String(earliestHour).padStart(2, '0')}:00:00`);
+
+        // 1. Notificação de 1 dia antes
+        const oneDayBeforeTime = new Date(targetDateTime.getTime() - 24 * 60 * 60 * 1000);
+        const dayBeforeKey = `task_${task.id}_${targetDateStr}_dayBefore`;
+        
+        if (now >= oneDayBeforeTime && now < targetDateTime && !shownAlerts[dayBeforeKey]) {
+            await notifyOnce(dayBeforeKey,
+                "⚠️ Tarefa Importante Amanhã!",
+                `A tarefa "${task.title}" está agendada para amanhã no turno da ${turnos.join(', ') || 'Geral'}.`,
+                task.id
+            );
+        }
+
+        // 2. Notificação de 1 turno antes
+        let shiftBeforeTime;
+        if (turnos.includes("Tarde")) {
+            shiftBeforeTime = new Date(`${targetDateStr}T05:00:00`);
+        } else if (turnos.includes("Noite")) {
+            shiftBeforeTime = new Date(`${targetDateStr}T12:00:00`);
+        } else if (turnos.includes("Manhã")) {
+            const prevDay = new Date(targetDateTime);
+            prevDay.setDate(prevDay.getDate() - 1);
+            const prevDayStr = getLocalDateString(prevDay);
+            shiftBeforeTime = new Date(`${prevDayStr}T18:00:00`);
+        } else {
+            shiftBeforeTime = new Date(targetDateTime.getTime() - 4 * 60 * 60 * 1000); // 4h antes para Geral
+        }
+
+        const shiftBeforeKey = `task_${task.id}_${targetDateStr}_shiftBefore`;
+        if (now >= shiftBeforeTime && now < targetDateTime && !shownAlerts[shiftBeforeKey]) {
+            let shiftMsg = "";
+            if (turnos.includes("Tarde")) shiftMsg = "no turno da Tarde (próximo turno)";
+            else if (turnos.includes("Noite")) shiftMsg = "no turno da Noite (próximo turno)";
+            else if (turnos.includes("Manhã")) shiftMsg = "amanhã de Manhã (próximo turno)";
+            else shiftMsg = "em breve (daqui a 4 horas)";
+
+            await notifyOnce(shiftBeforeKey,
+                "⏰ Próxima tarefa importante!",
+                `A tarefa "${task.title}" está agendada para ${shiftMsg}.`,
+                task.id
+            );
+        }
+    };
+
+    for (const task of todayTasks) await checkTask(task, todayStr);
+    for (const task of tomorrowTasks) await checkTask(task, tomorrowStr);
+
+    if (updated) {
+        localStorage.setItem("shown_notifications", JSON.stringify(shownAlerts));
+    }
+    } finally {
+        importantNotificationCheckRunning = false;
+    }
+}
+
+async function showWebNotification(title, body, taskId, customTag = null, notificationType = null) {
+    if (!areNotificationsEnabled() || !("Notification" in window) || Notification.permission !== "granted") return false;
+    try {
+        if ("serviceWorker" in navigator) {
+            const registration = await navigator.serviceWorker.ready;
+            await registration.showNotification(title, {
+                    body: body,
+                    icon: './icons/icon-192.png',
+                    badge: './icons/notification-badge.png',
+                    vibrate: [200, 100, 200],
+                    data: { taskId: taskId, notificationType },
+                    tag: customTag || `task-important-${taskId}`
+            });
+            return true;
+        } else {
+            new Notification(title, {
+                body: body,
+                icon: './icons/icon-192.png'
+            });
+            return true;
+        }
+    } catch (error) {
+        console.warn("O navegador não confirmou a exibição da notificação:", error.message);
+        return false;
+    }
+}
+
+function getSmartReportAttentionKey(referenceDate = new Date()) {
+    const year = referenceDate.getFullYear();
+    const month = referenceDate.getMonth();
+    const day = referenceDate.getDate();
+    const weekday = referenceDate.getDay();
+
+    if (month === 0 && day <= 3) return `smart_report_seen_yearly_${year}`;
+    if (day <= 3) return `smart_report_seen_monthly_${year}-${String(month + 1).padStart(2, "0")}`;
+    if (weekday === 6 || weekday === 0) {
+        const saturday = new Date(referenceDate);
+        if (weekday === 0) saturday.setDate(saturday.getDate() - 1);
+        return `smart_report_seen_weekly_${getLocalDateString(saturday)}`;
+    }
+    if (new URLSearchParams(window.location.search).has("debug")) {
+        return `smart_report_seen_debug_${getLocalDateString(referenceDate)}`;
+    }
+    return null;
+}
+
+function getSmartReportReadyPeriod(referenceDate = new Date()) {
+    const month = referenceDate.getMonth();
+    const day = referenceDate.getDate();
+    const weekday = referenceDate.getDay();
+    if (month === 0 && day <= 3) return "anual";
+    if (day <= 3) return "mensal";
+    if (weekday === 6 || weekday === 0) return "semanal";
+    return "semanal";
+}
+
+function updateSmartReportReadyLabel(referenceDate = new Date()) {
+    const label = document.getElementById("smart-report-ready-label");
+    if (!label) return;
+    const period = getSmartReportReadyPeriod(referenceDate);
+    label.textContent = `Seu relatório ${period} já está pronto!`;
+}
+
+function wrapReportCanvasText(context, text, maxWidth) {
+    const paragraphs = String(text).split("\n");
+    const lines = [];
+    paragraphs.forEach((paragraph, paragraphIndex) => {
+        const words = paragraph.trim().split(/\s+/).filter(Boolean);
+        let line = "";
+        words.forEach(word => {
+            const candidate = line ? `${line} ${word}` : word;
+            if (line && context.measureText(candidate).width > maxWidth) {
+                lines.push(line);
+                line = word;
+            } else {
+                line = candidate;
+            }
+        });
+        if (line) lines.push(line);
+        if (!words.length || paragraphIndex < paragraphs.length - 1) lines.push("");
+    });
+    return lines;
+}
+
+function drawRoundedReportRect(context, x, y, width, height, radius) {
+    const r = Math.min(radius, width / 2, height / 2);
+    context.beginPath();
+    context.moveTo(x + r, y);
+    context.arcTo(x + width, y, x + width, y + height, r);
+    context.arcTo(x + width, y + height, x, y + height, r);
+    context.arcTo(x, y + height, x, y, r);
+    context.arcTo(x, y, x + width, y, r);
+    context.closePath();
+}
+
+async function saveCurrentSmartReport() {
+    const content = document.getElementById("report-summary-content");
+    const title = document.getElementById("report-summary-title");
+    if (!content || !title || content.textContent.includes("Carregando")) return;
+
+    const periodName = activeSmartReportDays === 365 ? "anual" : (activeSmartReportDays === 30 ? "mensal" : "semanal");
+    const originalButtonHtml = btnSaveSmartReport.innerHTML;
+    btnSaveSmartReport.innerHTML = '<i data-lucide="loader-circle"></i> Gerando imagem…';
+    btnSaveSmartReport.disabled = true;
+    if (window.lucide) window.lucide.createIcons();
+
+    try {
+        const rootStyles = getComputedStyle(document.documentElement);
+        const bodyStyles = getComputedStyle(document.body);
+        const colors = {
+            background: rootStyles.getPropertyValue("--bg-dark").trim() || bodyStyles.backgroundColor || "#0f172a",
+            surface: rootStyles.getPropertyValue("--bg-surface-solid").trim() || "#182033",
+            primary: rootStyles.getPropertyValue("--primary").trim() || "#8b5cf6",
+            text: rootStyles.getPropertyValue("--text-primary").trim() || "#f8fafc",
+            secondary: rootStyles.getPropertyValue("--text-secondary").trim() || "#94a3b8",
+            border: rootStyles.getPropertyValue("--border-color").trim() || "rgba(148,163,184,.2)"
+        };
+        const aiStory = content.querySelector(".human-report-story");
+        const blocks = aiStory ? [
+            { type: "heading", text: aiStory.querySelector("h6")?.innerText.trim() || "Retrospectiva com IA" },
+            { type: "overview", text: aiStory.querySelector(".human-report-overview")?.innerText.trim() || "" },
+            ...Array.from(aiStory.querySelectorAll(".human-report-achievements article")).map(element => ({
+                type: "achievement",
+                title: element.querySelector("strong")?.innerText.trim() || "Realização",
+                text: element.querySelector("p")?.innerText.trim() || ""
+            })),
+            ...Array.from(aiStory.querySelectorAll(".human-report-note")).map(element => ({
+                type: element.classList.contains("attention") ? "attention" : "rhythm",
+                title: element.querySelector("strong")?.innerText.trim() || "Análise",
+                text: element.querySelector("p")?.innerText.trim() || ""
+            })),
+            { type: "closing", text: aiStory.querySelector(".human-report-closing")?.innerText.trim() || "" },
+            { type: "source", text: aiStory.querySelector(".human-report-source")?.innerText.trim() || "" }
+        ].filter(block => block.text || block.title) : [];
+        if (!blocks.length) throw new Error("A retrospectiva com IA ainda não terminou de carregar.");
+
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        const width = 1080;
+        const contentWidth = 856;
+        const measureBlock = block => {
+            if (block.type === "heading") return 76;
+            if (block.type === "source") {
+                context.font = "500 20px Arial, sans-serif";
+                return wrapReportCanvasText(context, block.text, contentWidth).length * 30 + 24;
+            }
+            if (block.type === "achievement" || block.type === "rhythm" || block.type === "attention") {
+                context.font = "800 25px Arial, sans-serif";
+                const titleLines = wrapReportCanvasText(context, block.title, contentWidth - 78).length;
+                context.font = "500 24px Arial, sans-serif";
+                const textLines = wrapReportCanvasText(context, block.text, contentWidth - 78).length;
+                return 38 + titleLines * 34 + textLines * 35 + 24;
+            }
+            context.font = block.type === "overview" ? "600 28px Arial, sans-serif" : "500 25px Arial, sans-serif";
+            return wrapReportCanvasText(context, block.text, contentWidth - (block.type === "closing" ? 28 : 0)).length * (block.type === "overview" ? 41 : 36) + 30;
+        };
+        let calculatedHeight = 390 + blocks.reduce((sum, block) => sum + measureBlock(block), 0);
+        calculatedHeight += 180;
+        canvas.width = width;
+        canvas.height = Math.max(1080, calculatedHeight);
+
+        context.fillStyle = colors.background;
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = colors.surface;
+        drawRoundedReportRect(context, 48, 48, 984, canvas.height - 96, 36);
+        context.fill();
+
+        context.fillStyle = colors.primary;
+        drawRoundedReportRect(context, 96, 96, 76, 76, 20);
+        context.fill();
+        context.fillStyle = "#ffffff";
+        context.font = "800 36px Arial, sans-serif";
+        context.textAlign = "center";
+        context.fillText("▥", 134, 146);
+        context.textAlign = "left";
+
+        context.fillStyle = colors.text;
+        context.font = "800 42px Arial, sans-serif";
+        context.fillText("Relatório Inteligente", 196, 128);
+        context.fillStyle = colors.secondary;
+        context.font = "500 24px Arial, sans-serif";
+        context.fillText("Análise automática de rotinas e tarefas concluídas", 196, 164);
+
+        context.strokeStyle = colors.border;
+        context.lineWidth = 2;
+        context.beginPath();
+        context.moveTo(96, 205);
+        context.lineTo(984, 205);
+        context.stroke();
+
+        context.fillStyle = colors.primary;
+        context.font = "800 26px Arial, sans-serif";
+        context.fillText(title.innerText.trim().toUpperCase(), 112, 264);
+
+        const drawWrappedLines = (lines, x, startY, lineHeight) => {
+            let lineY = startY;
+            lines.forEach(line => {
+                if (line) context.fillText(line, x, lineY);
+                lineY += lineHeight;
+            });
+            return lineY;
+        };
+
+        let y = 325;
+        blocks.forEach(block => {
+            if (block.type === "heading") {
+                context.fillStyle = colors.text;
+                context.font = "800 32px Arial, sans-serif";
+                y = drawWrappedLines(wrapReportCanvasText(context, block.text, contentWidth), 112, y, 43) + 22;
+                return;
+            }
+            if (block.type === "overview") {
+                context.fillStyle = colors.text;
+                context.font = "600 28px Arial, sans-serif";
+                y = drawWrappedLines(wrapReportCanvasText(context, block.text, contentWidth), 112, y, 41) + 24;
+                return;
+            }
+            if (["achievement", "rhythm", "attention"].includes(block.type)) {
+                const blockHeight = measureBlock(block) - 10;
+                const accent = block.type === "achievement" ? "#10b981" : (block.type === "attention" ? "#f59e0b" : "#06b6d4");
+                context.fillStyle = block.type === "attention" ? "rgba(245,158,11,.10)" : (block.type === "achievement" ? "rgba(16,185,129,.09)" : "rgba(6,182,212,.09)");
+                drawRoundedReportRect(context, 104, y - 24, 872, blockHeight, 18);
+                context.fill();
+                context.fillStyle = accent;
+                context.beginPath();
+                context.arc(132, y + 2, 8, 0, Math.PI * 2);
+                context.fill();
+                context.font = "800 25px Arial, sans-serif";
+                y = drawWrappedLines(wrapReportCanvasText(context, block.title, contentWidth - 78), 158, y + 10, 34);
+                context.fillStyle = colors.secondary;
+                context.font = "500 24px Arial, sans-serif";
+                y = drawWrappedLines(wrapReportCanvasText(context, block.text, contentWidth - 78), 158, y + 2, 35) + 30;
+                return;
+            }
+            if (block.type === "closing") {
+                context.fillStyle = colors.primary;
+                context.fillRect(112, y - 22, 5, Math.max(45, measureBlock(block) - 18));
+                context.fillStyle = colors.secondary;
+                context.font = "italic 500 25px Arial, sans-serif";
+                y = drawWrappedLines(wrapReportCanvasText(context, block.text, contentWidth - 28), 138, y, 36) + 28;
+                return;
+            }
+            context.fillStyle = colors.secondary;
+            context.font = "500 20px Arial, sans-serif";
+            y = drawWrappedLines(wrapReportCanvasText(context, block.text, contentWidth), 112, y, 30) + 20;
+        });
+
+        context.strokeStyle = colors.border;
+        context.beginPath();
+        context.moveTo(96, canvas.height - 125);
+        context.lineTo(984, canvas.height - 125);
+        context.stroke();
+        context.fillStyle = colors.secondary;
+        context.font = "500 22px Arial, sans-serif";
+        context.fillText(`Gerado em ${new Date().toLocaleString("pt-BR")}`, 112, canvas.height - 78);
+
+        const imageBlob = await new Promise((resolve, reject) => {
+            canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("Não foi possível gerar a imagem.")), "image/png", 1);
+        });
+        const filename = `relatorio-${periodName}-${getLocalDateString(new Date())}.png`;
+        const imageFile = new File([imageBlob], filename, { type: "image/png" });
+
+        const isMobileShare = window.matchMedia("(max-width: 768px) and (pointer: coarse)").matches;
+        if (isMobileShare && navigator.share && navigator.canShare && navigator.canShare({ files: [imageFile] })) {
+            await navigator.share({ files: [imageFile], title: "Relatório Inteligente" });
+        } else {
+            const url = URL.createObjectURL(imageBlob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+
+        btnSaveSmartReport.innerHTML = '<i data-lucide="check"></i> Imagem pronta';
+    } catch (error) {
+        if (error && error.name === "AbortError") {
+            btnSaveSmartReport.innerHTML = originalButtonHtml;
+        } else {
+            console.error("Erro ao salvar relatório como imagem:", error);
+            btnSaveSmartReport.innerHTML = '<i data-lucide="triangle-alert"></i> Não foi possível salvar';
+        }
+    }
+    if (window.lucide) window.lucide.createIcons();
+    setTimeout(() => {
+        btnSaveSmartReport.innerHTML = originalButtonHtml;
+        btnSaveSmartReport.disabled = false;
+        if (window.lucide) window.lucide.createIcons();
+    }, 1800);
+}
+
+function updateSmartReportButtonVisibility() {
+    const btnReport = document.getElementById("btn-smart-report");
+    if (!btnReport) return;
+
+    // Check debug parameter in URL
+    const isDebugMode = new URLSearchParams(window.location.search).has("debug");
+    if (isDebugMode) {
+        btnReport.style.display = "inline-flex";
+        updateSmartReportReadyLabel();
+        const debugKey = getSmartReportAttentionKey();
+        const previewUnread = new URLSearchParams(window.location.search).has("preview-report-animation");
+        btnReport.classList.toggle("report-attention", previewUnread || localStorage.getItem(debugKey) !== "true");
+        return;
+    }
+
+    const now = new Date();
+    
+    // Check Weekly (Saturday and Sunday)
+    const dayOfWeek = now.getDay();
+    const hasWeeklyReport = (dayOfWeek === 6 || dayOfWeek === 0);
+
+    // Check Monthly (first 3 days of the month)
+    const dayOfMonth = now.getDate();
+    const hasMonthlyReport = (dayOfMonth >= 1 && dayOfMonth <= 3);
+
+    // Check Yearly (first 3 days of January)
+    const isJanuary = now.getMonth() === 0;
+    const hasYearlyReport = (isJanuary && dayOfMonth >= 1 && dayOfMonth <= 3);
+
+    if (hasWeeklyReport || hasMonthlyReport || hasYearlyReport) {
+        btnReport.style.display = "inline-flex";
+        updateSmartReportReadyLabel(now);
+        const attentionKey = getSmartReportAttentionKey(now);
+        btnReport.classList.toggle("report-attention", localStorage.getItem(attentionKey) !== "true");
+    } else {
+        btnReport.style.display = "none";
+        btnReport.classList.remove("report-attention");
+    }
+}
+
+// Atualiza os indicadores e verifica as notificações a cada 60 segundos.
+setInterval(() => {
+    refreshExpiredReminderIndicators();
+    checkImportantTaskNotifications();
+}, 60000);
+})();
