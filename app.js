@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=11.08";
+const SERVICE_WORKER_URL = "./sw.js?v=11.09";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -2919,6 +2919,7 @@ function clearLocalUserCache() {
     const identityCacheKey = getCollaborationIdentityCacheKey();
     [
         "offline_categories", "offline_tasks", "offline_completions",
+        COMPLETED_NONRECURRING_CACHE_KEY,
         "offline_category_shares", "offline_completions_queue",
         "offline_task_updates_queue", "offline_category_updates_queue",
         "offline_collaboration_invites_queue", CASSOL_DASHBOARD_SYNC_QUEUE_KEY
@@ -3822,6 +3823,8 @@ function subscribeToCollaborationUpdates() {
             cachedCompletions.push({ task_id: taskId, date, completed: record.completed === true });
         }
         localStorage.setItem("offline_completions", JSON.stringify(cachedCompletions));
+        const linkedTask = allActiveTasks.find(task => String(task.id) === taskId);
+        updateCachedNonRecurringCompletion(linkedTask, date, completed);
 
         if (date === selectedDate) {
             tasks = tasks.map(task => String(task.id) === taskId ? { ...task, completed } : task);
@@ -3945,6 +3948,55 @@ function showSharedTaskAlert(notification) {
     showWebNotification(title, body, notification.task_id, `shared-task-${notification.id || notification.task_id}`);
 }
 
+const COMPLETED_NONRECURRING_CACHE_KEY = "offline_completed_nonrecurring_task_ids";
+const COMPLETION_ROLLOVER_BATCH_SIZE = 100;
+
+function getCachedCompletedNonRecurringTaskIds() {
+    try {
+        const cached = JSON.parse(localStorage.getItem(COMPLETED_NONRECURRING_CACHE_KEY) || "[]");
+        return new Set(Array.isArray(cached) ? cached.map(String) : []);
+    } catch (_) {
+        return new Set();
+    }
+}
+
+function saveCachedCompletedNonRecurringTaskIds(taskIds) {
+    localStorage.setItem(COMPLETED_NONRECURRING_CACHE_KEY, JSON.stringify([...new Set([...taskIds].map(String))]));
+}
+
+function updateCachedNonRecurringCompletion(task, date, completed) {
+    if (!task || task.is_recurring || String(date || "") >= getLocalDateString(new Date())) return;
+    const completedIds = getCachedCompletedNonRecurringTaskIds();
+    if (completed) completedIds.add(String(task.id));
+    else completedIds.delete(String(task.id));
+    saveCachedCompletedNonRecurringTaskIds(completedIds);
+}
+
+async function fetchCompletedNonRecurringTaskIdsBefore(taskList, beforeDate) {
+    const candidateIds = [...new Set((taskList || [])
+        .filter(task => task.is_active !== false && !task.is_recurring && extractDateFromTimestamp(task.created_at) < beforeDate)
+        .map(task => String(task.id))
+        .filter(id => id && !isTemporaryId(id)))];
+    if (!candidateIds.length) return { data: [], error: null };
+
+    const batches = [];
+    for (let index = 0; index < candidateIds.length; index += COMPLETION_ROLLOVER_BATCH_SIZE) {
+        batches.push(candidateIds.slice(index, index + COMPLETION_ROLLOVER_BATCH_SIZE));
+    }
+    const results = await Promise.all(batches.map(ids => supabaseClient
+        .from("completions")
+        .select("task_id")
+        .lt("date", beforeDate)
+        .eq("completed", true)
+        .in("task_id", ids)));
+    const failed = results.find(result => result.error);
+    if (failed?.error) return { data: [], error: failed.error };
+    return {
+        data: [...new Set(results.flatMap(result => result.data || []).map(item => String(item.task_id)))].map(task_id => ({ task_id })),
+        error: null
+    };
+}
+
 async function loadData() {
     const versionAtFetchStart = localDataVersion;
     const selectedDateAtFetchStart = selectedDate;
@@ -3957,7 +4009,6 @@ async function loadData() {
                 catsResult,
                 tasksResult,
                 compTodayResult,
-                compBeforeResult,
                 sharesOwnerResult,
                 sharesCollabResult,
                 sharedNotificationsResult
@@ -3967,7 +4018,6 @@ async function loadData() {
                 supabaseClient.from('categories').select('*').eq('is_active', true),
                 supabaseClient.from('tasks').select('id,title,category,category_id,user_id,is_recurring,is_active,created_at,repeat_days,assigned_to,context').eq('is_active', true),
                 supabaseClient.from('completions').select('task_id,date,completed').eq('date', selectedDateAtFetchStart),
-                supabaseClient.from('completions').select('task_id,date,completed').lt('date', selectedDateAtFetchStart).eq('completed', true),
                 supabaseClient.from('category_shares').select('*').eq('owner_id', currentUser.id).then(r => r, err => {
                     console.warn("Tabela 'category_shares' não encontrada ou inacessível ao buscar proprietário.", err);
                     return { data: [], error: null };
@@ -3997,14 +4047,22 @@ async function loadData() {
             
             const dbCompletionsToday = compTodayResult.data || [];
             const errCompToday = compTodayResult.error;
-            
-            const dbCompletionsBefore = compBeforeResult.data || [];
-            const errCompBefore = compBeforeResult.error;
 
             if (errCats) throw errCats;
             if (errTasks) throw errTasks;
             if (errCompToday) throw errCompToday;
-            if (errCompBefore) throw errCompBefore;
+
+            // Para o rollover de tarefas únicas basta saber quais IDs já foram
+            // concluídos. A versão anterior baixava todas as conclusões de toda
+            // a história, inclusive milhares de ocorrências recorrentes, em cada
+            // abertura ou troca de data.
+            let dbCompletionsBefore = [];
+            if (selectedDateAtFetchStart === getLocalDateString(new Date())) {
+                const compBeforeResult = await fetchCompletedNonRecurringTaskIdsBefore(dbTasks, selectedDateAtFetchStart);
+                if (compBeforeResult.error) throw compBeforeResult.error;
+                dbCompletionsBefore = compBeforeResult.data || [];
+                saveCachedCompletedNonRecurringTaskIds(dbCompletionsBefore.map(item => item.task_id));
+            }
 
             // Remove o antigo conjunto pessoal que versões anteriores copiavam
             // automaticamente para contas vazias. A condição estrita evita
@@ -4284,8 +4342,8 @@ async function loadData() {
 
             let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
             
-            // Remove conclusões locais obsoletas para a data de hoje e as datas do histórico recebido
-            const dbCompBeforeIds = new Set(dbCompletionsBefore.map(c => String(c.task_id)));
+            // Substitui somente a data consultada. O restante do cache local é
+            // mantido para o modo offline, sem ser baixado novamente da nuvem.
             localCompletions = localCompletions.filter(c => {
                 const qKey = `${c.task_id}_${c.date}`;
                 // Preserva o estado local se esta tarefa estiver com sincronização pendente para a nuvem
@@ -4293,7 +4351,6 @@ async function loadData() {
                     return true;
                 }
                 if (c.date === selectedDate) return false;
-                if (dbCompBeforeIds.has(String(c.task_id)) && c.date < selectedDate) return false;
                 return true;
             });
 
@@ -4308,15 +4365,6 @@ async function loadData() {
                         completed: c.completed
                     });
                 }
-            });
-
-            // Adiciona as conclusões do Supabase para o histórico
-            dbCompletionsBefore.forEach(c => {
-                localCompletions.push({
-                    task_id: c.task_id,
-                    date: c.date,
-                    completed: c.completed
-                });
             });
 
             localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
@@ -4344,9 +4392,10 @@ function loadDataOffline() {
     // 3. Fetch completions
     let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
 
-    const completedBeforeIds = new Set(
-        localCompletions.filter(c => c.date < selectedDate && c.completed === true).map(c => String(c.task_id))
-    );
+    const completedBeforeIds = new Set([
+        ...getCachedCompletedNonRecurringTaskIds(),
+        ...localCompletions.filter(c => c.date < selectedDate && c.completed === true).map(c => String(c.task_id))
+    ]);
     const completedTodayIds = new Set(
         localCompletions.filter(c => c.date === selectedDate && c.completed === true).map(c => String(c.task_id))
     );
@@ -5996,6 +6045,7 @@ async function commitTaskToggle(id, isPastNightShiftException = false) {
     localCompletions = localCompletions.filter(item => !(String(item.task_id) === String(id) && item.date === selectedDate));
     if (completed) localCompletions.push({ task_id: id, date: selectedDate, completed: true });
     localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
+    updateCachedNonRecurringCompletion(previousTask, selectedDate, completed);
     const completionQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
     completionQueue[`${pendingId}_${selectedDate}`] = completed;
     localStorage.setItem("offline_completions_queue", JSON.stringify(completionQueue));
@@ -6410,6 +6460,46 @@ function getTrainingCompletionDates(categoryName = null) {
         .map(item => item.date));
 }
 
+async function loadTrainingCompletionsForVisibleMonth(categoryName = null) {
+    if (!supabaseClient || !currentUser || !navigator.onLine) return;
+    const trainingTaskIds = [...new Set(allActiveTasks
+        .filter(task =>
+            isTrainingCategory(task.category)
+            && (!categoryName || normalizeCategoryName(task.category) === normalizeCategoryName(categoryName))
+            && isTrainingTaskOwnedByCurrentUser(task)
+        )
+        .map(task => String(task.id))
+        .filter(id => id && !isTemporaryId(id)))];
+    if (!trainingTaskIds.length) return;
+
+    const year = currentTrainingCalendarMonth.getFullYear();
+    const month = currentTrainingCalendarMonth.getMonth();
+    const firstDate = getLocalDateString(new Date(year, month, 1, 12));
+    const lastDate = getLocalDateString(new Date(year, month + 1, 0, 12));
+    const { data, error } = await supabaseClient
+        .from("completions")
+        .select("task_id,date,completed")
+        .in("task_id", trainingTaskIds)
+        .gte("date", firstDate)
+        .lte("date", lastDate);
+    if (error) {
+        console.warn("Não foi possível carregar os dias de treino deste mês:", error.message);
+        return;
+    }
+
+    const pendingQueue = JSON.parse(localStorage.getItem("offline_completions_queue")) || {};
+    const taskIdSet = new Set(trainingTaskIds);
+    let localCompletions = JSON.parse(localStorage.getItem("offline_completions")) || [];
+    localCompletions = localCompletions.filter(item => {
+        const belongsToPeriod = taskIdSet.has(String(item.task_id)) && item.date >= firstDate && item.date <= lastDate;
+        return !belongsToPeriod || Object.prototype.hasOwnProperty.call(pendingQueue, `${item.task_id}_${item.date}`);
+    });
+    (data || []).forEach(item => {
+        if (!Object.prototype.hasOwnProperty.call(pendingQueue, `${item.task_id}_${item.date}`)) localCompletions.push(item);
+    });
+    localStorage.setItem("offline_completions", JSON.stringify(localCompletions));
+}
+
 function isTrainingRecordOwnedByCurrentUser(record) {
     if (!record || !currentUser) return false;
     if (record.createdBy) return String(record.createdBy) === String(currentUser.id);
@@ -6498,6 +6588,7 @@ function openTrainingPhotoViewer(record) {
 
 async function renderTrainingReport() {
     const categoryName = currentFilter !== "all" && isTrainingCategory(currentFilter) ? currentFilter : null;
+    await loadTrainingCompletionsForVisibleMonth(categoryName);
     if (!currentTrainingCalendarRecords.length) currentTrainingCalendarRecords = getTrainingPhotoFeedCache();
     currentTrainingCalendarRecords = currentTrainingCalendarRecords.filter(record => !categoryName || normalizeCategoryName(record.category) === normalizeCategoryName(categoryName));
     currentTrainingCalendarRecords = await applyPersistentTrainingThumbnails(currentTrainingCalendarRecords);
@@ -11542,7 +11633,7 @@ async function loadAndRenderReport(days, containerEl) {
         try {
             const { data, error } = await supabaseClient
                 .from('completions')
-                .select('*')
+                .select('task_id,date,completed')
                 .gte('date', periods.previousStartStr)
                 .lte('date', periods.currentEndStr);
             if (!error && data) {
