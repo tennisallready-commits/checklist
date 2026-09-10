@@ -5,7 +5,7 @@
 const SUPABASE_URL = "https://piwsavppaabjygaolldb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KTpEV6wW6w5QGJekeeCMzA_TyCJbpfV";
 const VAPID_PUBLIC_KEY = "BDMZZmJLbDTsdx-q5iUosoKiFxXvF_f58Yzjs2nndWWdo-bgspEIyXlTIjkl9uD6blOyD33T43hrKy1fPHuMwFs";
-const SERVICE_WORKER_URL = "./sw.js?v=11.09";
+const SERVICE_WORKER_URL = "./sw.js?v=11.10";
 // O tipo acompanha a categoria na nuvem para que regras especiais, como a
 // visualização colaborativa de treinos, sejam iguais em todos os aparelhos.
 const CATEGORIES_CLOUD_SUPPORTS_TYPE = true;
@@ -6527,6 +6527,99 @@ function getTrainingRecordOwner(record) {
     return { label: "Participante", avatar: "" };
 }
 
+function formatTrainingPhotoDate(dateStr) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr || ""))) return "Data não informada";
+    return new Date(`${dateStr}T12:00:00`).toLocaleDateString("pt-BR");
+}
+
+function loadTrainingPhotoImage(source) {
+    return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error("Não foi possível preparar a foto."));
+        image.src = source;
+    });
+}
+
+async function createDatedTrainingPhotoBlob(record) {
+    const response = await fetch(record.photo);
+    if (!response.ok) throw new Error("Não foi possível baixar a foto.");
+    const sourceBlob = await response.blob();
+    const sourceUrl = URL.createObjectURL(sourceBlob);
+    try {
+        const image = await loadTrainingPhotoImage(sourceUrl);
+        const canvas = document.createElement("canvas");
+        canvas.width = image.naturalWidth || image.width;
+        canvas.height = image.naturalHeight || image.height;
+        const context = canvas.getContext("2d");
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+        const dateLabel = formatTrainingPhotoDate(record.date);
+        const fontSize = Math.max(22, Math.round(canvas.width * .035));
+        const paddingX = Math.max(14, Math.round(fontSize * .55));
+        const paddingY = Math.max(9, Math.round(fontSize * .36));
+        context.font = `800 ${fontSize}px Arial, sans-serif`;
+        context.textBaseline = "middle";
+        const textWidth = context.measureText(dateLabel).width;
+        const boxWidth = textWidth + paddingX * 2;
+        const boxHeight = fontSize + paddingY * 2;
+        const x = canvas.width - boxWidth - Math.max(16, Math.round(canvas.width * .025));
+        const y = canvas.height - boxHeight - Math.max(16, Math.round(canvas.height * .025));
+        context.fillStyle = "rgba(0,0,0,.68)";
+        context.fillRect(x, y, boxWidth, boxHeight);
+        context.fillStyle = "#fff";
+        context.fillText(dateLabel, x + paddingX, y + boxHeight / 2);
+
+        return await new Promise((resolve, reject) => canvas.toBlob(
+            blob => blob ? resolve(blob) : reject(new Error("Não foi possível gerar a foto.")),
+            "image/jpeg",
+            .92
+        ));
+    } finally {
+        URL.revokeObjectURL(sourceUrl);
+    }
+}
+
+async function saveTrainingPhotoToGallery(record, button = null) {
+    if (!record?.photo) return;
+    const originalHtml = button?.innerHTML || "";
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<i data-lucide="loader-circle"></i><span>Preparando…</span>';
+        if (window.lucide) window.lucide.createIcons();
+    }
+    try {
+        const photoBlob = await createDatedTrainingPhotoBlob(record);
+        const filename = `treino-${record.date || getLocalDateString(new Date())}.jpg`;
+        const photoFile = new File([photoBlob], filename, { type: "image/jpeg" });
+        if (navigator.share && navigator.canShare?.({ files: [photoFile] })) {
+            showAppNotice('Escolha “Salvar Imagem” no menu do aparelho.', "success");
+            await navigator.share({ files: [photoFile], title: `Treino de ${formatTrainingPhotoDate(record.date)}` });
+        } else {
+            const downloadUrl = URL.createObjectURL(photoBlob);
+            const link = document.createElement("a");
+            link.href = downloadUrl;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(downloadUrl), 1500);
+            showAppNotice("Foto salva em Downloads.", "success");
+        }
+    } catch (error) {
+        if (error?.name !== "AbortError") {
+            console.error("Não foi possível salvar a foto do treino:", error);
+            showAppNotice("Não foi possível salvar a foto. Verifique a conexão e tente novamente.", "error");
+        }
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = originalHtml;
+            if (window.lucide) window.lucide.createIcons();
+        }
+    }
+}
+
 function renderTrainingDayGallery(dateStr) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr || ""))) {
         currentTrainingCalendarSelectedDate = String(dateStr);
@@ -6540,13 +6633,18 @@ function renderTrainingDayGallery(dateStr) {
     list.innerHTML = records.length ? records.map(record => {
         const owner = getTrainingRecordOwner(record);
         const initials = owner.label.replace("@", "").substring(0, 2).toUpperCase() || "P";
-        return `<article class="training-day-photo-card"><img class="training-day-photo" data-training-photo-id="${escapeHTML(String(record.id))}" src="${record.photo}" alt="Foto do treino de ${escapeHTML(owner.label)}" title="Ampliar foto"><div class="training-day-photo-caption"><span class="task-assignee-avatar ${owner.avatar ? 'has-photo' : ''}">${owner.avatar ? `<img src="${escapeHTML(owner.avatar)}" alt="">` : escapeHTML(initials)}</span><div><strong>${escapeHTML(owner.label)}</strong><small>${escapeHTML(record.taskTitle)}</small></div></div></article>`;
+        const dateLabel = formatTrainingPhotoDate(record.date);
+        return `<article class="training-day-photo-card"><div class="training-day-photo-media"><img class="training-day-photo" data-training-photo-id="${escapeHTML(String(record.id))}" src="${escapeHTML(record.photo)}" alt="Foto do treino de ${escapeHTML(owner.label)}" title="Ampliar foto"><time datetime="${escapeHTML(record.date || '')}">${escapeHTML(dateLabel)}</time></div><div class="training-day-photo-caption"><span class="task-assignee-avatar ${owner.avatar ? 'has-photo' : ''}">${owner.avatar ? `<img src="${escapeHTML(owner.avatar)}" alt="">` : escapeHTML(initials)}</span><div><strong>${escapeHTML(owner.label)}</strong><small>${escapeHTML(record.taskTitle)}</small></div><button type="button" class="training-photo-save" data-training-photo-save-id="${escapeHTML(String(record.id))}" aria-label="Salvar foto de ${escapeHTML(dateLabel)} na galeria" title="Salvar na galeria"><i data-lucide="download"></i><span>Salvar</span></button></div></article>`;
     }).join("") : `<div class="training-report-empty compact"><i data-lucide="camera-off"></i><strong>Nenhuma foto neste dia</strong><span>O fogo indica que houve treino, mesmo sem registro fotográfico.</span></div>`;
     document.querySelectorAll(".training-calendar-day").forEach(day => day.classList.toggle("selected", day.dataset.date === dateStr));
     renderTrainingSelectedDayInfo(dateStr, records);
     list.querySelectorAll(".training-day-photo[data-training-photo-id]").forEach(image => image.addEventListener("click", () => {
         const record = currentTrainingCalendarRecords.find(item => String(item.id) === String(image.dataset.trainingPhotoId));
         if (record) openTrainingPhotoViewer(record);
+    }));
+    list.querySelectorAll(".training-photo-save[data-training-photo-save-id]").forEach(button => button.addEventListener("click", () => {
+        const record = currentTrainingCalendarRecords.find(item => String(item.id) === String(button.dataset.trainingPhotoSaveId));
+        if (record) saveTrainingPhotoToGallery(record, button);
     }));
     lucide.createIcons();
 }
@@ -6573,15 +6671,18 @@ function renderTrainingSelectedDayInfo(dateStr, records) {
 function openTrainingPhotoViewer(record) {
     const owner = getTrainingRecordOwner(record);
     const dateLabel = new Date(record.date + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" });
+    const shortDateLabel = formatTrainingPhotoDate(record.date);
     const viewer = document.createElement("div");
     viewer.className = "training-photo-viewer";
-    viewer.innerHTML = `<div class="training-photo-viewer-backdrop"></div><article class="training-photo-viewer-card" role="dialog" aria-modal="true" aria-label="Foto do treino"><button type="button" class="training-photo-viewer-close" aria-label="Fechar"><i data-lucide="x"></i></button><img src="${escapeHTML(record.photo)}" alt="Foto do treino de ${escapeHTML(owner.label)}"><footer class="training-photo-viewer-caption"><div><strong>${escapeHTML(owner.label)} · ${escapeHTML(record.taskTitle)}</strong><span>${escapeHTML(dateLabel)}</span></div></footer></article>`;
+    viewer.innerHTML = `<div class="training-photo-viewer-backdrop"></div><article class="training-photo-viewer-card" role="dialog" aria-modal="true" aria-label="Foto do treino"><button type="button" class="training-photo-viewer-close" aria-label="Fechar"><i data-lucide="x"></i></button><div class="training-photo-viewer-media"><img src="${escapeHTML(record.photo)}" alt="Foto do treino de ${escapeHTML(owner.label)}"><time datetime="${escapeHTML(record.date || '')}">${escapeHTML(shortDateLabel)}</time></div><footer class="training-photo-viewer-caption"><div><strong>${escapeHTML(owner.label)} · ${escapeHTML(record.taskTitle)}</strong><span>${escapeHTML(dateLabel)}</span></div><button type="button" class="training-photo-save viewer-save" aria-label="Salvar foto na galeria"><i data-lucide="download"></i><span>Salvar foto</span></button></footer></article>`;
     document.body.appendChild(viewer);
     if (window.lucide) window.lucide.createIcons();
     const close = () => { viewer.classList.remove("visible"); document.removeEventListener("keydown", onKey); setTimeout(() => viewer.remove(), 210); };
     const onKey = event => { if (event.key === "Escape") close(); };
     viewer.querySelector(".training-photo-viewer-close").addEventListener("click", close);
     viewer.querySelector(".training-photo-viewer-backdrop").addEventListener("click", close);
+    const saveButton = viewer.querySelector(".training-photo-save");
+    saveButton?.addEventListener("click", () => saveTrainingPhotoToGallery(record, saveButton));
     document.addEventListener("keydown", onKey);
     requestAnimationFrame(() => viewer.classList.add("visible"));
 }
