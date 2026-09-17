@@ -48,7 +48,9 @@
     nome?: string;
     empresa?: string;
     rede?: string;
-    etapasStatus?: Record<string, { feito?: boolean; resp?: string; prazo?: string }>;
+    tipo?: string;
+    projetoConteudo?: string;
+    etapasStatus?: Record<string, { feito?: boolean; resp?: string; prazo?: string; link?: string }>;
   };
 
   type DashboardBook = Record<string, unknown> & {
@@ -72,7 +74,7 @@ let firebaseAccessTokenCache: FirebaseAccessTokenCache | null = null;
 const CHECKLIST_COMPLETION_GUARD_MS = 30_000;
 // Versão visível nos logs e nas respostas da função. Ajuda a confirmar que o
 // Supabase está rodando exatamente a correção mais recente.
-const CASSOL_DASHBOARD_SYNC_VERSION = "3.4.0";
+const CASSOL_DASHBOARD_SYNC_VERSION = "3.6.1";
   
   const normalize = (value: unknown) => String(value || "")
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -99,7 +101,7 @@ const CASSOL_DASHBOARD_SYNC_VERSION = "3.4.0";
     try {
       const encoded = payload.replace(/-/g, "+").replace(/_/g, "/");
       const decoded = JSON.parse(atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, "=")));
-      return decoded.exp > Date.now() && ["luiggi", "gisella", "milena"].includes(decoded.user) ? decoded : null;
+      return decoded.exp > Date.now() && ["luiggi", "gisella", "milena", "marilia", "bruna"].includes(decoded.user) ? decoded : null;
     } catch (_) { return null; }
   }
 
@@ -237,7 +239,22 @@ const CASSOL_DASHBOARD_SYNC_VERSION = "3.4.0";
     return token;
   }
   
-  type DashboardDocumentKey = "gc-events" | "gc-conteudos" | "gc-livros" | "gc-projetos";
+  type DashboardDocumentKey = "gc-events" | "gc-conteudos" | "gc-livros" | "gc-projetos" | "gc-recurring-tasks";
+  type BrunaRestrictedDocumentKey = "gc-events" | "gc-conteudos" | "gc-recurring-tasks";
+
+  const BRUNA_RESTRICTED_DOCUMENT_KEYS = new Set<DashboardDocumentKey>([
+    "gc-events",
+    "gc-conteudos",
+    "gc-recurring-tasks",
+  ]);
+
+  function belongsToEditoraCassol(item: unknown) {
+    if (!item || typeof item !== "object") return false;
+    return String((item as Record<string, unknown>).empresa || "")
+      .split(",")
+      .map(value => normalize(value))
+      .includes("editora");
+  }
 
   const dashboardDocumentUrl = (projectId: string, key: DashboardDocumentKey = "gc-events") =>
     `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/(default)/documents/dados/${key}`;
@@ -246,13 +263,17 @@ const CASSOL_DASHBOARD_SYNC_VERSION = "3.4.0";
     const response = await fetch(dashboardDocumentUrl(projectId, key), {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    if (response.status === 404) return { items: [] as T[], updateTime: null as string | null };
+    if (response.status === 404) return { items: [] as T[], updateTime: null as string | null, ts: 0 };
     if (!response.ok) throw new Error(`Não foi possível ler ${key} do dashboard (${response.status}).`);
     const document = await response.json();
     const serialized = String(document?.fields?.value?.stringValue || "[]");
     try {
       const parsed = JSON.parse(serialized);
-      return { items: Array.isArray(parsed) ? parsed as T[] : [], updateTime: String(document.updateTime || "") || null };
+      return {
+        items: Array.isArray(parsed) ? parsed as T[] : [],
+        updateTime: String(document.updateTime || "") || null,
+        ts: Number(document?.fields?.ts?.integerValue || 0),
+      };
     } catch (_) {
       throw new Error(`O documento ${key} do dashboard contém dados inválidos.`);
     }
@@ -326,13 +347,6 @@ const CASSOL_DASHBOARD_SYNC_VERSION = "3.4.0";
     return `${values.year}-${values.month}-${values.day}`;
   }
 
-  function dashboardBusinessDate(dateStr = checklistDate(new Date().toISOString())) {
-    const date = new Date(`${dateStr}T12:00:00`);
-    if (date.getDay() === 6) date.setDate(date.getDate() - 1); // sábado → sexta
-    if (date.getDay() === 0) date.setDate(date.getDate() + 1); // domingo → segunda
-    return date.toISOString().slice(0, 10);
-  }
-  
   function dashboardDate(event: DashboardEvent) {
     const value = String(event.data || "");
     return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : checklistDate(new Date().toISOString());
@@ -455,8 +469,94 @@ async function assertChecklistCompletion(
     if (error) throw error;
   }
   
-  const CONTENT_STAGE_KEYS = ["copy", "gravado", "edicao", "aprovado", "agendado", "postado"];
-  const CONTENT_STAGE_NAMES = ["Copy criada", "Gravado", "Para editar", "Para aprovar", "Para agendar", "Para postar"];
+  type ContentStageDefinition = { key: string; name: string };
+  const DEFAULT_CONTENT_STAGES: ContentStageDefinition[] = [
+    { key: "copy", name: "Copy criada" }, { key: "gravado", name: "Gravado" },
+    { key: "edicao", name: "Para editar" }, { key: "aprovado", name: "Para aprovar" },
+    { key: "agendado", name: "Para agendar" }, { key: "postado", name: "Para postar" },
+  ];
+  const EMANDA_CONTENT_STAGES: ContentStageDefinition[] = [
+    ["tema", "Definir o tema do e-mail"], ["gancho", "Criar o gancho principal"],
+    ["estrutura", "Planejar a estrutura do e-mail"], ["escrever", "Escrever o email"],
+    ["banners", "Providenciar os banners"], ["ctas", "Definir CTAs"],
+    ["links", "Organizar links de destino"], ["criar", "Criar o email mkt"],
+    ["teste", "Enviar um teste"], ["testar", "Testar os botões e links"],
+    ["disparar", "Disparar para a base"],
+  ].map(([key, name]) => ({ key, name }));
+  const EDITORA_CONTENT_STAGES: Record<string, ContentStageDefinition[]> = {
+    reel: [
+      { key: "copy", name: "Copy criada" }, { key: "gravado", name: "Gravado" },
+      { key: "edicao", name: "Para editar" }, { key: "aprovado", name: "Para aprovar" },
+      { key: "agendado", name: "Para agendar" }, { key: "postado", name: "Para postar" },
+      { key: "arte", name: "Para criar arte" },
+    ],
+    carrossel: [
+      { key: "copy", name: "Copy criada" }, { key: "arte", name: "Para criar arte" },
+      { key: "aprovado", name: "Para aprovar" },
+      { key: "agendado", name: "Para agendar" }, { key: "postado", name: "Para postar" },
+    ],
+    card: [], story: [],
+    emailmkt: [
+      { key: "escrever", name: "Para escrever" }, { key: "subir_emanda", name: "Para subir no Emanda" },
+      { key: "agendado", name: "Para agendar" }, { key: "checar_envio", name: "Para checar envio" },
+      { key: "arte", name: "Para criar arte" },
+    ],
+  };
+  EDITORA_CONTENT_STAGES.card = EDITORA_CONTENT_STAGES.carrossel;
+  EDITORA_CONTENT_STAGES.story = [
+    { key: "copy", name: "Copy criada" }, { key: "aprovado", name: "Para aprovar" },
+    { key: "agendado", name: "Para agendar" }, { key: "postado", name: "Para postar" },
+    { key: "arte", name: "Para criar arte" },
+  ];
+  const PRE_LANCAMENTO_OUTUBRO_2026 = "pre-lancamento-outubro-2026";
+  const PRE_LANCAMENTO_REEL_STAGES: ContentStageDefinition[] = [
+    { key: "copy", name: "Copy criada" }, { key: "gravado", name: "Gravado" },
+    { key: "editar_video", name: "Para editar vídeo" }, { key: "editar_arte", name: "Para editar arte" },
+    { key: "editar_video_arte", name: "Para editar vídeo com arte" },
+    { key: "aprovado", name: "Para aprovar" }, { key: "agendado", name: "Para agendar" },
+    { key: "postado", name: "Para postar" }, { key: "arte", name: "Para criar arte" },
+  ];
+
+  function isPreLancamentoReel(content: DashboardContent) {
+    return content.projetoConteudo === PRE_LANCAMENTO_OUTUBRO_2026 && content.tipo === "reel";
+  }
+
+  function contentStageDefinitions(content: DashboardContent) {
+    if (isPreLancamentoReel(content)) return PRE_LANCAMENTO_REEL_STAGES;
+    const isEditora = String(content.empresa || "").split(",").includes("editora");
+    const editoraStages = isEditora ? EDITORA_CONTENT_STAGES[String(content.tipo || "")] : null;
+    if (editoraStages?.length) return editoraStages;
+    if (String(content.rede || "") === "emanda") return EMANDA_CONTENT_STAGES;
+    return DEFAULT_CONTENT_STAGES;
+  }
+
+  function releasedContentStageKeys(
+    content: DashboardContent,
+    statusByKey: Record<string, { feito?: boolean; resp?: string; prazo?: string; link?: string }>,
+  ) {
+    const definitions = contentStageDefinitions(content);
+    if (isPreLancamentoReel(content)) {
+      const released = new Set<string>(["copy"]);
+      if (statusByKey.copy?.feito) released.add("gravado");
+      if (statusByKey.gravado?.feito) {
+        released.add("editar_video");
+        released.add("editar_arte");
+      }
+      if (statusByKey.editar_video?.feito && statusByKey.editar_arte?.feito) released.add("editar_video_arte");
+      if (statusByKey.editar_video_arte?.feito) released.add("aprovado");
+      if (statusByKey.aprovado?.feito) released.add("agendado");
+      if (statusByKey.agendado?.feito) released.add("postado");
+      if (statusByKey.postado?.feito) released.add("arte");
+      definitions.forEach(stage => { if (statusByKey[stage.key]?.feito) released.add(stage.key); });
+      return released;
+    }
+    const nextPendingIndex = definitions.findIndex(stage => {
+      const status = statusByKey[stage.key] || {};
+      return !status.feito && !(stage.key === "arte" && !String(status.resp || "").trim());
+    });
+    const lastAvailableIndex = nextPendingIndex < 0 ? definitions.length - 1 : nextPendingIndex;
+    return new Set(definitions.slice(0, lastAvailableIndex + 1).map(stage => stage.key));
+  }
   
   function contentStageEvents(contents: DashboardContent[]) {
     return contents.flatMap(content => {
@@ -465,15 +565,17 @@ async function assertChecklistCompletion(
       // etapas devem permanecer marcadas no histórico do Checklist, não sumir.
       if (!contentId) return [];
       const statusByKey = content.etapasStatus && typeof content.etapasStatus === "object" ? content.etapasStatus : {};
-      const nextPendingIndex = CONTENT_STAGE_KEYS.findIndex(key => !Boolean(statusByKey[key]?.feito));
-      const lastAvailableIndex = nextPendingIndex < 0 ? CONTENT_STAGE_KEYS.length - 1 : nextPendingIndex;
+      const stageDefinitions = contentStageDefinitions(content);
+      const releasedKeys = releasedContentStageKeys(content, statusByKey);
       // Histórico concluído + somente a próxima etapa pendente: as demais não
       // são entregues ao Checklist antes de a etapa anterior terminar.
-      return CONTENT_STAGE_KEYS.slice(0, lastAvailableIndex + 1).map((key, index) => {
+      return stageDefinitions.flatMap((definition, index) => {
+        if (!releasedKeys.has(definition.key)) return [];
+        const key = definition.key;
         const stage = statusByKey[key] || {};
         return {
           id: `content:${contentId}:${key}`,
-          titulo: `[${String(content.nome || "Conteúdo").trim() || "Conteúdo"}] ${CONTENT_STAGE_NAMES[index]}`,
+          titulo: `[${String(content.nome || "Conteúdo").trim() || "Conteúdo"}] ${definition.name}`,
           empresa: String(content.empresa || ""),
           tipo: "content_stage",
           data: String(stage.prazo || ""),
@@ -482,7 +584,7 @@ async function assertChecklistCompletion(
           dashboard_source: "content_stage",
           content_id: contentId,
           content_stage_key: key,
-          content_previous_stage_name: index > 0 ? CONTENT_STAGE_NAMES[index - 1] : "",
+          content_previous_stage_name: index > 0 ? stageDefinitions[index - 1].name : "",
         } as DashboardEvent;
       });
     });
@@ -899,27 +1001,25 @@ async function assertChecklistCompletion(
   function contentStageReferenceFromTitle(title: unknown) {
     const match = /^\[([^\]]+)\]\s+(.+)$/.exec(String(title || "").trim());
     if (!match) return null;
-    const legacyStageNames: Record<string, string> = {
-      "copy": "copy criada",
-      "para criar a copy": "copy criada",
-      "para gravar": "gravado",
-      "em edicao": "editado",
-      "para editar": "editado",
-      "para aprovar": "aprovado",
-      "para agendar": "agendado",
-      "para postar": "postado",
-      "copy criada": "copy criada",
-      "gravado": "gravado",
-      "editado": "editado",
-      "aprovado": "aprovado",
-      "agendado": "agendado",
-      "postado": "postado",
+    const stageKeysByName: Record<string, string> = {
+      "copy": "copy", "para criar a copy": "copy", "copy criada": "copy",
+      "para gravar": "gravado", "gravado": "gravado",
+      "para editar video": "editar_video", "editar video": "editar_video",
+      "para editar arte": "editar_arte", "editar arte": "editar_arte",
+      "para editar video com arte": "editar_video_arte", "editar video com arte": "editar_video_arte",
+      "para criar arte": "arte", "criar arte": "arte",
+      "em edicao": "edicao", "para editar": "edicao", "editado": "edicao",
+      "para aprovar": "aprovado", "aprovado": "aprovado",
+      "para agendar": "agendado", "agendado": "agendado",
+      "para postar": "postado", "postado": "postado",
+      "para escrever": "escrever", "escrever": "escrever",
+      "para subir no emanda": "subir_emanda", "subir no emanda": "subir_emanda",
+      "para checar envio": "checar_envio", "checar envio": "checar_envio",
     };
     const normalizedStageName = normalize(match[2]);
-    const canonicalStageName = legacyStageNames[normalizedStageName] || normalizedStageName;
-    const stageIndex = CONTENT_STAGE_NAMES.findIndex(name => normalize(name) === canonicalStageName);
-    if (stageIndex < 0) return null;
-    return { contentName: match[1], stageKey: CONTENT_STAGE_KEYS[stageIndex] };
+    const stageKey = stageKeysByName[normalizedStageName] || "";
+    if (!stageKey) return null;
+    return { contentName: match[1], stageKey };
   }
   
   function hasContentStageAssignment(stage: { feito?: boolean; resp?: string; prazo?: string }) {
@@ -981,11 +1081,12 @@ async function assertChecklistCompletion(
       if (operation === "upsert") nextStage.prazo = checklistDate(task.created_at);
       const nextEtapasStatus = { ...(content.etapasStatus || {}), [stageKey]: nextStage };
       if (operation === "completion" && completion?.completed && !currentStage.feito) {
-        const currentIndex = CONTENT_STAGE_KEYS.indexOf(stageKey);
-        const nextKey = currentIndex >= 0 ? CONTENT_STAGE_KEYS[currentIndex + 1] : "";
-        if (nextKey) {
+        const releasedBefore = releasedContentStageKeys(content, content.etapasStatus || {});
+        const releasedAfter = releasedContentStageKeys(content, nextEtapasStatus);
+        for (const nextKey of releasedAfter) {
+          if (releasedBefore.has(nextKey) || nextEtapasStatus[nextKey]?.feito) continue;
           const currentNext = { ...(nextEtapasStatus[nextKey] || {}) };
-          const releaseDate = dashboardBusinessDate();
+          const releaseDate = checklistDate(new Date().toISOString());
           if (!currentNext.prazo || String(currentNext.prazo) < releaseDate) {
             nextEtapasStatus[nextKey] = { ...currentNext, prazo: releaseDate };
           }
@@ -1496,13 +1597,71 @@ async function assertChecklistCompletion(
         const loginUser = normalize(input.username);
         const loginPassword = String(input.password || "");
         const configuredPassword = String(Deno.env.get("CASSOL_DASHBOARD_LOGIN_PASSWORD") || "");
-        if (!configuredPassword || !dashboardSessionSecret || loginPassword !== configuredPassword || !["luiggi", "gisella", "milena"].includes(loginUser)) {
+        const mariliaPassword = String(Deno.env.get("CASSOL_DASHBOARD_MARILIA_LOGIN_PASSWORD") || "");
+        const brunaPassword = String(Deno.env.get("CASSOL_DASHBOARD_BRUNA_LOGIN_PASSWORD") || "");
+        const expectedPassword = loginUser === "marilia" ? mariliaPassword : loginUser === "bruna" ? brunaPassword : configuredPassword;
+        if (!expectedPassword || !dashboardSessionSecret || loginPassword !== expectedPassword || !["luiggi", "gisella", "milena", "marilia", "bruna"].includes(loginUser)) {
           return json({ error: "Login inválido." }, 401);
         }
         return json({ ok: true, token: await createDashboardSession(loginUser, dashboardSessionSecret), user: loginUser });
       }
       const authorization = request.headers.get("Authorization") || "";
       const requestedOperation = String(input.operation || "upsert");
+      const restrictedDashboardRead = requestedOperation === "dashboard_restricted_read";
+      const restrictedDashboardWrite = requestedOperation === "dashboard_restricted_write";
+      if (restrictedDashboardRead || restrictedDashboardWrite) {
+        if (!dashboardSessionSecret) return json({ error: "Sessão do Dashboard não configurada." }, 503);
+        const dashboardSession = await verifyDashboardSession(
+          String(request.headers.get("x-cassol-dashboard-session") || ""),
+          dashboardSessionSecret,
+        );
+        if (!dashboardSession) return json({ error: "Sessão do Dashboard inválida ou expirada." }, 401);
+        if (normalize(dashboardSession.user) !== "bruna") return json({ error: "Operação não autorizada para esta conta." }, 403);
+
+        const requestedKey = String(input.document_key || "") as DashboardDocumentKey;
+        if (!BRUNA_RESTRICTED_DOCUMENT_KEYS.has(requestedKey)) {
+          return json({ error: "Documento não autorizado para esta conta." }, 403);
+        }
+
+        const restrictedKey = requestedKey as BrunaRestrictedDocumentKey;
+        const serviceAccount = parseFirebaseServiceAccount();
+        const accessToken = await getFirebaseAccessToken(serviceAccount);
+        if (restrictedDashboardRead) {
+          const snapshot = await readDashboardDocument<Record<string, unknown>>(serviceAccount.project_id, accessToken, restrictedKey);
+          return json({
+            ok: true,
+            key: restrictedKey,
+            value: snapshot.items.filter(belongsToEditoraCassol),
+            ts: snapshot.ts,
+          });
+        }
+
+        if (!Array.isArray(input.document_value)) return json({ error: "Conteúdo do documento inválido." }, 400);
+        const editoraItems = input.document_value as Record<string, unknown>[];
+        if (!editoraItems.every(belongsToEditoraCassol)) {
+          return json({ error: "A conta Bruna só pode salvar itens da Editora Cassol." }, 403);
+        }
+        const knownTs = Number(input.known_ts || 0);
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const snapshot = await readDashboardDocument<Record<string, unknown>>(serviceAccount.project_id, accessToken, restrictedKey);
+          if (snapshot.ts > 0 && (knownTs === 0 || snapshot.ts > knownTs)) {
+            return json({ error: "Os dados foram atualizados por outra pessoa. Recarregue a página.", code: "stale-write", ts: snapshot.ts }, 409);
+          }
+          const preservedItems = snapshot.items.filter(item => !belongsToEditoraCassol(item));
+          const saved = await writeDashboardDocument(
+            serviceAccount.project_id,
+            accessToken,
+            restrictedKey,
+            [...preservedItems, ...editoraItems],
+            snapshot.updateTime,
+          );
+          if (saved) {
+            const confirmed = await readDashboardDocument<Record<string, unknown>>(serviceAccount.project_id, accessToken, restrictedKey);
+            return json({ ok: true, key: restrictedKey, ts: confirmed.ts });
+          }
+        }
+        return json({ error: "Os dados mudaram durante a gravação. Recarregue a página.", code: "stale-write" }, 409);
+      }
       const configuredWebhookSecret = String(Deno.env.get("CASSOL_DASHBOARD_WEBHOOK_SECRET") || "");
       const receivedWebhookSecret = String(request.headers.get("x-cassol-dashboard-webhook") || "");
       const dashboardWebhookCall = requestedOperation === "dashboard_webhook";
